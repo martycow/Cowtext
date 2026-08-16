@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "cowtext",
-        "width": 800,
-        "height": 600
+        "title": "Cowtext",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1200,
+        "minHeight": 760
       }
     ],
     "security": {
