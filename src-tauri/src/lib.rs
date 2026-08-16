@@ -1,3 +1,4 @@
+mod compile;
 mod project;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,7 +11,9 @@ pub fn run() {
             project::read_graph,
             project::write_graph,
             project::read_md_file,
-            project::write_md_file
+            project::write_md_file,
+            compile::compile_preview,
+            compile::compile_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

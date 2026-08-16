@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  FileOutput,
   FileText,
   FolderOpen,
   PanelLeftClose,
@@ -12,6 +13,7 @@ import type { MdFile } from "./store/project";
 import { useGraphStore, type SaveState } from "./store/graph";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { Inspector } from "./inspector/Inspector";
+import { CompileModal } from "./compile/CompileModal";
 
 /** 4×4 amber pixel mark with knocked-out cow spots — the only mascot moment in the chrome. */
 function PixelLogo() {
@@ -67,8 +69,9 @@ function SaveIndicator() {
   );
 }
 
-function TopBar() {
+function TopBar({ onCompile }: { onCompile: () => void }) {
   const { root, openProject } = useProjectStore();
+  const nodeCount = useGraphStore((s) => s.nodes.length);
   return (
     <header className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle bg-surface-1 px-4">
       <PixelLogo />
@@ -87,6 +90,17 @@ function TopBar() {
       )}
       <div className="flex-1" />
       {root !== null && <SaveIndicator />}
+      {root !== null && (
+        <button
+          onClick={onCompile}
+          disabled={nodeCount === 0}
+          title={nodeCount === 0 ? "The graph is empty" : "Preview and write generated files"}
+          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+        >
+          <FileOutput size={14} strokeWidth={1.5} />
+          Compile
+        </button>
+      )}
       <button
         onClick={() => void openProject()}
         className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
@@ -285,6 +299,7 @@ function Workspace({ root }: { root: string }) {
 export default function App() {
   const { root, scanning, error } = useProjectStore();
   const loadGraph = useGraphStore((s) => s.loadGraph);
+  const [compileOpen, setCompileOpen] = useState(false);
 
   // Project opened → load (or start) its graph.
   useEffect(() => {
@@ -302,19 +317,27 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-surface-0">
-      <TopBar />
+      <TopBar onCompile={() => setCompileOpen(true)} />
       {error !== null && (
         <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
           <span className="h-1.5 w-1.5 flex-none bg-danger" />
           <span className="truncate font-mono text-xs text-danger-text">{error}</span>
         </div>
       )}
-      {scanning ? (
-        <Scanning caption="the cow is reading" />
-      ) : root === null ? (
-        <EmptyState />
+      {/* Full-screen scanner only before a project is open; once the workspace
+          is mounted, rescans (file-rail refresh, post-compile) must not unmount
+          the canvas — that would reset the React Flow viewport mid-session. */}
+      {root === null ? (
+        scanning ? (
+          <Scanning caption="the cow is reading" />
+        ) : (
+          <EmptyState />
+        )
       ) : (
         <Workspace root={root} />
+      )}
+      {compileOpen && root !== null && (
+        <CompileModal root={root} onClose={() => setCompileOpen(false)} />
       )}
     </div>
   );

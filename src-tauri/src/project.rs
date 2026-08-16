@@ -121,7 +121,7 @@ pub(crate) fn resolve_within_root(root: &Path, rel: &str) -> Result<PathBuf, Str
 
 /// Write `content` atomically: temp file in the same directory, then rename.
 /// Creates missing parent directories. LF content is passed through verbatim.
-fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("No parent directory: {}", path.display()))?;
@@ -142,7 +142,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn checked_root(root: &str) -> Result<PathBuf, String> {
+pub(crate) fn checked_root(root: &str) -> Result<PathBuf, String> {
     let root_path = PathBuf::from(root);
     if !root_path.is_dir() {
         return Err(format!("Not a directory: {root}"));

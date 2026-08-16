@@ -1,0 +1,279 @@
+# Phase 2 Manual Test Script — Compile
+
+Hand-run test manual for the Compile feature (diff-preview trust boundary).
+Run it top to bottom in one sitting; sections C–E reuse the graph built in section B.
+Written against the code as of 2026-08-16 (`src/compile/CompileModal.tsx`, `src/App.tsx`,
+`src-tauri/src/compile.rs`). Every step names the real control and the exact expected result —
+if reality differs, that is a bug (or this manual is stale; either way, note it).
+
+**Time budget:** ~25 min full pass, plus the 2-minute Phase 1 regression at the end.
+
+---
+
+## A. Preconditions
+
+1. **Free port 1420.** `strictPort` is on — if anything sits on 1420, `tauri dev` fails instead
+   of picking another port.
+2. **Start the app:** from `D:\Moo.exe\Cowtext` run:
+
+   ```powershell
+   npm run tauri dev
+   ```
+
+   *Expected:* Vite starts on :1420, cargo builds, the Cowtext window opens on the
+   "Open a project" empty state.
+3. **Make a throwaway test project** (do NOT use a real project — this test writes and
+   deletes files):
+
+   ```powershell
+   mkdir D:\_cowtest\src\net
+   Set-Content D:\_cowtest\notes.md "# Notes`n`nSome handwritten notes."
+   ```
+
+   *Expected:* folder `D:\_cowtest` with one file `notes.md` and an empty `src\net` dir.
+4. In Cowtext press **Open folder** (top-right) and pick `D:\_cowtest`.
+   *Expected:* pixel-march loading ("the cow is reading"), then the workspace: left file rail
+   shows `1 markdown file` with `notes.md`, empty canvas, inspector on the right says
+   "Select a node to edit its properties…". A **Compile** button appears in the top bar
+   (between the save indicator and Open folder) — **disabled**, tooltip "The graph is empty".
+
+---
+
+## B. Happy path — build a graph, compile, approve, verify disk
+
+### B1. Build the graph (5 nodes, 3 edge kinds)
+
+5. **Double-click** empty canvas. *Expected:* a node card "New node" appears, gets selected,
+   and the inspector opens its Properties tab. The file rail gains `context/new-node.md`
+   (the stub file is written to disk immediately).
+6. In the inspector **Title** field, rename it to `Persona`. Flip the **Pinned** toggle ON.
+   *Expected:* toggle turns amber; the node card shows a small amber pin icon top-right.
+   Save indicator in the top bar cycles unsaved → saving… → saved.
+7. Double-click canvas again → rename to `Style guide`. Leave Pinned OFF.
+8. Double-click canvas again → rename to `Architecture`. Leave Pinned OFF.
+9. In the file rail, hover `notes.md` and click its **adopt** button.
+   *Expected:* a node titled "notes" appears on the canvas; the rail row now shows a colored
+   role square instead of the file icon.
+10. Double-click canvas one more time → rename to `Networking`. Leave Pinned OFF.
+11. **Drag a connection** from the `Persona` node's handle to `Architecture`.
+    *Expected:* the **Edge kind** picker appears (4 options with line samples: imports /
+    references / conditional / sequence). Pick **imports**.
+    *Expected:* a solid edge appears. Semantics: Architecture is now hard-included —
+    it compiles as if pinned even though its Pinned toggle is off.
+12. Connect `Persona` → `notes`, pick **references**. *Expected:* dashed edge.
+13. Connect `Persona` → `Networking`, pick **conditional**.
+    *Expected:* the picker shows a condition input (placeholder `src/net/** or plain
+    language`). Type `src/net/**`, press **Add**. *Expected:* dotted edge.
+14. Click the conditional edge once. *Expected:* inspector shows the Edge panel:
+    `Persona —conditional→ Networking`, a **Condition** field containing `src/net/**`,
+    a Note field, and a Delete edge button.
+15. Wait for the save indicator to read **saved** (≈1 s debounce).
+
+### B2. Open Compile and pick targets
+
+16. Press **Compile** in the top bar (now enabled).
+    *Expected:* a modal opens — header **Compile** with the mono root path `→ D:\_cowtest`
+    on the right and a ✕ button; below it a **targets** row with three checkbox chips
+    `claude` / `agents` / `cursor`. A brief amber pixel march reads
+    **"the cow is compiling"** — never a spinner — then the file list appears.
+17. Make sure all three target chips are checked (blue when on). Toggling any chip re-runs
+    the preview (pixel march again). *Expected file list (one row per file):*
+    - `CLAUDE.md` — badge `claude`
+    - `AGENTS.md` — badge `agents`
+    - `src/net/AGENTS.md` — badge `agents` (nested file spawned by the clean folder glob)
+    - `.cursor/rules/networking.mdc` — badge `cursor`
+
+    Each row: a 15 px checkbox, the mono path, the target badge, a status
+    (**new file** in blue for all of these, since nothing exists on disk yet), and a
+    collapse chevron. All new files are **checked by default** and **expanded**.
+
+### B3. Inspect the diff preview
+
+18. Look at the `CLAUDE.md` diff (green added lines, `@@ -0,0 +1,N @@` hunk header,
+    dual line-number gutters). *Expected content, in order:*
+    1. First line is exactly:
+       `<!-- GENERATED BY COWTEXT — edit the graph or context/*.md, not this file -->`
+    2. Pinned/imported content: `Architecture` **before** `Persona` (imports target comes
+       first — dependencies before dependents). `Style guide` appears **nowhere** (not
+       pinned, not imported). Pinned content for the claude target uses `@`-import lines.
+    3. An on-demand section with a bullet for `notes` (references) and a bullet for the
+       `src/net/**` condition → `Networking`.
+19. Check `src/net/AGENTS.md`: a short nested file whose links to context files are
+    prefixed with `../../` (two levels up from `src/net/`).
+20. Check `.cursor/rules/networking.mdc`: YAML frontmatter FIRST (`---` /
+    `description: Networking` / `globs: src/net/**` / `---`), and the GENERATED header
+    comes **after** the closing `---`. This is the one file where the header is not line 1 —
+    by design (Cursor requires frontmatter first).
+21. Click a row's **chevron** (or the row itself). *Expected:* the diff collapses/expands;
+    checkbox state is untouched.
+22. *Expected footer:* "**4 of 4 files will be written**", with **Cancel** and a blue
+    **Approve & write** button.
+
+### B4. Approve and verify disk
+
+23. Press **Approve & write**. *Expected:* button label becomes `· · ·`; checkboxes, target
+    chips, ✕, Escape and scrim are all inert while writing. Then the body switches to
+    "**wrote 4 files**" with the mono path list; footer reads
+    "done — the graph stays the source of truth" with a single **Close** button.
+    The file rail refreshes (the workspace must NOT flash the full-screen scanner —
+    the canvas stays mounted, viewport unchanged).
+24. Press **Close**, then verify on disk:
+
+    ```powershell
+    Get-Content D:\_cowtest\CLAUDE.md -TotalCount 1
+    Get-Content D:\_cowtest\AGENTS.md -TotalCount 1
+    Get-Content D:\_cowtest\src\net\AGENTS.md -TotalCount 1
+    Get-Content D:\_cowtest\.cursor\rules\networking.mdc -TotalCount 5
+    ```
+
+    *Expected:* the first three each start with the exact GENERATED header line.
+    The `.mdc` starts with `---` frontmatter and contains the header within its first
+    lines after the closing `---`.
+
+### B5. Idempotence (unchanged detection)
+
+25. Press **Compile** again without changing anything.
+    *Expected:* every row shows **unchanged** (muted), its checkbox is **unchecked AND
+    disabled** (unchanged files can never be approved), and its diff is collapsed by
+    default — expanding shows "no line changes". Footer: "**0 of 4 files will be
+    written**"; **Approve & write** is disabled. Press **Cancel**.
+
+---
+
+## C. Validation cases — errors block writing entirely
+
+### C1. Imports cycle
+
+26. Connect `Architecture` → `Persona`, pick **imports**. (Together with the existing
+    `Persona` →imports→ `Architecture` this is a 2-cycle.)
+27. Press **Compile**. *Expected:* NO file list. Instead an error list on danger
+    background with a mono **cycle** badge and the cycle spelled out readably as titles
+    joined by arrows, first node repeated at the end, e.g.
+    `Persona → Architecture → Persona` (order may start at either node).
+    Footer: "**1 problem — nothing will be written**". **Approve & write is disabled.**
+    Escape / ✕ / Cancel all close the modal.
+28. Close the modal, select the `Architecture → Persona` edge, press **Delete edge** in the
+    inspector. Re-run Compile briefly. *Expected:* file list is back, all rows "unchanged".
+    Cancel.
+
+### C2. Missing file
+
+29. WITHOUT closing the app, delete a node's file from disk:
+
+    ```powershell
+    Remove-Item D:\_cowtest\context\style-guide.md
+    ```
+
+30. Press **Compile**. *Expected:* error list with a **missing file** badge:
+    the node title `Style guide` in bold, then its mono path `context/style-guide.md`
+    in danger red. Footer "1 problem — nothing will be written"; Approve disabled.
+    (If both errors from C1/C2 exist at once, ALL are listed — validation collects
+    everything, it does not stop at the first.)
+31. Recover: select the `Style guide` node, open the inspector **Markdown** tab.
+    *Expected:* "context/style-guide.md is not on disk yet" with a **Create file** button.
+    Press it. Re-run Compile → normal preview again. Cancel.
+
+---
+
+## D. Safety cases — the trust boundary
+
+### D1. Unchecked file is NOT written
+
+32. Change something so files have diffs: rename the `notes` node title to `Working notes`
+    (title changes flow into generated output). Wait for **saved**.
+33. Press **Compile**. *Expected:* changed files show `+n −n` mono counts and are checked;
+    genuinely unchanged files stay disabled-unchecked.
+34. **Uncheck `AGENTS.md`** (click its checkbox — clicking the row body only collapses the
+    diff, the checkbox is its own hit target). *Expected:* footer count drops by one, e.g.
+    "1 of 2 files will be written".
+35. Note `AGENTS.md`'s current LastWriteTime:
+
+    ```powershell
+    (Get-Item D:\_cowtest\AGENTS.md).LastWriteTime
+    ```
+
+36. Press **Approve & write**. *Expected:* done screen lists the approved files only —
+    `AGENTS.md` is NOT in the "wrote" list.
+37. Re-check on disk: `AGENTS.md` LastWriteTime is **unchanged**; the checked file's
+    timestamp is new. **An unchecked file being touched at all is a critical failure.**
+
+### D2. Handwritten-file overwrite warning
+
+38. Overwrite `CLAUDE.md` by hand, removing the header:
+
+    ```powershell
+    Set-Content D:\_cowtest\CLAUDE.md "# My handwritten CLAUDE.md`n`nDo not lose me."
+    ```
+
+39. Press **Compile**. *Expected:* the `CLAUDE.md` row is **UNCHECKED by default** and
+    carries a persistent warning strip (3 px red left border, danger background):
+    `CLAUDE.md: handwritten file — Cowtext did not generate this. Approving will
+    overwrite it.` The diff shows your handwritten lines in red (deletions) and the
+    generated content in green.
+40. Manually **check** `CLAUDE.md`. *Expected:* footer gains a red suffix:
+    "… **· overwrites 1 handwritten file**".
+41. **Uncheck it again** and approve whatever else is checked (or Cancel if nothing is).
+    *Expected:* your handwritten `CLAUDE.md` survives on disk, byte-identical.
+42. Run Compile once more, check `CLAUDE.md` deliberately, Approve & write.
+    *Expected:* handwritten file is replaced; first line is the GENERATED header again.
+    (This is the ONLY sanctioned path to overwriting a handwritten file: explicit
+    opt-in past a visible warning.)
+
+### D3. Cancel writes nothing
+
+43. Rename any node (to create a pending diff), press **Compile**, wait for the preview
+    with checked files. Snapshot the tree:
+
+    ```powershell
+    Get-ChildItem D:\_cowtest -Recurse -File | Select Name, LastWriteTime
+    ```
+
+44. Press **Cancel** (also try: Escape key; clicking the dark scrim outside the panel;
+    the ✕ button — all four must behave identically). *Expected:* modal closes.
+45. Re-run the snapshot command. *Expected:* **zero** timestamp changes — preview alone
+    never touches disk. (Exception that is fine: `.cowtext/graph.json` may have saved,
+    that is the graph autosave, not compile output.)
+
+### D4. Closing is blocked mid-flight
+
+46. Press **Compile** and, during the pixel march, hammer Escape / scrim / ✕.
+    *Expected:* nothing closes until the preview or error list is up (✕ is greyed out).
+    Same applies during the brief "· · ·" writing state.
+
+---
+
+## E. Phase 1 regression — 2 minutes
+
+47. **Drag:** drag a node to a new spot. *Expected:* smooth drag, save indicator cycles
+    to saved, no console errors (check the `tauri dev` terminal).
+48. **Connect:** draw one new edge, pick **sequence**. *Expected:* solid edge with an
+    arrowhead; edge selectable; Delete edge works from the inspector.
+49. **Restart-restore:** close the Cowtext window, `npm run tauri dev` again, Open folder
+    → `D:\_cowtest`. *Expected:* all nodes at their exact positions, all edges with their
+    kinds and the conditional's condition intact, pinned states preserved, target-chip
+    selection in the Compile modal remembered (compileTargets persist in graph.json).
+50. **Inspector edit:** select a node, edit the Title (canvas card updates live), switch to
+    the **Markdown** tab, type a line, press **Save** (or Ctrl+S). *Expected:* amber
+    unsaved-dot disappears; the file on disk contains the new line.
+
+---
+
+## Cleanup
+
+51. Close the app and delete the scratch project:
+
+    ```powershell
+    Remove-Item -Recurse -Force D:\_cowtest
+    ```
+
+## Sign-off
+
+| Section | Pass/Fail | Notes |
+|---|---|---|
+| A Preconditions | | |
+| B Happy path | | |
+| C Validation | | |
+| D Safety | | |
+| E Phase 1 regression | | |
+
+Tester: ____________  Date: ____________  Build/commit: ____________
