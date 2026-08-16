@@ -1,0 +1,182 @@
+/* Cowtext design tokens — v1, dark only.
+   Named semantically so a light theme can be added by overriding this block.
+   Warmth variants: swap the surface/border/text ramp only; accents are shared.
+
+   Repo state when this was written: phase 0 skeleton (Tauri 2 + React 19.1 + Vite 7).
+   Tailwind is not installed yet, and src/App.css is still create-tauri-app
+   boilerplate — so nothing here overrides an existing palette. This file IS
+   backlog item 9.1 "dark Tailwind shell".
+
+   Fonts ship self-hosted via @fontsource, NOT a Google Fonts <link>:
+     npm i @fontsource/ibm-plex-sans @fontsource/jetbrains-mono @fontsource/silkscreen
+   The app must render offline, and CSP is null today but 9.8 tightens it —
+   a remote font link breaks exactly when that lands. (Adding these three
+   packages needs Marty's yes per CLAUDE.md "do not add libraries without asking".) */
+
+:root {
+  /* ── Surfaces ─────────────────────────────────────────── */
+  --surface-canvas: #100E0C;  /* graph background, behind everything */
+  --surface-0:      #16130F;  /* app background */
+  --surface-1:      #1D1915;  /* panel: top bar, inspector, feed */
+  --surface-2:      #262019;  /* raised: node card, input, toolbar */
+  --surface-3:      #2F2820;  /* overlay: dropdown, modal, tooltip */
+  --surface-inset:  #0E0C0A;  /* recessed: editor, diff, code well */
+  --surface-hover:  rgba(255,240,220,.045);
+  --surface-active: rgba(255,240,220,.080);
+  --scrim:          rgba(9,7,6,.72);
+
+  /* ── Borders ──────────────────────────────────────────── */
+  --border-subtle:  #2A241D;  /* dividers inside a panel */
+  --border-default: #3A322A;  /* control + card outline */
+  --border-strong:  #4E4438;  /* handles, hovered control */
+
+  /* ── Text ─────────────────────────────────────────────── */
+  --text-primary:   #F4EFE7;  /* 15.3:1 on surface-1 */
+  --text-secondary: #C0B6A8;  /*  8.7:1 */
+  --text-muted:     #8E8477;  /*  4.8:1 — AA floor, never smaller than 11px */
+  --text-disabled:  #5C544A;  /*  2.4:1 — disabled + decoration only */
+  --text-inverse:   #17130E;  /*  6.3:1 on --accent */
+
+  /* ── Accent: scarf blue = the user acts ───────────────── */
+  --accent:         #4C9BE8;
+  --accent-hover:   #62A9EC;
+  --accent-active:  #3B85CE;
+  --accent-text:    #82BAF0;  /* accent as text/link on dark, 8.5:1 */
+  --accent-surface: rgba(76,155,232,.14);
+  --accent-border:  rgba(76,155,232,.38);
+
+  /* ── Amber: hay = the cow acts ────────────────────────── */
+  --amber:          #E8A33D;
+  --amber-text:     #F0BE72;
+  --amber-surface:  rgba(232,163,61,.13);
+  --amber-border:   rgba(232,163,61,.35);
+
+  /* ── Semantic ─────────────────────────────────────────── */
+  --success:         #4FB477;
+  --success-text:    #7FD09C;
+  --success-surface: rgba(79,180,119,.13);
+  --warning:         var(--amber);
+  --warning-text:    var(--amber-text);
+  --warning-surface: var(--amber-surface);
+  --danger:          #E0564F;
+  --danger-text:     #F0897F;
+  --danger-surface:  rgba(224,86,79,.14);
+  --info:            var(--accent);
+  --info-text:       var(--accent-text);
+  --info-surface:    var(--accent-surface);
+
+  /* ── Node roles — colour is REDUNDANT coding.
+        The pixel glyph is the primary identifier; lightness is
+        staggered so the set survives deuteranopia in greyscale. */
+  --role-persona:      #E4784F;  /* 5.5:1 on surface-2 */
+  --role-rules:        #E3C25F;  /* 9.3:1 */
+  --role-architecture: #56B4E9;  /* 7.0:1 */
+  --role-workflow:     #3FBF92;  /* 7.0:1 */
+  --role-task:         #8A8BEE;  /* 5.4:1 */
+  --role-reference:    #C58BC9;  /* 6.1:1 */
+  --role-glossary:     #A9A296;  /* 6.4:1 — deliberately achromatic */
+
+  /* ── Edges — neutral by rule. Kind is read from line style
+        and marker, never from hue (hue belongs to roles). */
+  --edge-imports:     #7A6D5F;  /* 1.75px solid, filled arrow */
+  --edge-references:  #574E44;  /* 1.5px dash 5 4, open circle */
+  --edge-conditional: #6E6155;  /* 1.5px dot 1.5 3.5, + condition chip */
+  --edge-sequence:    #8E8477;  /* 1.5px solid, chevron + step dot */
+  --edge-selected:    var(--accent);
+
+  /* ── Typography ───────────────────────────────────────── */
+  --font-ui:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --font-pixel: 'Silkscreen', monospace;   /* barn HUD + LIVE tags only */
+
+  --fs-micro: 9.5px;   --lh-micro: 1;      /* pixel tags, uppercase mono */
+  --fs-2xs:   10.5px;  --lh-2xs:   1.3;    /* meta, keycaps, badges */
+  --fs-xs:    11px;    --lh-xs:    1.4;    /* labels, file paths */
+  --fs-sm:    12px;    --lh-sm:    1.45;   /* dense rows, secondary UI */
+  --fs-base:  13px;    --lh-base:  1.45;   /* default UI text */
+  --fs-md:    14px;    --lh-md:    1.5;    /* palette input, emphasis */
+  --fs-lg:    16px;    --lh-lg:    1.4;    /* section + modal titles */
+  --fs-xl:    20px;    --lh-xl:    1.3;
+  --fs-2xl:   24px;    --lh-2xl:   1.25;   /* onboarding headline only */
+  --fw-normal: 400; --fw-medium: 500; --fw-semi: 600;
+
+  /* ── Spacing — 4px grid ───────────────────────────────── */
+  --sp-0: 0; --sp-1: 2px; --sp-2: 4px;  --sp-3: 6px;  --sp-4: 8px;
+  --sp-5: 12px; --sp-6: 16px; --sp-7: 20px; --sp-8: 24px;
+  --sp-9: 32px; --sp-10: 40px; --sp-11: 48px;
+
+  --h-topbar:    44px;
+  --h-subbar:    31px;
+  --h-row:       28px;   /* compact list row */
+  --h-row-comfy: 34px;
+  --h-control:   28px;   /* input / button, default */
+  --h-control-sm:24px;
+  --h-control-lg:32px;
+  --pad-panel:   12px;
+  --pad-modal:   16px;
+  --w-inspector: 392px;
+  --w-node:      244px;
+
+  /* ── Radii — pixel-adjacent brand ⇒ nothing rounder than 8px ── */
+  --r-xs: 2px;   /* checkbox, tiny tag */
+  --r-sm: 3px;   /* badge, chip, keycap, list row */
+  --r-md: 4px;   /* button, input, node card */
+  --r-lg: 6px;   /* popover, dropdown */
+  --r-xl: 8px;   /* modal, palette */
+  --r-pill: 999px; /* toggle track + status dots ONLY */
+
+  /* ── Elevation — border-first; shadow only when floating ── */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(0,0,0,.35);                     /* node card */
+  --elev-2: 0 4px 14px rgba(0,0,0,.45);                    /* popover */
+  --elev-3: 0 12px 36px rgba(0,0,0,.60);                   /* dropdown, toast */
+  --elev-4: 0 24px 64px rgba(0,0,0,.60);                   /* modal, palette */
+  --glow-live: 0 0 18px rgba(232,163,61,.16);              /* agent is reading */
+
+  /* ── Motion ───────────────────────────────────────────── */
+  --dur-instant: 80ms;
+  --dur-fast:    140ms;  /* hover, focus, colour */
+  --dur-base:    180ms;  /* menus, toasts, modal in */
+  --dur-slow:    220ms;  /* panel collapse, feed height */
+  --dur-pulse:   1600ms; /* node live-read ring */
+  --ease-out:    cubic-bezier(.2,0,0,1);
+  --ease-in:     cubic-bezier(.4,0,1,1);
+  --ease-inout:  cubic-bezier(.4,0,.2,1);
+
+  /* ── Focus ────────────────────────────────────────────── */
+  --focus-ring: 0 0 0 2px var(--surface-1), 0 0 0 4px var(--accent);
+
+  /* ── Z scale ──────────────────────────────────────────── */
+  --z-canvas: 0; --z-canvas-ui: 10; --z-panel: 20; --z-sticky: 30;
+  --z-dropdown: 100; --z-modal: 200; --z-palette: 400; --z-toast: 300;
+  --z-tooltip: 500;
+}
+
+/* Warmth variants — surface/border/text only. */
+[data-warmth="neutral"] {
+  --surface-canvas:#0E0F10; --surface-0:#131416; --surface-1:#191B1E;
+  --surface-2:#212429; --surface-3:#292D33; --surface-inset:#0B0C0D;
+  --border-subtle:#24272C; --border-default:#333840; --border-strong:#464C57;
+  --text-primary:#EDEFF2; --text-secondary:#B4BAC4; --text-muted:#838A96;
+  --text-disabled:#565C67; --text-inverse:#0F1113;
+}
+[data-warmth="brown"] {
+  --surface-canvas:#120E08; --surface-0:#19130B; --surface-1:#221A10;
+  --surface-2:#2C2215; --surface-3:#372B1B; --surface-inset:#0F0B06;
+  --border-subtle:#332717; --border-default:#463723; --border-strong:#5E4B30;
+  --text-primary:#F8F0E0; --text-secondary:#CBBA9C; --text-muted:#9A8B6C;
+  --text-disabled:#6A5E47; --text-inverse:#171006;
+}
+
+@keyframes ct-pulse { 0%{transform:scale(1);opacity:.6} 70%,100%{transform:scale(1.06);opacity:0} }
+@keyframes ct-blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The live-read ring becomes a static amber edge + steady dot.
+     Feed rows appear instantly. Modals fade only, no translate. */
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
