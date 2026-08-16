@@ -234,9 +234,9 @@ the work. **If it doesn't overlap something, it gets no shadow.**
 | 5 | Barn HUD, calm mode, mute, session ticker + full reduced-motion & colourblind pass (9.7) |
 | 6 | Onboarding wizard, presets, handoff, auto-layout |
 
-## Open asks — need Marty's yes (CLAUDE.md: no libraries without asking)
+## Approved dependencies (Marty, 2026-08-15) — install when phase 0 UI work starts
 
-1. **Lucide React** — stroke icons (24 grid, 1.5px at 16px) for all app chrome. Role
-   glyphs are in-repo SVG regardless. Alternative: ~20 chrome glyphs hand-authored in-repo.
+1. **lucide-react** — stroke icons (24 grid, 1.5px at 16px) for all app chrome. Role
+   glyphs are in-repo SVG regardless.
 2. **@fontsource packages** — `@fontsource/ibm-plex-sans`, `@fontsource/jetbrains-mono`,
-   `@fontsource/silkscreen`, bundled/self-hosted.
+   `@fontsource/silkscreen`, bundled/self-hosted. No CDN font links, ever.

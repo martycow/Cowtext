@@ -64,6 +64,6 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Status
 
-Phase: 0 (skeleton). Last done: `docs/FEATURES.md` backlog; design system imported from Claude Design → `docs/design/` (DESIGN_SPEC.md + tokens.css + tailwind.config.js) — implement UI from those, they are the design source of truth. Pending Marty's yes: Lucide React icons, @fontsource fonts (see DESIGN_SPEC.md "Open asks"). Next: open-folder + `.md` scan, Tailwind dark shell.
+Phase: 0 (skeleton). Last done: `docs/FEATURES.md` backlog; design system imported from Claude Design → `docs/design/` (DESIGN_SPEC.md + tokens.css + tailwind.config.js) — implement UI from those, they are the design source of truth. Approved deps (not yet installed): lucide-react, @fontsource/ibm-plex-sans, @fontsource/jetbrains-mono, @fontsource/silkscreen — install when phase 0 UI work starts. Next: open-folder + `.md` scan, Tailwind dark shell.
 
 Update this line at the end of every session.
