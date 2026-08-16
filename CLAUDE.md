@@ -64,6 +64,6 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Status
 
-Phase: 0 (skeleton) — implementation done, pending Marty's acceptance check. Last done: Tailwind 3 + tokens dark shell (`src/styles/`), open-folder + `.md` scan (`src-tauri/src/project.rs` `scan_project`, Zustand store `src/store/project.ts`), approved deps installed (+ tauri-plugin-dialog for the folder picker). `cargo test` has 2 scanner tests. Design source of truth: `docs/design/`. Next: open-folder + `.md` scan, Tailwind dark shell.
+Phase: 0 done (accepted by Marty 2026-08-15) → next is Phase 1 (graph canvas: React Flow, nodes/edges, inspector, `.cowtext/graph.json`). Phase 0 delivered: Tailwind 3 + tokens dark shell (`src/styles/`), open-folder + `.md` scan (`src-tauri/src/project.rs` `scan_project`, Zustand store `src/store/project.ts`), tauri-plugin-dialog for the folder picker, 2 scanner tests. Design source of truth: `docs/design/`. Cold-start <2s not yet measured on a release build. Next: open-folder + `.md` scan, Tailwind dark shell.
 
 Update this line at the end of every session.
