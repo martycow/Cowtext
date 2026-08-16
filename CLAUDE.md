@@ -19,6 +19,7 @@ Full spec: `D:\Moo.exe\_Documents\Cowtext\COWTEXT_VIBECODE_PLAN.md`. Read the re
 - Compile never writes without diff-preview approval. Writing hooks into a user project's `.claude/settings.json` always shows a confirmation diff — that is a trust boundary.
 - Any schema change to `graph.json` bumps `version` and adds a migration.
 - Sprites/SFX are assets, not code: never generate base64 blobs into source files.
+- All project documentation `.md` lives in `docs/`. Only `CLAUDE.md` and `README.md` stay at the repo root. Never drop notes, plans, or reports elsewhere.
 - If stuck > 3 attempts on the same bug: stop, write down the failing assumption, ask Marty.
 
 ## Commands
@@ -63,6 +64,6 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Status
 
-Phase: 0 (skeleton). Last done: scaffold + CLAUDE.md committed. Next: open-folder + `.md` scan, Tailwind dark shell.
+Phase: 0 (skeleton). Last done: scaffold + CLAUDE.md committed; `docs/FEATURES.md` backlog written (full feature list, phase-assigned — `NEW` items still need Marty's approval to count as scope). Next: open-folder + `.md` scan, Tailwind dark shell.
 
 Update this line at the end of every session.
