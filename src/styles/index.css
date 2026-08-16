@@ -43,3 +43,88 @@
     background: transparent;
   }
 }
+
+/* ── React Flow chrome — tokens over library defaults. Deliberately outside
+      @layer: Tailwind tree-shakes layered rules whose classes never appear
+      in markup, and these classes are rendered by the library. ─────────── */
+
+.react-flow {
+  background: var(--surface-canvas);
+}
+.react-flow__pane {
+  cursor: default;
+}
+
+/* Node handles — 7px sharp squares, offset 4px outside the card; fade in on
+   hover/selection (DESIGN_SPEC.md: the one place the pixel grid shows in a
+   control). */
+.react-flow__handle.ct-handle {
+  width: 7px;
+  height: 7px;
+  border-radius: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.react-flow__handle.ct-handle.react-flow__handle-left {
+  left: -4px;
+}
+.react-flow__handle.ct-handle.react-flow__handle-right {
+  right: -4px;
+}
+.ct-node:hover .ct-handle,
+.react-flow__node.selected .ct-handle,
+.react-flow__handle.connectingfrom,
+.react-flow__handle.connectingto {
+  opacity: 1;
+}
+
+/* Controls + minimap recoloured to the surface ramp. */
+.react-flow__controls {
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  box-shadow: var(--elev-2);
+}
+.react-flow__controls-button {
+  width: 24px;
+  height: 24px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.react-flow__controls-button:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 11px;
+  max-height: 11px;
+}
+.react-flow__minimap {
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.react-flow__attribution {
+  background: transparent;
+}
+.react-flow__attribution a {
+  color: var(--text-disabled);
+}
+
+/* Box-select + connection line are user actions ⇒ scarf blue. */
+.react-flow__selection {
+  background: var(--accent-surface);
+  border: 1px dashed var(--accent-border);
+}
+.react-flow__nodesselection-rect {
+  background: transparent;
+  border: 1px dashed var(--accent-border);
+}
+.react-flow__connection-path {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}

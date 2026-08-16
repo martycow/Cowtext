@@ -64,6 +64,6 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Status
 
-Phase: 0 done (accepted by Marty 2026-08-15) → next is Phase 1 (graph canvas: React Flow, nodes/edges, inspector, `.cowtext/graph.json`). Phase 0 delivered: Tailwind 3 + tokens dark shell (`src/styles/`), open-folder + `.md` scan (`src-tauri/src/project.rs` `scan_project`, Zustand store `src/store/project.ts`), tauri-plugin-dialog for the folder picker, 2 scanner tests. Design source of truth: `docs/design/`. Cold-start <2s not yet measured on a release build. Next: open-folder + `.md` scan, Tailwind dark shell.
+Phase: 1 built, awaiting manual acceptance (2026-08-15). Delivered: graph store + stable LF serialization + v1 migration harness (`src/store/graph.ts`), Rust graph/md read-write commands with path guard + atomic writes + 7 unit tests (`src-tauri/src/project.rs`), React Flow canvas with spec node card / 4 edge kinds + kind picker / minimap / dot grid (`src/canvas/`), inspector 392px with Properties form + CodeMirror markdown tab saving to disk (`src/inspector/`), adopt-.md-as-node from the collapsible left file rail, debounced auto-save to `.cowtext/graph.json`. Verified: `npm run build`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, 6-node serialize round-trip harness. NOT yet verified in a running window (drag/connect/save UX) — run `npm run tauri dev` and walk the §9 P1 acceptance before closing the phase.
 
 Update this line at the end of every session.
