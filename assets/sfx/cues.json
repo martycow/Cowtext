@@ -1,0 +1,120 @@
+{
+  "bit_depth": 16,
+  "channels": 1,
+  "cues": {
+    "ambient_loop": {
+      "bytes": 176444,
+      "duration_s": 2.0,
+      "file": "assets/sfx/ambient_loop.wav",
+      "loop": true,
+      "peak_dbfs": -18.0,
+      "rms_dbfs": -25.1
+    },
+    "assemble_done": {
+      "bytes": 48554,
+      "duration_s": 0.55,
+      "file": "assets/sfx/assemble_done.wav",
+      "loop": false,
+      "peak_dbfs": -10.0,
+      "rms_dbfs": -23.4
+    },
+    "calf_despawn": {
+      "bytes": 15920,
+      "duration_s": 0.18,
+      "file": "assets/sfx/calf_despawn.wav",
+      "loop": false,
+      "peak_dbfs": -13.0,
+      "rms_dbfs": -21.5
+    },
+    "calf_spawn": {
+      "bytes": 15920,
+      "duration_s": 0.18,
+      "file": "assets/sfx/calf_spawn.wav",
+      "loop": false,
+      "peak_dbfs": -13.0,
+      "rms_dbfs": -21.6
+    },
+    "compile_ok": {
+      "bytes": 30032,
+      "duration_s": 0.34,
+      "file": "assets/sfx/compile_ok.wav",
+      "loop": false,
+      "peak_dbfs": -10.0,
+      "rms_dbfs": -18.3
+    },
+    "ding": {
+      "bytes": 61782,
+      "duration_s": 0.7,
+      "file": "assets/sfx/ding.wav",
+      "loop": false,
+      "peak_dbfs": -10.0,
+      "rms_dbfs": -25.0
+    },
+    "drawer_slide": {
+      "bytes": 22976,
+      "duration_s": 0.26,
+      "file": "assets/sfx/drawer_slide.wav",
+      "loop": false,
+      "peak_dbfs": -11.0,
+      "rms_dbfs": -25.9
+    },
+    "error_soft": {
+      "bytes": 28268,
+      "duration_s": 0.32,
+      "file": "assets/sfx/error_soft.wav",
+      "loop": false,
+      "peak_dbfs": -11.0,
+      "rms_dbfs": -23.7
+    },
+    "kb_clack": {
+      "bytes": 8864,
+      "duration_s": 0.1,
+      "file": "assets/sfx/kb_clack.wav",
+      "loop": false,
+      "peak_dbfs": -9.0,
+      "rms_dbfs": -27.7
+    },
+    "moo_happy": {
+      "bytes": 48554,
+      "duration_s": 0.55,
+      "file": "assets/sfx/moo_happy.wav",
+      "loop": false,
+      "peak_dbfs": -7.0,
+      "rms_dbfs": -15.5
+    },
+    "page_flip": {
+      "bytes": 13274,
+      "duration_s": 0.15,
+      "file": "assets/sfx/page_flip.wav",
+      "loop": false,
+      "peak_dbfs": -13.0,
+      "rms_dbfs": -30.6
+    },
+    "paper_shuffle": {
+      "bytes": 24740,
+      "duration_s": 0.28,
+      "file": "assets/sfx/paper_shuffle.wav",
+      "loop": false,
+      "peak_dbfs": -13.0,
+      "rms_dbfs": -30.6
+    },
+    "sniff": {
+      "bytes": 19448,
+      "duration_s": 0.22,
+      "file": "assets/sfx/sniff.wav",
+      "loop": false,
+      "peak_dbfs": -16.0,
+      "rms_dbfs": -33.2
+    },
+    "typewriter": {
+      "bytes": 44144,
+      "duration_s": 0.5,
+      "file": "assets/sfx/typewriter.wav",
+      "loop": true,
+      "peak_dbfs": -10.0,
+      "rms_dbfs": -31.6
+    }
+  },
+  "generator": "scripts/gen_sfx.py",
+  "sample_rate": 44100
+}
