@@ -42,6 +42,12 @@ export interface MemoryNode {
   position: { x: number; y: number };
   /** Isometric tile coords for the barn scene (phase 5); auto if absent. */
   scenePos?: { tx: number; ty: number };
+  /**
+   * ISO date (YYYY-MM-DD) a human last confirmed the file is still accurate.
+   * Absent = never verified. No UI reads it yet; consumed by usage-driven
+   * pruning (FEATURES 6.9, phase 6). Approved by Marty 2026-08-16 (R11).
+   */
+  lastVerified?: string;
 }
 
 export type EdgeKind = "imports" | "references" | "conditional" | "sequence";
@@ -87,6 +93,7 @@ function stableNode(n: MemoryNode): MemoryNode {
     pinned: n.pinned,
     position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
     ...(n.scenePos !== undefined ? { scenePos: { tx: n.scenePos.tx, ty: n.scenePos.ty } } : {}),
+    ...(n.lastVerified !== undefined ? { lastVerified: n.lastVerified } : {}),
   };
 }
 
@@ -187,6 +194,9 @@ interface GraphState {
 
   /** Wholesale selection sync — React Flow reports the full selection. */
   setSelection: (nodeIds: string[], edgeIds: string[]) => void;
+
+  /** Compile-target picker (Compile modal); persisted like any graph edit. */
+  setCompileTargets: (targets: CompileTarget[]) => void;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -409,5 +419,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       a.length === b.length && a.every((v, i) => v === b[i]);
     if (same(s.selectedNodeIds, nodeIds) && same(s.selectedEdgeIds, edgeIds)) return;
     set({ selectedNodeIds: nodeIds, selectedEdgeIds: edgeIds });
+  },
+
+  setCompileTargets: (targets) => {
+    set({ compileTargets: targets });
+    scheduleSave();
   },
 }));
