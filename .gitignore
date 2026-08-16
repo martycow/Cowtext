@@ -29,4 +29,6 @@ Thumbs.db
 
 # --- Logs & coverage ---
 *.log
-coverage/__pycache__/
+coverage/
+__pycache__/
+
