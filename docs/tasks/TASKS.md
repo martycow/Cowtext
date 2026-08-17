@@ -11,7 +11,6 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Phase 3+4 manual acceptance walk | phase-3, phase-4, assemble, hooks, acceptance, qa | Run `npm run tauri dev`; do one real assemble in a running window (5 briefs → 5 sensible `.md` files, progress states, cancel); install hooks via the confirmation-diff modal into a real project's `.claude/settings.json`; run Claude Code in a terminal and watch canvas nodes pulse + event log fill; walk the Barn demo (Demo button, Canvas⇄Barn toggle). Update CLAUDE.md Status line after. | P0 | 2026-08-16 | 🔲 Open |
 | Phase 5 manual acceptance walk | phase-5, barn, sfx, settings, acceptance, qa | Marty-only gate. Walk the three Phase 5 manuals in a running app: `docs/testing/PHASE5_SOUND_TEST_MANUAL.md` (cues, ducking, cooldowns, calm/mute/hidden gates), `docs/testing/SETTINGS_TEST_MANUAL.md` (volume, sound switches, mute, calm mode, claude path override, port + context dir), `docs/testing/PHASE5_JUICE_TEST_MANUAL.md` (flutter, anticipation, accumulation, waiting choreography, idle throttle, DEMO badge). Acceptance bar: a stranger watches a live session for 30 s and smiles. Update CLAUDE.md Status line after. | P0 | 2026-08-17 | 🔲 Open |
 | Phase 6 manual acceptance walk | phase-6, presets, handoff, acceptance, qa | Marty-only gate. Walk `docs/testing/PHASE6_TEST_MANUAL.md`: save a preset, "New project from preset" stubs files never-clobber in < 1 minute; Handoff generates `HANDOFF.md` with GENERATED header + Chat/Code/Design clipboard variants; pasted handoff gives Claude Chat full context. Update CLAUDE.md Status line after. | P0 | 2026-08-17 | 🔲 Open |
-| Commit the Phase 5+6 landing | git, release | Nothing from the 2026-08-17 fleet session is committed. Commit per Marty's git workflow (ask Yes/No/Do-it-yourself first). | P1 | 2026-08-17 | 🔲 Open |
 
 ## Done — 2026-08-17 (Phase 5+6 fleet session)
 
@@ -27,6 +26,7 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Adversarial audit + 24 fixes | phase-5, phase-6, review, fix | 5 lenses, 34 agents: 28 raw findings, 24 confirmed by skeptics, ALL fixed in two passes. Batch summary in BUGS.md. 4 deviations ratified (moo duck excludes tool group; detached ding; blue settings toggles per "blue is you"; idle fidgets approximated). | P1 | 2026-08-17 | ✅ Done |
 | Phase 5+6 verification pass | phase-5, phase-6, verify, ci | All green: `npm run build`, `cargo clippy -D warnings`, `cargo test` 88/88, invoke contract 23/23, howler confined to sfx.ts. | P1 | 2026-08-17 | ✅ Done |
 | Product research pass (Brainstorm_Features) | research, product, docs | Product Analyst produced `docs/Brainstorm_Features.md`: 18 ranked post-Phase-6 ideas from 3 lenses + competitor scan. Triage into BACKLOG.md pending. | P2 | 2026-08-17 | ✅ Done |
+| Commit the Phase 5+6 landing | git, release | Committed as `c241b86` (2026-08-17, Marty approved via remote): 61 files, 5631 insertions. | P1 | 2026-08-17 | ✅ Done |
 
 ## Done — 2026-08-16 (Phase 3+4 + Barn prototype fleet session)
 
