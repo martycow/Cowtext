@@ -39,5 +39,5 @@ Phase 6 complete has now landed at v0.0.0006 as projected; a first shippable pub
 
 1. Phase 3 + 4 manual acceptance walk (see TASKS.md) — one real assemble in a running window; run Claude Code in a terminal and watch nodes light up. Marty-only gate, still open.
 2. Phase 5 + 6 manual acceptance walks (see TASKS.md) — four manuals: `docs/testing/PHASE5_SOUND_TEST_MANUAL.md`, `docs/testing/SETTINGS_TEST_MANUAL.md`, `docs/testing/PHASE5_JUICE_TEST_MANUAL.md`, `docs/testing/PHASE6_TEST_MANUAL.md`.
-3. Commit the Phase 5+6 landing (nothing from the 2026-08-17 session is committed yet).
-4. Post-Phase-6 planning: triage `docs/Brainstorm_Features.md` (18 ranked ideas) against BACKLOG.md; ship-prep items (CSP, lint, code-split, real sprites) toward v0.1.0.
+3. ~~Commit the Phase 5+6 landing~~ — done, `c241b86` (2026-08-17).
+4. Post-Phase-6 planning: ~~triage `docs/Brainstorm_Features.md`~~ — done 2026-08-17, all 18 ideas in BACKLOG.md (quick wins / moat bets / platform bets). Remaining: ship-prep items (CSP, lint, code-split, real sprites) toward v0.1.0.

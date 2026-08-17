@@ -25,7 +25,7 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Integration pass | phase-5, phase-6, integration | ZERO cross-lane defects; all gates green on the merged tree. | P1 | 2026-08-17 | ✅ Done |
 | Adversarial audit + 24 fixes | phase-5, phase-6, review, fix | 5 lenses, 34 agents: 28 raw findings, 24 confirmed by skeptics, ALL fixed in two passes. Batch summary in BUGS.md. 4 deviations ratified (moo duck excludes tool group; detached ding; blue settings toggles per "blue is you"; idle fidgets approximated). | P1 | 2026-08-17 | ✅ Done |
 | Phase 5+6 verification pass | phase-5, phase-6, verify, ci | All green: `npm run build`, `cargo clippy -D warnings`, `cargo test` 88/88, invoke contract 23/23, howler confined to sfx.ts. | P1 | 2026-08-17 | ✅ Done |
-| Product research pass (Brainstorm_Features) | research, product, docs | Product Analyst produced `docs/Brainstorm_Features.md`: 18 ranked post-Phase-6 ideas from 3 lenses + competitor scan. Triage into BACKLOG.md pending. | P2 | 2026-08-17 | ✅ Done |
+| Product research pass (Brainstorm_Features) | research, product, docs | Product Analyst produced `docs/Brainstorm_Features.md`: 18 ranked post-Phase-6 ideas from 3 lenses + competitor scan. Triaged into BACKLOG.md 2026-08-17: all 18 accepted, grouped quick wins / moat bets / platform bets with dependency cross-links. | P2 | 2026-08-17 | ✅ Done |
 | Commit the Phase 5+6 landing | git, release | Committed as `c241b86` (2026-08-17, Marty approved via remote): 61 files, 5631 insertions. | P1 | 2026-08-17 | ✅ Done |
 
 ## Done — 2026-08-16 (Phase 3+4 + Barn prototype fleet session)

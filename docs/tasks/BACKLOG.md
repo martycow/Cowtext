@@ -31,6 +31,43 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Event feed hygiene: retention + layered status | phase-4, feed, perf | Standard feed anatomy: timestamp + icon + description + metadata per row; retention cap / virtualized list (200-ring landed — virtualize if cap rises); layered status (ambient badge → glanceable panel → interrupting alert). | P2 | 2026-08-16 | 🔲 Backlog |
 | AGENTS.md positioning note in docs | docs, positioning | AGENTS.md is now the 30+-agent industry standard — add a positioning note to docs (README/marketing), not code. | P3 | 2026-08-16 | 🔲 Backlog |
 
+## Triaged from docs/Brainstorm_Features.md (Product Analyst pass, triaged 2026-08-17)
+
+All 18 brainstorm ideas accepted into backlog; none rejected. Priorities kept from the analyst ranking. Grouped by sequencing, not priority: quick wins can slot into any sprint; moat bets mostly depend on the usage-heatmap foundation (FEATURES 6.9, above); platform bets are post-v0.1.0 scope.
+
+### Quick wins (small, self-contained — candidates for any pre-v0.1.0 sprint)
+
+| Name | Tags | Description | Priority | Date Created | Status |
+|---|---|---|---|---|---|
+| The moo is the notification | audio, ambient, opt-in | Opt-in setting: while the app is hidden/minimized, only the turn-complete happy moo (plus optional low moo on tool errors) still plays quietly — the barn becomes the user's Claude-is-done sound. Everything else stays silent when hidden. Builds on the existing sfx.ts hidden gate. | P1 | 2026-08-17 | 🔲 Backlog |
+| Named calves | multi-agent, identity, barn | Each subagent name/type hashes to a stable calf appearance (coat patch pattern + tiny prop), identical across sessions, so a six-agent fleet reads as six recurring characters instead of interchangeable sprites. | P1 | 2026-08-17 | 🔲 Backlog |
+| Branch-aware graph | git, branches | Watch `.git/HEAD` per project; on checkout reload graph.json from the new branch, show the branch in the title bar, and warn via the GENERATED header hash when the on-disk CLAUDE.md was compiled from a different branch, offering one-click recompile. | P1 | 2026-08-17 | 🔲 Backlog |
+| Dust and cobwebs | staleness, heatmap, barn | Nodes unread for many sessions gather visible dust/cobwebs on their barn cabinets and gently desaturate on canvas as lastVerified falls behind churn; heavily-read cabinets stay polished. Purely ambient, no toasts. Depends on: Node usage heatmap (FEATURES 6.9). | P2 | 2026-08-17 | 🔲 Backlog |
+
+### Moat bets (core differentiators — most need hook-data/heatmap foundations first)
+
+| Name | Tags | Description | Priority | Date Created | Status |
+|---|---|---|---|---|---|
+| Reality Check (drift lint) | drift, lint, git | Static lint checking every file path, command, script and port cited in a node against the live repo, with an optional `claude -p` pass for semantic claims; broken claims get a red drift badge and a Problems entry quoting the exact lie. Runs on project open and after git operations. | P1 | 2026-08-17 | 🔲 Backlog |
+| Context audit changeset | heatmap, prune, tokens | Turns N sessions of hook data into one applyable changeset — unpin never-read nodes, adopt unmapped hot files, split partially-read rules — each line quoting its weekly token cost; reviewed and applied like a compile diff, atomically. Superset of: Unmapped-read one-click adopt (FEATURES 6.7); depends on: Node usage heatmap (FEATURES 6.9). | P1 | 2026-08-17 | 🔲 Backlog |
+| Memory Inbox | memory, curation | Ingest Claude Code auto-memory (MEMORY.md) as an inbox lane on the canvas; one click promotes a machine-written fact into a real git-synced Memory Node or dismisses it, flagging duplicates/contradictions with existing nodes, and showing which memories exist only on this machine. | P1 | 2026-08-17 | 🔲 Backlog |
+| Transcript mining for context gaps | sessions, gaps | Opt-in, local-only parsing of `~/.claude` project transcripts to find context failure signatures (agent grepping for facts an unpinned node contains, re-reading a file 4+ times, asking questions a node answers), each surfaced as a gap card with a one-click fix (pin, edge, new node). | P1 | 2026-08-17 | 🔲 Backlog |
+| Context loadouts | profiles, compile | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides; switching recompiles, the header records the active loadout, and hook sessions are tagged with it so the usage heatmap can compare per-loadout. | P2 | 2026-08-17 | 🔲 Backlog |
+| Merge sentry | git, review-inbox | After a pull/merge/rebase, diff incoming commits against a path-to-node index and queue affected nodes into a review inbox ("this merge touched 14 files under src/auth — auth-rules.md may be stale"); items clear by re-verifying (bumps lastVerified) or editing. | P2 | 2026-08-17 | 🔲 Backlog |
+
+### Platform & distribution bets (bigger scope — post-v0.1.0)
+
+| Name | Tags | Description | Priority | Date Created | Status |
+|---|---|---|---|---|---|
+| cowtext check (CI drift gate) | ci, cli, teams | Verify-only CLI plus a published GitHub Action that fails a PR when generated CLAUDE.md/AGENTS.md/.cursor/rules no longer match graph.json, were hand-edited (header hash), or contain drift-lint breakage, posting a graph-level diff as the PR comment. Makes the graph canonical by policy. | P1 | 2026-08-17 | 🔲 Backlog |
+| Fleet dashboard | multi-project, home | Home screen listing every known project as a status card (hook health, drift-lint count, last session time, pinned-token total, unreviewed unmapped reads); tray badge sums problems across the fleet. Optional farmstead skin renders each project as a small barn. | P1 | 2026-08-17 | 🔲 Backlog |
+| Barn Raising | progression, retention, barn | Barn size and furnishing derive deterministically from real project history — node count adds cabinets, total sessions weather the wood, git age adds a loft — so a year-old project opens to a big lived-in barn. No XP, no unlocks, no notifications. Builds on the Phase 5 session-accumulation layer. | P1 | 2026-08-17 | 🔲 Backlog |
+| cowtext-mcp | mcp, runtime, moat | Bundled MCP server exposing Memory Nodes as resources/tools so any agent (Claude Code, Cursor, Codex) pulls nodes on demand at runtime instead of eating the whole pinned set; role and conditional-glob metadata become retrieval hints, and hooks log which nodes were fetched. | P1 | 2026-08-17 | 🔲 Backlog |
+| Skill Studio | skills, authoring | Author skills, agents and commands as graph nodes, with a trigger simulator (type a hypothetical prompt, see which skills would load and their token cost) plus one-click export as an installable Claude Code plugin bundle. | P1 | 2026-08-17 | 🔲 Backlog |
+| Barn mission control | multi-agent, sessions, barn | Concurrent Claude Code sessions each get their own stall and full cow (peer, not calf) with per-session color lanes in the event log and tinted canvas pulses; a chalkboard lists active subagents with task brief and working/done/stalled ticks. | P2 | 2026-08-17 | 🔲 Backlog |
+| Context packages | teams, sharing, versioning | Export a subgraph (org TS standards, security rules) as a versioned package other projects import by git URL; imports render as a locked group with approval-gated update diffs, and local edits fork the node with a diverged-from-upstream marker. | P2 | 2026-08-17 | 🔲 Backlog |
+| Cowtext as a plugin | distribution, hooks | Package the hook configuration plus a small graph-respecting skill (report unmapped reads, suggest node updates) as an installable Claude Code plugin, so a teammate without the desktop app wires the hooks feed with one install and the app detects/adopts it — replacing hand-edited settings.json onboarding. | P2 | 2026-08-17 | 🔲 Backlog |
+
 ## Deferred UX debt (integration pass 2026-08-16)
 
 | Name | Tags | Description | Priority | Date Created | Status |
