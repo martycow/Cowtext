@@ -288,7 +288,8 @@ combined always-apply rules should stay under ~2k tokens — squarely inside R8'
 zone). Two findings are new and material:
 
 **R21 — A SKILL.md adapter beats every per-tool adapter in 4.12's list.** *(extends
-4.12 — Phase 7+, but reorder its queue)* Anthropic released Agent Skills as an open
+4.12 — Phase 7+, but reorder its queue)* **[APPROVED by Marty 2026-08-16 — skills ranked
+more important than R23's default-target change; SKILL.md adapter leads the 4.12 queue.]** Anthropic released Agent Skills as an open
 standard (Dec 18, 2025; agentskills.io, AAIF-governed); within a quarter it was read
 by Cursor, VS Code, Codex CLI, Gemini CLI, Windsurf, Goose and ~40 tools total — the
 same `.claude/skills/<name>/SKILL.md` directory, one format. 4.12 imagines Copilot/
@@ -307,7 +308,8 @@ card like a conditional-edge chip — skills are conditional context by another 
 and the canvas should say so.
 
 **R23 — Upgrade R14 from option to recommended default.** *(extends R14 / 4.1 / 4.2 —
-Phase 2)* Nested AGENTS.md with nearest-file-wins is now honoured by effectively every
+Phase 2)* **[NOT ADOPTED 2026-08-16 — Marty prioritized R21 (skills) instead; CLAUDE.md
+stays the primary compile body. Revisit if a real limitation appears.]** Nested AGENTS.md with nearest-file-wins is now honoured by effectively every
 modern agent (Cursor reads it natively, no `.mdc` required); 2026 guidance converges on
 "start with AGENTS.md, add tool-specific files only when you hit a limitation". So the
 target picker should present AGENTS.md-as-body + CLAUDE.md-as-pointer as the

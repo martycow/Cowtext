@@ -52,7 +52,7 @@ Rule from §9 still holds: do not implement a feature before its phase.
 | 3.1 | CodeMirror 6 raw markdown editor | SPEC §9 P1 | 1 |
 | 3.2 | Visual form: title, role, brief, pinned, readOrder | SPEC §9 P1 | 1 |
 | 3.3 | File on disk is content source of truth; inspector edits write through | SPEC §9 P1 | 1 |
-| 3.4 | Delete node with explicit "also delete the file?" choice | NEW | 1 |
+| 3.4 | Delete node (graph only — **decided 2026-08-16**: never deletes the file; file deletion is a separate operation, out of scope) | NEW | 1 |
 | 3.5 | External-change watch (`notify`) → reload, or conflict banner when dirty | NEW | 2 |
 | 3.6 | Per-node token count + live total for the pinned set, with budget warning | NEW | 2 |
 | 3.7 | Rename / move file from inspector; updates graph and all references | NEW | 2 |

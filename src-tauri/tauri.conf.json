@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "cowtext",
-  "version": "0.1.0",
-  "identifier": "com.marty.cowtext",
+  "version": "0.0.1",
+  "identifier": "com.mooexe.cowtext",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Cowtext",
-        "width": 1440,
-        "height": 900,
+        "width": 1920,
+        "height": 1080,
         "minWidth": 1200,
         "minHeight": 760
       }
