@@ -6,14 +6,27 @@ Known defects and issues under watch. Schema: Name, Tags, Description, Priority,
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
-| Main JS chunk exceeds Vite size warning | frontend, build, perf | Vite reports the main chunk at 944.52 kB (> 500 kB warning threshold). Not a runtime defect — watch item; fix is the "Code-split main JS chunk" backlog task. | P3 | 2026-08-16 | 👁 Watching |
+| Main JS chunk exceeds Vite size warning | frontend, build, perf | Vite reports the main chunk at 1.33 MB as of 2026-08-17 (> 500 kB warning threshold; grew with howler + preset/handoff UI). Not a runtime defect — watch item; fix is the "Code-split main JS chunk" backlog task. | P3 | 2026-08-16 | 👁 Watching |
 
 | Optimistic-status rollback edge in Inspector run() | phase-3, assemble, frontend, race | If enqueue rejects with "Node already queued" while the store shows "queued" from a REAL job (requires prior store/queue desync, unreachable through the disabled-button UI), rollback would unfreeze the badge; Rust's next event re-corrects it. Audit's optional `assemble_cancel(false)` → `assemble_status()` reconciliation not implemented. | P3 | 2026-08-16 | 👁 Watching |
 | ClaudeRunner .exe path untested | phase-3, assemble, rust, env | Stdin-pipe path verified end-to-end against the npm `claude` on this machine; the resolver now prefers a native `.exe` from `where claude`, but no `.exe` install was available to test. Verify when one exists. | P3 | 2026-08-16 | 👁 Watching |
 | Real-spawn path not unit-tested | phase-3, assemble, test-coverage | All 19 assemble tests use the fake `Runner` seam — inherent to the seam design; covered by one empirical real-`claude` check. Frontend fixes (race, cow interrupt, resolveProp) verified by tsc + code reading only (no frontend test runner). Manual walk before phase close. | P3 | 2026-08-16 | 👁 Watching |
 | merge_hooks may reorder unrelated settings.json keys | phase-4, hooks, cosmetic | First-time merge re-serializes with serde_json sorted key order, so the confirmation diff may show unrelated keys reordered (values preserved exactly; already-installed files round-trip byte-verbatim). Fix needs serde_json `preserve_order` feature. | P3 | 2026-08-16 | 👁 Watching |
 
-Note: `cargo test` reporting 0 tests for the `main.rs` binary and doc-tests is expected, not a bug — all 60 tests live in `cowtext_lib`.
+Note: `cargo test` reporting 0 tests for the `main.rs` binary and doc-tests is expected, not a bug — all 88 tests (as of 2026-08-17) live in `cowtext_lib`.
+
+## Fixed — 2026-08-17 (Phase 5+6 adversarial audit, 24 confirmed findings)
+
+Five audit lenses (sound spec, scene/Pixi, Rust Phase 6, frontend state, contract compliance) raised 28 findings; skeptic verification confirmed 24; all 24 fixed across two passes, gates re-run green after each. The majors get rows; the 17 minors are batched.
+
+| Name | Tags | Description | Priority | Date Created | Status |
+|---|---|---|---|---|---|
+| Demo-stop replayed a stale live event | phase-5, barn, demo | Purging the demo ring made the events subscription re-dispatch the previous live tail through the mapper (spurious cue + walk). Fixed with a shrink guard on the subscription; purge stays in `setDemoMode`. | P1 | 2026-08-17 | ✅ Fixed |
+| Demo accumulation persisted after stop | phase-5, barn, demo | Paper stacks / ajar props accumulated during a demo run survived demo stop until Barn remount. Fixed: demo-stop now cancels the cow queue, recounts papers from the purged ring, rebuilds props. | P1 | 2026-08-17 | ✅ Fixed |
+| assemble_done chimed after all-failure batch | phase-5, sfx | Queue-drain chime keyed on a stale `assembled` count from a previous batch. Fixed with an `assembledBaseline` recorded at the busy rising edge (contract §5.5 deviation logged). | P1 | 2026-08-17 | ✅ Fixed |
+| Preset Apply enabled for empty graph.json, then always failed | phase-6, presets | The never-clobber guard rejected an existing-but-empty `.cowtext/graph.json` that the UI promised to overwrite. Fixed fail-closed via `graph_is_empty()` (+2 tests). | P1 | 2026-08-17 | ✅ Fixed |
+| Settings lost when app closed within debounce | phase-5, settings | 500 ms debounced persist had no close-time flush. Fixed: `flushSettings()` on beforeunload; persist failures surface as a danger banner in Settings. | P1 | 2026-08-17 | ✅ Fixed |
+| 17 minor audit fixes (batch) | phase-5, phase-6, audit | Duck-recovery 400 ms math; typewriter fade under moo duck; mount-replay vs live accumulation parity; glance wipe on interrupted arrival; stale prompt-walk tile (CowTask.target now optional); integer zoom ladder (no sub-pixel camera); TOCTOU never-clobber via `File::create_new`; partial-apply reporting; preset_export overwrite guard + dialog filter; import validation of node filePaths; bare `claude` name resolved through `where` for .cmd installs; pre-gesture cues dropped (no AudioContext burst); HandoffModal unclosable during write; claude-path draft committed per keystroke; CLAUDE.md status + brainstorm-doc placement handled by the docs pass. | P3 | 2026-08-17 | ✅ Fixed |
 
 ## Fixed — 2026-08-16 (Phase 3+4 adversarial audit)
 

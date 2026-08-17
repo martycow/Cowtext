@@ -9,10 +9,12 @@ Milestones are the phase gates from plan §9 — each one is "the phase's accept
 | M2 — Compile trusted | Compiled `CLAUDE.md` works in a real Claude Code session; `AGENTS.md` readable by Codex; nothing written without diff-preview approval | v0.0.0003 | done | ✅ Reached — accepted by Marty 2026-08-16 |
 | M3 — Assemble writes files | 5 briefs → 5 sensible `.md` files without touching a text editor | v0.0.0004 | acceptance walk (next session) | 🟡 Code landed 2026-08-16 — gate open |
 | M4 — Live pipeline proven | Run Claude Code in a terminal, watch canvas nodes light up in real time | v0.0.0004 | acceptance walk (next session) | 🟡 Code landed 2026-08-16 — gate open (built in the same fleet session as M3; shares the v0.0.0004 bump) |
-| M5 — The Barn delights | A stranger watches a live session for 30 seconds and smiles | v0.0.0005 (projected) | after M4 | 🟠 Prototype started early (src/scene/, Pixi 8, demo mode, Canvas⇄Barn toggle) by Marty's explicit authorization; milestone itself still pending |
-| M6 — Presets & Handoff | New project from the "Cedar default" preset in < 1 minute; pasted handoff gives Claude Chat full context | v0.0.0006 (projected) | after M5 | ⬜ Pending |
+| M5 — The Barn delights | A stranger watches a live session for 30 seconds and smiles | v0.0.0005 | acceptance walk (next session) | 🟡 Code landed 2026-08-17 — gate open (SFX, settings, juice pass, calm mode; walk via the three Phase 5 manuals in docs/testing/) |
+| M6 — Presets & Handoff | New project from the "Cedar default" preset in < 1 minute; pasted handoff gives Claude Chat full context | v0.0.0006 | acceptance walk (next session) | 🟡 Code landed 2026-08-17 — gate open (built in the same fleet session as M5, but with its own version bump; walk via docs/testing/PHASE6_TEST_MANUAL.md) |
 
 Note (2026-08-16): Phases 3 and 4 were built together in one fleet session, so M3 and M4 share the v0.0.0004 landing; projected versions for M5/M6 shifted down accordingly.
+
+Note (2026-08-17): Phases 5 and 6 also landed in one fleet session, but each kept its own bump (v0.0.0005, v0.0.0006) — the one-bump-per-phase rule resumed, landing the counter exactly on the projections above. Four milestone gates (M3–M6) are now simultaneously open, all Marty-only acceptance walks.
 
 ## Beyond M6
 

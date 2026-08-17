@@ -9,6 +9,7 @@ import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { serializeGraph, useGraphStore, type CompileTarget } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { compilePreview, compileWrite } from "./api";
+import { play as sfxPlay } from "../scene/sfx";
 import { diffLines, type DiffHunk } from "./diff";
 import type { CompilePreview, PreviewFile, ValidationError } from "./types";
 
@@ -291,6 +292,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
       setPreview(p);
       setApproved(app);
       setCollapsed(col);
+      if (p.errors.length > 0) sfxPlay("error_soft");
       setPhase(p.errors.length > 0 ? "errors" : "preview");
     })().catch((e: unknown) => {
       if (!live) return;
@@ -356,6 +358,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
       .then((paths) => {
         setWritten(paths);
         setPhase("done");
+        sfxPlay("compile_ok");
         // New files (e.g. .cursor/rules/) should appear in the file rail.
         void useProjectStore.getState().rescan();
       })
@@ -363,6 +366,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
         // Back to the preview with approvals intact; retry allowed.
         setErrText(String(e));
         setPhase("failed");
+        sfxPlay("error_soft");
       });
   };
 

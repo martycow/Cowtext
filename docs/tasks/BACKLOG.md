@@ -14,9 +14,9 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Verify React 19 vs plan-era integration notes | frontend, react, risk | Plan §2 assumed React 18; scaffold shipped React 19.1. Check React Flow and (later) PixiJS integration guidance against 19 before Phase 5 work leans on plan-era assumptions. | P2 | 2026-08-16 | 🔲 Backlog |
 | Phase 4 hooks pipeline prep | phase-4, hooks, rust | Delivered in the 2026-08-16 fleet session (see TASKS.md — hooks.rs, hooks_server.rs, EventLog, node pulse). | P2 | 2026-08-16 | ✅ Done — pulled into Sprint 3 |
 | Replace placeholder sprites with Aseprite originals | phase-5, art, assets | Phase 5 starts with CC0 packs (Kenney isometric + itch.io farm packs); replace with original 16-bit assets per docs/design/ART_DIRECTION.md. Sprites are assets, not code — never base64 into source. | P3 | 2026-08-16 | 🔲 Backlog |
-| Mute + calm mode from day one of the Barn | phase-5, a11y, sound | Plan §8 rule: mute button and calm mode (no sound, reduced motion) must exist from the first Barn build, not be retrofitted. Track so it lands inside Phase 5, not after. | P2 | 2026-08-16 | 🔲 Backlog |
+| Mute + calm mode from day one of the Barn | phase-5, a11y, sound | Delivered in the 2026-08-17 fleet session (see TASKS.md — Mute + Calm mode in SettingsModal, calm/mute gates in sfx.ts, calm-mode reduced motion in the scene). | P2 | 2026-08-16 | ✅ Done — pulled into Sprint 4 |
 | Digest Claude Design prototype into docs/design | design, docs | The Claude Design prototype (source of UI truth) has not yet been digested into `docs/design/`. Extract remaining tokens/idioms so future UI work doesn't drift. | P2 | 2026-08-16 | 🔲 Backlog |
-| Phase 6 presets & handoff | phase-6, presets, handoff | Graph-as-preset (structure + briefs, no content), "New project from preset" file stubbing, Handoff button filling a template from graph + recent event log → `HANDOFF.md` + clipboard variants. Plan §9 P6. | P3 | 2026-08-16 | 🔲 Backlog |
+| Phase 6 presets & handoff | phase-6, presets, handoff | Delivered in the 2026-08-17 fleet session (see TASKS.md — preset.rs/handoff.rs, never-clobber apply, `HANDOFF.md` + Chat/Code/Design clipboard variants). | P3 | 2026-08-16 | ✅ Done — pulled into Sprint 4 |
 | graph.json schema migration discipline | data-model, persistence | Standing rule, tracked so it survives context loss: any schema change to `graph.json` bumps `version` and adds a migration in the v1 harness (`src/store/graph.ts`). | P2 | 2026-08-16 | 🔲 Backlog |
 
 ## Pulled from Product Analyst ranking (docs/FEATURES.md, research pass 2026-08-16)
@@ -35,6 +35,6 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
-| Filter demo events out of the live ring buffer | phase-4, feed, ux | Demo events share the real 200-event ring buffer — with live hooks active, demo runs interleave badge-labeled fake rows into the feed. Add filtering or a separate demo buffer. | P2 | 2026-08-16 | 🔲 Backlog |
-| Barn HUD restyle to tokens | phase-5, barn, design | In-scene "Demo" button uses hard-coded non-token colors (placeholder tier). Restyle when the real HUD lands in Phase 5. | P3 | 2026-08-16 | 🔲 Backlog |
-| Idle-throttle the BarnScene ticker | phase-5, barn, perf, battery | Pixi ticker renders at full framerate even when idle — battery concern; belongs with calm mode in Phase 5. | P2 | 2026-08-16 | 🔲 Backlog |
+| Filter demo events out of the live ring buffer | phase-4, feed, ux | Delivered in the 2026-08-17 fleet session (see TASKS.md — `LogEvent.demo` tag, demo-event filtering + DEMO badge; audit also fixed demo-stop stale-event replay and demo accumulation persistence). | P2 | 2026-08-16 | ✅ Done — pulled into Sprint 4 |
+| Barn HUD restyle to tokens | phase-5, barn, design | Delivered in the 2026-08-17 fleet session (see TASKS.md — HUD restyled to tokens in the Lane C juice pass). | P3 | 2026-08-16 | ✅ Done — pulled into Sprint 4 |
+| Idle-throttle the BarnScene ticker | phase-5, barn, perf, battery | Delivered in the 2026-08-17 fleet session (see TASKS.md — pause-when-hidden + idle FPS throttle in the Lane C juice pass). | P2 | 2026-08-16 | ✅ Done — pulled into Sprint 4 |

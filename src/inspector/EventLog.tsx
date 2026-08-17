@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Plug, Trash2 } from "lucide-react";
-import { useEventsStore, resolveNodeId, type BarnEvent } from "../store/events";
+import { useEventsStore, resolveNodeId, type BarnEvent, type LogEvent } from "../store/events";
 import { useGraphStore } from "../store/graph";
 import { HooksModal } from "./HooksModal";
 
@@ -23,7 +23,7 @@ function formatTime(ts: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function EventRow({ event }: { event: BarnEvent }) {
+function EventRow({ event }: { event: LogEvent }) {
   const nodes = useGraphStore((s) => s.nodes);
   const nodeId = event.filePath !== undefined ? resolveNodeId(event.filePath) : null;
   const node = nodeId !== null ? nodes.find((n) => n.id === nodeId) : undefined;
@@ -40,6 +40,11 @@ function EventRow({ event }: { event: BarnEvent }) {
       >
         {event.kind === "subagent_stop" ? "substop" : event.kind}
       </span>
+      {event.demo === true && (
+        <span className="inline-flex h-4 flex-none items-center rounded-sm border border-amber-border px-1 font-mono text-[9px] uppercase tracking-wider text-amber-text">
+          demo
+        </span>
+      )}
       {node !== undefined && (
         <span
           className="h-2 w-2 flex-none rounded-sm"

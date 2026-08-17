@@ -586,3 +586,28 @@ async fn neighbors_come_from_edges_both_directions() {
         ]
     );
 }
+
+// ── Claude override seam (contract §1-S4) ─────────────────────────────
+
+#[tokio::test]
+async fn claude_override_routes_the_spawn_then_clears() {
+    // The static is process-global; this is the only test that touches it,
+    // and it restores None before finishing so ClaudeRunner tests elsewhere
+    // (there are none today) would see auto-resolve again.
+    let bogus = std::env::temp_dir().join(format!(
+        "cowtext-no-such-claude-{}.exe",
+        std::process::id()
+    ));
+    set_claude_override(Some(bogus.clone()));
+    let runner = ClaudeRunner::default();
+    let err = runner
+        .run("prompt".to_string())
+        .await
+        .expect_err("bogus override path must fail to spawn");
+    assert!(
+        err.contains(&bogus.display().to_string()),
+        "spawn error should mention the override path, got: {err}"
+    );
+    set_claude_override(None);
+    assert!(claude_override().is_none());
+}

@@ -1,8 +1,11 @@
 mod assemble;
 mod compile;
+mod handoff;
 mod hooks;
 mod hooks_server;
+mod preset;
 mod project;
+mod settings;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -16,6 +19,10 @@ pub fn run() {
             app.manage(assemble::AssembleQueue::new(Arc::new(
                 assemble::ClaudeRunner::default(),
             )));
+            app.manage(handoff::HandoffRunner(Arc::new(
+                assemble::ClaudeRunner::default(),
+            )));
+            settings::init(app.handle());
             hooks_server::start(app.handle().clone());
             Ok(())
         })
@@ -33,7 +40,16 @@ pub fn run() {
             assemble::assemble_status,
             assemble::assemble_cancel,
             hooks::hooks_preview,
-            hooks::hooks_write
+            hooks::hooks_write,
+            settings::read_app_settings,
+            settings::write_app_settings,
+            preset::preset_save,
+            preset::preset_list,
+            preset::preset_read,
+            preset::preset_export,
+            preset::preset_apply,
+            handoff::handoff_generate,
+            handoff::handoff_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

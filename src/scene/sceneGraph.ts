@@ -16,7 +16,14 @@ import {
   tileToScreen,
   type Tile,
 } from "./iso";
-import { makeBookshelf, makeCabinet, makeCrate, makeDevDesk, makeSideDesk } from "./props";
+import {
+  makeBookshelf,
+  makeCabinet,
+  makeCrate,
+  makeDevDesk,
+  makeSideDesk,
+  type PropView,
+} from "./props";
 
 export const DEV_DESK_TILE: Tile = { tx: 9, ty: 9 };
 export const SIDE_DESK_TILE: Tile = { tx: 6, ty: 9 };
@@ -43,7 +50,7 @@ const AUTO_SLOTS: Tile[] = [
   { tx: 10, ty: 6 },
 ];
 
-function propForRole(role: NodeRole): Container {
+function propForRole(role: NodeRole): PropView {
   switch (role) {
     case "rules":
     case "persona":
@@ -66,7 +73,11 @@ export interface PropEntry {
   view: Container;
   /** Millis of flash remaining (read-open bounce); driven by tick(). */
   flashMs: number;
+  baseX: number;
   baseY: number;
+  /** J5 — read this session; prop renders its ajar/popped/lifted frame. */
+  opened: boolean;
+  setOpened: (b: boolean) => void;
 }
 
 export interface BarnLayout {
@@ -78,8 +89,20 @@ export interface BarnLayout {
   rebuildProps: (nodes: readonly MemoryNode[]) => void;
   /** Trigger the ≤1.5s open/bounce animation on a node's prop. */
   flashProp: (nodeId: string) => void;
-  /** Advance prop animations. */
-  tick: (dtMs: number) => void;
+  /** J5 — mark a node's prop opened for the session (ajar drawer etc.). */
+  setPropOpened: (nodeId: string) => void;
+  /** J5 — one paper step onto the side-desk stack (cap 8, then a 2nd pile). */
+  addPaper: () => void;
+  /** J5 — set the stack from replayed event state (remount survival). */
+  setPaperCount: (n: number) => void;
+  /** J7 — pooled 3-frame dust puff at world (x, y). Hard cap 8. */
+  spawnDust: (x: number, y: number) => void;
+  /** E5 — drifting Z-mote from the same pool (asleep cow). */
+  spawnZ: (x: number, y: number) => void;
+  /** E5 — coffee cup at the dev desk; steam=false freezes the curl (calm). */
+  setCoffee: (on: boolean, steam: boolean) => void;
+  /** Advance prop/particle animations; reduced=true renders rest frames. */
+  tick: (dtMs: number, reduced?: boolean) => void;
   /** Pixel centre of the whole grid (for initial camera centring). */
   center: { x: number; y: number };
 }
@@ -125,14 +148,135 @@ function placeStatic(objects: Container, view: Container, tile: Tile): void {
   objects.addChild(view);
 }
 
+// ── particle pool (J7 dust + E5 Z-motes): ONE pool, hard cap 8 ──────────
+const PARTICLE_CAP = 8;
+const DUST_TTL = 240; // 3 pre-authored frames × 80 ms
+const Z_TTL = 2400;
+
+interface Particle {
+  view: Container;
+  dust: readonly [Graphics, Graphics, Graphics];
+  z: Graphics;
+  kind: "dust" | "z";
+  ageMs: number;
+  ttl: number; // 0 = free
+  baseY: number;
+}
+
+/** Checker-dither puff (the makeShadow idiom), widening/fading per frame. */
+function makeDustFrame(step: number): Graphics {
+  const g = new Graphics();
+  const rx = 2 + step * 2;
+  const ry = rx * 0.6;
+  for (let y = -rx; y < rx; y += 2) {
+    for (let x = -rx; x < rx; x += 2) {
+      const inside = (x / rx) ** 2 + (y / ry) ** 2 <= 1;
+      const checker = (Math.round(x / 2) + Math.round(y / 2)) % 2 === 0;
+      if (inside && checker) g.rect(x, y, 2, 2);
+    }
+  }
+  g.fill({ color: PALETTE.woodPale, alpha: 0.55 - step * 0.15 });
+  return g;
+}
+
+/** Tiny pixel "Z" for the asleep cow. */
+function makeZMote(): Graphics {
+  const g = new Graphics();
+  g.rect(0, 0, 3, 1).fill(PALETTE.hayLight);
+  g.rect(1, 1, 1, 1).fill(PALETTE.hayLight);
+  g.rect(0, 2, 3, 1).fill(PALETTE.hayLight);
+  return g;
+}
+
+const PAPER_PILE_CAP = 8;
+const PAPER_MAX = PAPER_PILE_CAP * 2; // two piles, no third (J5)
+
 export function buildLayout(): BarnLayout {
   const world = new Container();
   const objects = new Container();
   objects.sortableChildren = true;
-  world.addChild(buildGround(), objects);
+  // non-sorted overlay above the object layer — particles only
+  const overlay = new Container();
+  world.addChild(buildGround(), objects, overlay);
 
-  placeStatic(objects, makeDevDesk(), DEV_DESK_TILE);
-  placeStatic(objects, makeSideDesk(), SIDE_DESK_TILE);
+  const devDesk = makeDevDesk();
+  placeStatic(objects, devDesk, DEV_DESK_TILE);
+  const sideDesk = makeSideDesk();
+  placeStatic(objects, sideDesk, SIDE_DESK_TILE);
+
+  // ── E5 coffee: cup + 2-frame steam curl (8 s period), dev-desk child ──
+  const coffee = new Container();
+  const cup = new Graphics();
+  cup.rect(9, -17, 4, 4).fill(PALETTE.milk).stroke({ width: 1, color: PALETTE.outline });
+  cup.rect(13, -16, 1, 2).fill(PALETTE.milk); // handle
+  const steam0 = new Graphics();
+  steam0.rect(10, -20, 1, 1).fill(PALETTE.hayLight);
+  steam0.rect(11, -22, 1, 1).fill(PALETTE.hayLight);
+  const steam1 = new Graphics();
+  steam1.rect(11, -20, 1, 1).fill(PALETTE.hayLight);
+  steam1.rect(10, -22, 1, 1).fill(PALETTE.hayLight);
+  steam1.visible = false;
+  coffee.addChild(cup, steam0, steam1);
+  coffee.visible = false;
+  devDesk.addChild(coffee);
+  let steamMs = 0;
+  let steamOn = true;
+
+  // ── J5 paper stacks on the side desk (accumulation, session-scoped) ──
+  const papers = new Graphics();
+  sideDesk.addChild(papers);
+  let paperCount = 0;
+  const redrawPapers = (): void => {
+    papers.clear();
+    const pile1 = Math.min(paperCount, PAPER_PILE_CAP);
+    const pile2 = Math.min(Math.max(0, paperCount - PAPER_PILE_CAP), PAPER_PILE_CAP);
+    for (let i = 0; i < pile1; i += 1) {
+      papers.rect(5, -13 - i * 2, 6, 2).fill(i % 2 === 0 ? PALETTE.paper : PALETTE.hayLight);
+    }
+    for (let i = 0; i < pile2; i += 1) {
+      papers.rect(-11, -13 - i * 2, 6, 2).fill(i % 2 === 0 ? PALETTE.hayLight : PALETTE.paper);
+    }
+  };
+
+  // ── particle pool ──
+  const pool: Particle[] = [];
+  for (let i = 0; i < PARTICLE_CAP; i += 1) {
+    const view = new Container();
+    const dust = [makeDustFrame(0), makeDustFrame(1), makeDustFrame(2)] as const;
+    for (const f of dust) {
+      f.visible = false;
+      view.addChild(f);
+    }
+    const z = makeZMote();
+    z.visible = false;
+    view.addChild(z);
+    view.visible = false;
+    overlay.addChild(view);
+    pool.push({ view, dust, z, kind: "dust", ageMs: 0, ttl: 0, baseY: 0 });
+  }
+  /** Free slot if any; else the oldest live particle is reused. */
+  const takeParticle = (): Particle => {
+    let oldest: Particle | null = null;
+    for (const p of pool) {
+      if (p.ttl <= 0) return p;
+      if (oldest === null || p.ageMs / p.ttl > oldest.ageMs / oldest.ttl) oldest = p;
+    }
+    return oldest ?? pool[0];
+  };
+  const spawnParticle = (kind: "dust" | "z", x: number, y: number): void => {
+    const p = takeParticle();
+    p.kind = kind;
+    p.ageMs = 0;
+    p.ttl = kind === "dust" ? DUST_TTL : Z_TTL;
+    p.baseY = Math.round(y);
+    p.view.position.set(Math.round(x), Math.round(y));
+    p.view.alpha = 1;
+    p.z.visible = kind === "z";
+    p.dust.forEach((g, fi) => {
+      g.visible = kind === "dust" && fi === 0;
+    });
+    p.view.visible = true;
+  };
 
   const props = new Map<string, PropEntry>();
 
@@ -163,19 +307,23 @@ export function buildLayout(): BarnLayout {
           slot += 1;
         }
         taken.add(`${tile.tx},${tile.ty}`);
-        const view = propForRole(node.role);
+        const pv = propForRole(node.role);
         const p = tileToScreen(tile.tx, tile.ty);
-        view.position.set(p.x, p.y);
-        view.zIndex = depthOf(tile, false);
-        objects.addChild(view);
+        pv.view.position.set(p.x, p.y);
+        pv.view.zIndex = depthOf(tile, false);
+        objects.addChild(pv.view);
         props.set(node.id, {
           nodeId: node.id,
           filePath: node.filePath,
           role: node.role,
           tile,
-          view,
+          view: pv.view,
           flashMs: 0,
+          baseX: p.x,
           baseY: p.y,
+          opened: false, // session accumulation resets on rebuild (accepted);
+          // BarnScene re-derives it from the event ring right after.
+          setOpened: pv.setOpened,
         });
       }
     },
@@ -185,13 +333,80 @@ export function buildLayout(): BarnLayout {
       if (entry !== undefined) entry.flashMs = 480; // 4 × 120ms bounce, well under 1.5s
     },
 
-    tick: (dtMs) => {
+    setPropOpened: (nodeId) => {
+      const entry = props.get(nodeId);
+      if (entry !== undefined && !entry.opened) {
+        entry.opened = true;
+        entry.setOpened(true);
+      }
+    },
+
+    addPaper: () => {
+      if (paperCount >= PAPER_MAX) return; // second pile caps and stays
+      paperCount += 1;
+      redrawPapers();
+    },
+
+    setPaperCount: (n) => {
+      paperCount = Math.max(0, Math.min(PAPER_MAX, Math.floor(n)));
+      redrawPapers();
+    },
+
+    spawnDust: (x, y) => spawnParticle("dust", x, y),
+    spawnZ: (x, y) => spawnParticle("z", x, y),
+
+    setCoffee: (on, steam) => {
+      coffee.visible = on;
+      steamOn = steam;
+      if (!steam) {
+        steam0.visible = false;
+        steam1.visible = false;
+      }
+    },
+
+    tick: (dtMs, reduced = false) => {
+      // prop flash — countdown always runs so state stays truthful; reduced
+      // motion renders frame 0 (position rest) the whole way.
       for (const entry of props.values()) {
         if (entry.flashMs <= 0) continue;
         entry.flashMs = Math.max(0, entry.flashMs - dtMs);
+        if (reduced) {
+          entry.view.position.set(entry.baseX, entry.baseY);
+          continue;
+        }
+        // J2 anticipation pre-frame: 1 px handle jiggle before the bounce
+        entry.view.x = entry.baseX + (entry.flashMs > 380 ? 1 : 0);
         // 2-frame bounce at 120ms holds (max-4-frames rule)
         const frame = Math.floor(entry.flashMs / 120) % 2;
         entry.view.y = entry.baseY - (entry.flashMs > 0 && frame === 1 ? 2 : 0);
+      }
+      // coffee steam curl: 2 frames, 8 s period
+      if (coffee.visible && steamOn) {
+        steamMs = (steamMs + dtMs) % 8000;
+        const f = steamMs < 4000 ? 0 : 1;
+        steam0.visible = f === 0;
+        steam1.visible = f === 1;
+      }
+      // particles: dust = 3-frame flipbook; z = ease-out drift, stepped fade
+      for (const p of pool) {
+        if (p.ttl <= 0) continue;
+        p.ageMs += dtMs;
+        if (p.ageMs >= p.ttl) {
+          p.ttl = 0;
+          p.view.visible = false;
+          continue;
+        }
+        if (p.kind === "dust") {
+          const f = Math.min(2, Math.floor(p.ageMs / 80));
+          p.dust.forEach((g, fi) => {
+            g.visible = fi === f;
+          });
+        } else {
+          const t = p.ageMs / p.ttl;
+          const ease = 1 - (1 - t) * (1 - t);
+          p.view.y = Math.round(p.baseY - ease * 12);
+          p.view.alpha = t < 0.5 ? 1 : t < 0.8 ? 0.66 : 0.33;
+        }
       }
     },
   };

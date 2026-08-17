@@ -25,6 +25,18 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 
+/// Settings-provided absolute path to the claude binary (contract §1-S4).
+static CLAUDE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Settings-provided absolute path to the claude binary. None = auto-resolve.
+pub fn set_claude_override(p: Option<PathBuf>) {
+    *CLAUDE_OVERRIDE.lock().unwrap() = p;
+}
+
+fn claude_override() -> Option<PathBuf> {
+    CLAUDE_OVERRIDE.lock().unwrap().clone()
+}
+
 /// Hard cap on concurrent `claude -p` children (plan §6).
 const MAX_CONCURRENT: usize = 2;
 
@@ -393,9 +405,18 @@ impl ClaudeRunner {
 
 #[cfg(windows)]
 fn resolve_claude() -> Option<PathBuf> {
+    where_probe("claude")
+}
+
+/// `where <name>` probe, `.exe` preferred over `.cmd`. Shared with
+/// settings.rs, which resolves a bare-name override the same way (a bare
+/// name in `claudeBinaryPath` would otherwise never find an npm `.cmd`
+/// shim — CreateProcess only appends `.exe`).
+#[cfg(windows)]
+pub(crate) fn where_probe(name: &str) -> Option<PathBuf> {
     use std::os::windows::process::CommandExt;
     let out = std::process::Command::new("where")
-        .arg("claude")
+        .arg(name)
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW — no console flash in release
         .output()
         .ok()?;
@@ -436,7 +457,9 @@ fn resolve_claude() -> Option<PathBuf> {
 
 impl Runner for ClaudeRunner {
     fn run(&self, prompt: String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>> {
-        let program = self.claude_path();
+        // Settings override wins outright: no `where` probe, no OnceLock
+        // cache — a bad path surfaces as the normal spawn error.
+        let program = claude_override().or_else(|| self.claude_path());
         Box::pin(async move {
             let mut cmd = match &program {
                 Some(path) => tokio::process::Command::new(path),
@@ -463,9 +486,10 @@ impl Runner for ClaudeRunner {
                 .stderr(std::process::Stdio::piped());
             #[cfg(windows)]
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-            let mut child = cmd
-                .spawn()
-                .map_err(|e| format!("failed to spawn claude: {e}"))?;
+            let mut child = cmd.spawn().map_err(|e| match &program {
+                Some(p) => format!("failed to spawn claude ({}): {e}", p.display()),
+                None => format!("failed to spawn claude: {e}"),
+            })?;
             let mut stdin = child
                 .stdin
                 .take()

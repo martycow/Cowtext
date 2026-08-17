@@ -34,13 +34,20 @@ export interface BarnEvent {
 
 const MAX_EVENTS = 200;
 
+/** Store-local event shape (contract §1-S12): the BarnEvent wire shape is
+ *  frozen; `demo` exists only in the ring buffer. */
+export interface LogEvent extends BarnEvent {
+  /** Present and true only for demo-player events. Absent on live events. */
+  demo?: true;
+}
+
 export interface EventsState {
   /** Ring buffer, newest last, MAX = 200. */
-  events: BarnEvent[];
+  events: LogEvent[];
   /** True while the barn demo player feeds events. */
   demoMode: boolean;
   /** Trims to MAX; single entry point (hooks AND demo). */
-  pushEvent: (e: BarnEvent) => void;
+  pushEvent: (e: BarnEvent, opts?: { demo?: boolean }) => void;
   clear: () => void;
   setDemoMode: (on: boolean) => void;
 }
@@ -49,17 +56,27 @@ export const useEventsStore = create<EventsState>((set) => ({
   events: [],
   demoMode: false,
 
-  pushEvent: (e) =>
-    set((st) => ({
-      events:
-        st.events.length >= MAX_EVENTS
-          ? [...st.events.slice(st.events.length - MAX_EVENTS + 1), e]
-          : [...st.events, e],
-    })),
+  pushEvent: (e, opts) =>
+    set((st) => {
+      const entry: LogEvent = opts?.demo === true ? { ...e, demo: true } : e;
+      return {
+        events:
+          st.events.length >= MAX_EVENTS
+            ? [...st.events.slice(st.events.length - MAX_EVENTS + 1), entry]
+            : [...st.events, entry],
+      };
+    }),
 
   clear: () => set({ events: [] }),
 
-  setDemoMode: (on) => set({ demoMode: on }),
+  // Stopping the demo purges its tagged rows from the ring (contract §7.5)
+  // so handoff/session counters never see rehearsal data.
+  setDemoMode: (on) =>
+    set((st) =>
+      on
+        ? { demoMode: true }
+        : { demoMode: false, events: st.events.filter((e) => e.demo !== true) },
+    ),
 }));
 
 // ── File path → node id (contract §3.2) ───────────────────────────────

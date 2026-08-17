@@ -1,8 +1,8 @@
 // BarnEvent → animation mapper (plan §8 event table). Takes the layout +
 // cow, mutates nothing else; reads the graph/events stores only to resolve
-// file paths to node ids (contract §3.2). SOUND: none yet — the cue
-// names from docs/design/SOUND_DESIGN.md are noted inline as comments so the
-// Phase-5 audio pass can hook in at exactly these points.
+// file paths to node ids (contract §3.2). SOUND: sfx.* calls sit at their
+// semantic moments (PHASE56_CONTRACT §1-S10); all gating lives inside sfx.ts,
+// so the call sites stay dumb. Lane C must preserve every sfx call in place.
 
 import type { BarnEvent } from "./types";
 import type { BarnLayout, PropEntry } from "./sceneGraph";
@@ -10,6 +10,7 @@ import { DEV_DESK_TILE, SIDE_DESK_TILE } from "./sceneGraph";
 import { clampTile, type Tile } from "./iso";
 import { truncateLabel } from "./props";
 import type { Cow } from "./cow";
+import * as sfx from "./sfx";
 import { resolveNodeId } from "../store/events";
 import { useGraphStore } from "../store/graph";
 
@@ -59,51 +60,82 @@ export function handleEvent(e: BarnEvent, ctx: MapperCtx): void {
   const { cow, layout } = ctx;
   switch (e.kind) {
     case "prompt": {
-      // SFX cue: kb_clack. Dev lean-in comes with the sprite pass.
-      cow.enqueue({ target: cow.tile, bubbleOnStart: "!" });
+      sfx.play("kb_clack");
+      // Dev lean-in comes with the sprite pass. In-place task: target omitted
+      // so it resolves where the cow IS at start, not a stale enqueue tile.
+      cow.enqueue({ bubbleOnStart: "!" });
       return;
     }
     case "read": {
       const prop = e.filePath !== undefined ? resolveProp(e.filePath, layout.props) : null;
       if (prop === null) return; // unknown path: log-feed only, no walk
-      // SFX cue by role: drawer_slide (cabinet) / page_flip (bookshelf) /
-      // paper_shuffle (corkboard-crate).
+      // Read cue claimed at event receipt (burst throttle); by role on arrival:
+      // drawer_slide (cabinet) / page_flip (bookshelf) / paper_shuffle (crate).
+      const sound = sfx.claimReadCue();
+      // J5: ajar at EVENT RECEIPT (drawer stays ajar all session) — the mount
+      // replay derives from the ring, which has no completion data, so the
+      // live path must accumulate at receipt too or remounts change the scene.
+      layout.setPropOpened(prop.nodeId);
       cow.enqueue({
         target: approachTile(prop.tile),
         bubbleOnArrive: fileLabel(e.filePath ?? ""),
-        onArrive: () => layout.flashProp(prop.nodeId),
+        onArrive: () => {
+          layout.flashProp(prop.nodeId);
+          if (sound) sfx.play(sfx.readCueForRole(prop.role));
+        },
       });
       return;
     }
     case "edit":
     case "write": {
-      // SFX cues: typewriter loop while busy, ding on completion.
+      // Typewriter loop while busy, ding on natural completion only.
+      // J5: stack grows at EVENT RECEIPT so it always matches the ring-derived
+      // remount replay (an interrupted/queue-dropped task must not under-count).
+      layout.addPaper();
       cow.enqueue({
         target: SIDE_DESK_TILE,
         bubbleOnArrive: e.filePath !== undefined ? fileLabel(e.filePath) : undefined,
         busyMs: 900,
+        onArrive: () => {
+          sfx.startTypewriter();
+        },
+        onBusyEnd: () => {
+          sfx.stopTypewriter();
+          sfx.play("ding");
+        },
+        onBusyCancel: () => {
+          sfx.stopTypewriter();
+        },
       });
       return;
     }
     case "grep":
     case "glob": {
-      // SFX cue: sniff (throttled in the sound spec — volleys).
+      // Sniff once per volley (cooldown lives inside sfx.play).
       const entries = [...layout.props.values()];
       if (entries.length === 0) {
-        cow.enqueue({ target: cow.tile, bubbleOnStart: "?" });
+        sfx.play("sniff");
+        cow.enqueue({ bubbleOnStart: "?" }); // in-place: target resolved at start
         return;
       }
       const a = entries[Math.abs(e.ts) % entries.length];
       const b = entries[(Math.abs(e.ts) + 1) % entries.length];
-      cow.enqueue({ target: approachTile(a.tile), bubbleOnStart: "?" });
+      cow.enqueue({
+        target: approachTile(a.tile),
+        bubbleOnStart: "?",
+        onStart: () => sfx.play("sniff"),
+      });
       if (b !== a) cow.enqueue({ target: approachTile(b.tile), bubbleOnStart: "?" });
       return;
     }
     case "stop": {
-      // SFX cue: moo_happy (the hero cue). Interrupt: turn is over.
+      // moo_happy (the hero cue) fires with the "✓" bubble; it never fires
+      // if a later event discards the task — exactly the spec's drop rule.
       cow.interrupt({
         target: clampTile({ tx: DEV_DESK_TILE.tx - 1, ty: DEV_DESK_TILE.ty }),
         bubbleOnArrive: "✓",
+        bouncy: true, // J6/E6: the payoff trot is the bounciest in the set
+        onArrive: () => sfx.play("moo_happy"),
       });
       return;
     }

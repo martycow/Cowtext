@@ -2,6 +2,25 @@
 
 Maintained by **Agent Administrator**. One brief entry per agent per session. Newest session on top.
 
+## 2026-08-17 — Phases 5+6 (Sound + Settings + Barn juice; Presets + Handoff) (fleet session "Phase 5+6 push")
+
+Directed by the primary agent under Marty's remote instruction. App version: v0.0.0004 unchanged this session — the shared bump for Phases 5+6 landing together follows the v0.0.0004 precedent and awaits the Task Manager. All gates green after audit fixes: `npm run build` PASS, `cargo clippy -- -D warnings` PASS, `cargo test` 88/88, invoke-name contract 23/23 commands, howler confined to `sfx.ts`. NOT committed. Adversarial audit at new scale — 5 lenses, 34 agents: 28 raw findings, 24 confirmed by skeptics, ALL 24 fixed in two passes (2 distinct MAJOR runtime classes: demo-stop stale-event replay + demo accumulation persistence; also assemble_done stale chime, preset-apply empty-graph guard, settings flush-on-quit; 15 minors incl. TOCTOU never-clobber via `File::create_new`, integer zoom ladder, pre-gesture cue drop, `.cmd` resolution for bare claude names); 4 deviations ratified (moo duck excludes tool group, detached ding, blue settings toggles per "blue is you", idle fidgets approximated). Pending Marty-only acceptance: Phases 3+4 manuals, plus the four new Phase 5+6 manuals.
+
+| Agent | What they did |
+|---|---|
+| Code Lead | Authored the third frozen contract, `docs/design/PHASE56_CONTRACT.md` (Stage-0 seams pattern, zero-overlap ownership grid, 23-command invoke contract) — integration found ZERO cross-lane defects; ran the 5-lens/34-agent adversarial audit and ratified the 4 deviations |
+| Core Coder | Stage 0 — laid every shared seam before the lanes started: howler@2.2.4 installed (plan §2 stack), `src/store/settings.ts`, `src-tauri/src/settings.rs` (read/write_app_settings via app_config_dir), `set_claude_override` seam in assemble.rs, `sfx.ts` API stub + all sfx call sites, `preset.rs`/`handoff.rs` stubs, lib.rs at 23 commands, `dialog:allow-save` capability, App.tsx mounts, `LogEvent.demo` tag |
+| Sound Designer | Lane A — moved from spec to code: full `src/scene/sfx.ts` implementation, 14 placeholder cues + 3 tool-layer cues per SOUND_DESIGN.md §2b/§3 (ducking, cooldowns, read-burst throttle, voice pool, never-queue, detached mode, calm/mute/hidden gates); deleted 14 stale barn_*/ui_* wavs; wrote `docs/testing/PHASE5_SOUND_TEST_MANUAL.md` |
+| UI Coder | Lane B — `src/settings/SettingsModal.tsx`: master volume, Barn/Tool sound switches, Mute, Calm mode, claude binary path with live override, port + context dir display; wrote `docs/testing/SETTINGS_TEST_MANUAL.md` |
+| Barn Coder | Lane C — SNES juice pass: scarf flutter, anticipation frames, eyes-glance, session accumulation (paper stacks, ajar drawers), pooled dust puffs + squash frames, bounciest stop-trot payoff, waiting choreography (5s/30s/5min), calm-mode reduced motion, pause-when-hidden + idle FPS throttle, demo-event filtering + DEMO badge, HUD restyled to tokens; wrote `docs/testing/PHASE5_JUICE_TEST_MANUAL.md` |
+| Multifunctional Coder | Lane D — delivered Phase 6 whole: `preset.rs` + `handoff.rs` (preset_save/list/read/export/apply never-clobber; handoff_generate via the reused Windows-safe ClaudeRunner, handoff_write with GENERATED header), `src/preset/` + `src/handoff/` UI with confirmation modals + clipboard variants (Chat/Code/Design); wrote `docs/testing/PHASE6_TEST_MANUAL.md`; 10+ tests |
+| Product Analyst | Separately produced `docs/Brainstorm_Features.md` — 18 ranked post-Phase-6 ideas from 3 lenses plus a competitor scan |
+| Administrator | Compiled this log, updated ROSTER.md (Code Lead impact 70→75 for the third zero-defect contract + 24/24 audit close; session notes on seven rows) |
+
+**Idle by scope**: Tester (all four new manuals were authored by the lanes themselves in the Tester's established format), Task Manager, Librarian, File System Manager, 2D Artist — their doc passes were not run this session.
+
+**Lazy/useless agents to flag for Marty**: none. Every working agent produced verifiable output; the contract discipline delivered zero cross-lane integration defects, and the audit→skeptic→fix chain closed all 24 confirmed findings before gate re-run.
+
 ## 2026-08-16 — Phases 3+4 (Assemble + Live hooks) + early Barn prototype (fleet session)
 
 App version after session: **v0.0.0004** (Task Manager; shared bump for both phases). Phase 2 accepted by Marty at session start. All gates green after audit fixes: `npm run build` (tsc strict + vite), `cargo clippy --all-targets -- -D warnings` clean, `cargo test` 60/60, invoke-name contract 14/14 commands verified. Phases 3+4 and the Barn prototype await Marty's manual acceptance walks.

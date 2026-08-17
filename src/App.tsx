@@ -3,10 +3,13 @@ import {
   FileOutput,
   FileText,
   FolderOpen,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Send,
+  Settings,
 } from "lucide-react";
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
@@ -17,6 +20,11 @@ import { Inspector } from "./inspector/Inspector";
 import { EventLog } from "./inspector/EventLog";
 import { CompileModal } from "./compile/CompileModal";
 import { BarnScene } from "./scene/BarnScene";
+import { SettingsModal } from "./settings/SettingsModal";
+import { PresetsModal } from "./preset/PresetsModal";
+import { HandoffModal } from "./handoff/HandoffModal";
+import { flushSettings, useSettingsStore } from "./store/settings";
+import { initSfx } from "./scene/sfx";
 
 /** The two faces of an open project: the graph editor and the barn monitor. */
 type View = "canvas" | "barn";
@@ -103,10 +111,16 @@ function SaveIndicator() {
 
 function TopBar({
   onCompile,
+  onSettings,
+  onPresets,
+  onHandoff,
   view,
   onViewChange,
 }: {
   onCompile: () => void;
+  onSettings: () => void;
+  onPresets: () => void;
+  onHandoff: () => void;
   view: View;
   onViewChange: (v: View) => void;
 }) {
@@ -143,6 +157,35 @@ function TopBar({
           Compile
         </button>
       )}
+      {root !== null && (
+        <button
+          onClick={onPresets}
+          title="Save or apply graph presets"
+          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <Package size={14} strokeWidth={1.5} />
+          Presets
+        </button>
+      )}
+      {root !== null && (
+        <button
+          onClick={onHandoff}
+          disabled={nodeCount === 0}
+          title={nodeCount === 0 ? "The graph is empty" : "Generate a session handoff document"}
+          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+        >
+          <Send size={14} strokeWidth={1.5} />
+          Handoff
+        </button>
+      )}
+      <button
+        onClick={onSettings}
+        aria-label="Settings"
+        title="Settings"
+        className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+      >
+        <Settings size={14} strokeWidth={1.5} />
+      </button>
       <button
         onClick={() => void openProject()}
         className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
@@ -350,6 +393,9 @@ export default function App() {
   const { root, scanning, error } = useProjectStore();
   const loadGraph = useGraphStore((s) => s.loadGraph);
   const [compileOpen, setCompileOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [view, setView] = useState<View>("canvas");
 
   // A new project always opens on the canvas.
@@ -368,10 +414,16 @@ export default function App() {
     void initEventListener();
   }, []);
 
-  // Best-effort flush of a pending debounced save when the window goes away.
+  // Settings load then sfx init — both idempotent, StrictMode-safe.
+  useEffect(() => {
+    void useSettingsStore.getState().load().then(() => initSfx());
+  }, []);
+
+  // Best-effort flush of pending debounced saves when the window goes away.
   useEffect(() => {
     const flush = () => {
       void useGraphStore.getState().flushSave();
+      flushSettings();
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
@@ -379,7 +431,14 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-surface-0">
-      <TopBar onCompile={() => setCompileOpen(true)} view={view} onViewChange={setView} />
+      <TopBar
+        onCompile={() => setCompileOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
+        onPresets={() => setPresetsOpen(true)}
+        onHandoff={() => setHandoffOpen(true)}
+        view={view}
+        onViewChange={setView}
+      />
       {error !== null && (
         <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
           <span className="h-1.5 w-1.5 flex-none bg-danger" />
@@ -403,6 +462,13 @@ export default function App() {
       )}
       {compileOpen && root !== null && (
         <CompileModal root={root} onClose={() => setCompileOpen(false)} />
+      )}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {presetsOpen && root !== null && (
+        <PresetsModal root={root} onClose={() => setPresetsOpen(false)} />
+      )}
+      {handoffOpen && root !== null && (
+        <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
       )}
     </div>
   );
