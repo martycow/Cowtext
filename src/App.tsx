@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense, lazy } from "react";
 import {
   FileOutput,
   FileText,
@@ -16,18 +16,37 @@ import type { MdFile } from "./store/project";
 import { useGraphStore, type SaveState } from "./store/graph";
 import { initEventListener } from "./store/events";
 import { GraphCanvas } from "./canvas/GraphCanvas";
-import { Inspector } from "./inspector/Inspector";
 import { EventLog } from "./inspector/EventLog";
-import { CompileModal } from "./compile/CompileModal";
-import { BarnScene } from "./scene/BarnScene";
-import { SettingsModal } from "./settings/SettingsModal";
-import { PresetsModal } from "./preset/PresetsModal";
-import { HandoffModal } from "./handoff/HandoffModal";
+// Lazy-loaded for code splitting
+const Inspector = lazy(() => import("./inspector/Inspector").then(m => ({ default: m.Inspector })));
+const CompileModal = lazy(() => import("./compile/CompileModal").then(m => ({ default: m.CompileModal })));
+const BarnScene = lazy(() => import("./scene/BarnScene").then(m => ({ default: m.BarnScene })));
+const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
+const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
+const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
 import { flushSettings, useSettingsStore } from "./store/settings";
 import { initSfx } from "./scene/sfx";
 
 /** The two faces of an open project: the graph editor and the barn monitor. */
 type View = "canvas" | "barn";
+
+/** Minimal loading fallback for lazy-loaded components (dark-themed, pixel-based). */
+function LoadingFallback() {
+  return (
+    <div className="flex items-center justify-center gap-2 p-4">
+      <div className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-2 w-2 animate-blink bg-amber"
+            style={{ animationDelay: `${i * 200}ms`, animationTimingFunction: "steps(2)" }}
+          />
+        ))}
+        <span className="h-2 w-2 bg-border" />
+      </div>
+    </div>
+  );
+}
 
 /** Canvas ⇄ Barn segmented control (DESIGN_SPEC: 2px padding frame on
  *  surface-2, active segment surface-3, compact 24px segments). One click,
@@ -376,7 +395,11 @@ function Workspace({ root, view }: { root: string; view: View }) {
             <div className={view === "canvas" ? "h-full" : "hidden"}>
               <GraphCanvas />
             </div>
-            {view === "barn" && <BarnScene />}
+            {view === "barn" && (
+              <Suspense fallback={<LoadingFallback />}>
+                <BarnScene />
+              </Suspense>
+            )}
           </>
         ) : (
           <div className="flex h-full">
@@ -384,7 +407,11 @@ function Workspace({ root, view }: { root: string; view: View }) {
           </div>
         )}
       </main>
-      {loaded && loadError === null && view === "canvas" && <Inspector root={root} />}
+      {loaded && loadError === null && view === "canvas" && (
+        <Suspense fallback={<div className="w-inspector flex-none bg-surface-1" />}>
+          <Inspector root={root} />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -461,14 +488,24 @@ export default function App() {
         </>
       )}
       {compileOpen && root !== null && (
-        <CompileModal root={root} onClose={() => setCompileOpen(false)} />
+        <Suspense fallback={null}>
+          <CompileModal root={root} onClose={() => setCompileOpen(false)} />
+        </Suspense>
       )}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
       {presetsOpen && root !== null && (
-        <PresetsModal root={root} onClose={() => setPresetsOpen(false)} />
+        <Suspense fallback={null}>
+          <PresetsModal root={root} onClose={() => setPresetsOpen(false)} />
+        </Suspense>
       )}
       {handoffOpen && root !== null && (
-        <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
+        <Suspense fallback={null}>
+          <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
+        </Suspense>
       )}
     </div>
   );

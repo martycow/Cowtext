@@ -10,7 +10,7 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Add ESLint + `npm run lint` script | tooling, dx, lint | The plan's `npm run lint` does not exist; `tsc` is the only frontend check. Add ESLint (config aligned with strict TS, no-`any`) and wire the script. Requires approval — stack additions are gated by the hard rules. | P2 | 2026-08-16 | 🔲 Backlog |
 | Phase 3 Assemble prep | phase-3, assemble, rust | Delivered in the 2026-08-16 fleet session (see TASKS.md — assemble.rs queue + commands). | P1 | 2026-08-16 | ✅ Done — pulled into Sprint 3 |
 | Code-split main JS chunk | frontend, perf, build | Main chunk now 1.25 MB (pixi + reactflow + codemirror in one bundle). Split the Barn scene (dynamic import) at Phase 5; also CodeMirror / compile modal. | P2 | 2026-08-16 | 🔲 Backlog |
-| Remove `greet` placeholder command | cleanup, rust, scaffold | `create-tauri-app` demo `greet` command in `lib.rs` is placeholder code per CLAUDE.md — replace/remove rather than build around, if any remnant is still registered. | P3 | 2026-08-16 | 🔲 Backlog |
+| Remove `greet` placeholder command | cleanup, rust, scaffold | `create-tauri-app` demo `greet` command in `lib.rs` is placeholder code per CLAUDE.md — replace/remove rather than build around, if any remnant is still registered. | P3 | 2026-08-16 | ✅ Done — verified absent, docs updated |
 | Verify React 19 vs plan-era integration notes | frontend, react, risk | Plan §2 assumed React 18; scaffold shipped React 19.1. Check React Flow and (later) PixiJS integration guidance against 19 before Phase 5 work leans on plan-era assumptions. | P2 | 2026-08-16 | 🔲 Backlog |
 | Phase 4 hooks pipeline prep | phase-4, hooks, rust | Delivered in the 2026-08-16 fleet session (see TASKS.md — hooks.rs, hooks_server.rs, EventLog, node pulse). | P2 | 2026-08-16 | ✅ Done — pulled into Sprint 3 |
 | Replace placeholder sprites with Aseprite originals | phase-5, art, assets | Phase 5 starts with CC0 packs (Kenney isometric + itch.io farm packs); replace with original 16-bit assets per docs/design/ART_DIRECTION.md. Sprites are assets, not code — never base64 into source. | P3 | 2026-08-16 | 🔲 Backlog |
@@ -29,7 +29,7 @@ Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
 | Unmapped-read → one-click adopt (FEATURES 6.7) | phase-4, product, feed | Turn "not on graph" event rows into a one-click adopt action — makes the live feed an acquisition loop no competitor has. | P1 | 2026-08-16 | 🔲 Backlog |
 | Node usage heatmap (FEATURES 6.9) | product, moat, feed | Aggregate live-feed events into per-node usage heat — second moat item from the competitor scan. | P2 | 2026-08-16 | 🔲 Backlog |
 | Event feed hygiene: retention + layered status | phase-4, feed, perf | Standard feed anatomy: timestamp + icon + description + metadata per row; retention cap / virtualized list (200-ring landed — virtualize if cap rises); layered status (ambient badge → glanceable panel → interrupting alert). | P2 | 2026-08-16 | 🔲 Backlog |
-| AGENTS.md positioning note in docs | docs, positioning | AGENTS.md is now the 30+-agent industry standard — add a positioning note to docs (README/marketing), not code. | P3 | 2026-08-16 | 🔲 Backlog |
+| AGENTS.md positioning note in docs | docs, positioning | AGENTS.md is now the 30+-agent industry standard — add a positioning note to docs (README/marketing), not code. | P3 | 2026-08-16 | ✅ Done — added to README.md |
 
 ## Triaged from docs/Brainstorm_Features.md (Product Analyst pass, triaged 2026-08-17)
 

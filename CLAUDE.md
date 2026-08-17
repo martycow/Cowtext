@@ -28,10 +28,11 @@ Full spec: `D:\Moo.exe\_Documents\Cowtext\COWTEXT_VIBECODE_PLAN.md`. Read the re
 npm run tauri dev      # run the app (Vite on :1420, then cargo run)
 npm run tauri build    # production bundle
 npm run build          # tsc typecheck + vite build (frontend only)
+npm run lint           # ESLint 10 flat config (eslint.config.js)
 cargo clippy -- -D warnings   # from src-tauri/
 ```
 
-No linter or test runner is configured yet (`npm run lint` from the plan does not exist — add it when Tailwind/ESLint land). `tsc` is the only frontend check; `noUnusedLocals` and `noUnusedParameters` are on, so unused variables break the build.
+Frontend checks are `tsc` (strict; `noUnusedLocals`/`noUnusedParameters` on, so unused variables break the build) plus ESLint (`no-explicit-any` is an error; react-hooks pinned to classic rules-of-hooks + exhaustive-deps — the full React-Compiler rule set in eslint-plugin-react-hooks v7 is deliberately NOT enabled, see comment in `eslint.config.js`). No frontend test runner yet.
 
 ## Architecture
 
@@ -55,8 +56,7 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 - Dev port is pinned to 1420 with `strictPort: true` in both `vite.config.ts` and `tauri.conf.json`. If it's occupied, `tauri dev` fails rather than picking another port — change both files together or free the port.
 - `src-tauri/**` is excluded from Vite's watcher; Rust changes rebuild via cargo in `tauri dev`, not HMR.
 - `windows_subsystem = "windows"` in `main.rs` suppresses the console in release; use `tauri dev` to see `println!` and panics.
-- CSP is `null` in `tauri.conf.json`. Tighten before shipping.
-- `src/App.tsx` and the `greet` command in `lib.rs` are `create-tauri-app` placeholder demo code — replace, don't build around.
+- CSP is defined in `tauri.conf.json` with production-grade `csp` and relaxed `devCsp` for local development.
 
 ## Deviations from the plan
 
@@ -64,6 +64,6 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Status
 
-Phase: 2 accepted 2026-08-16. Phases 3+4 landed 2026-08-16 (v0.0.0004), Phases 5+6 landed 2026-08-17 (v0.0.0005 + v0.0.0006) — ALL SIX PHASES CODE-COMPLETE, none of 3–6 manually accepted yet. Phase 5: full SFX layer `src/scene/sfx.ts` (howler per plan §2, 14 placeholder cues + 3 tool cues, ducking/cooldowns/throttle per `docs/design/SOUND_DESIGN.md`), Settings modal (`src/settings/`, persisted via `settings.rs` → app_config_dir, live claude-path override), SNES juice pass (scarf, anticipation, accumulation, dust, waiting choreography, calm-mode reduced motion, pause-when-hidden, demo filtering). Phase 6: `preset.rs`/`handoff.rs` + `src/preset/`/`src/handoff/` (never-clobber presets, HANDOFF.md with GENERATED header, Chat/Code/Design clipboard variants). Built from the frozen `docs/design/PHASE56_CONTRACT.md` by 4 parallel lanes, zero cross-lane defects; adversarial audit confirmed 24 findings, all fixed. Gates green: `npm run build`, clippy `-D warnings`, `cargo test` 88/88, invoke contract 23 commands. Acceptance walks pending (Marty-only): PHASE3/PHASE4 manuals, then SETTINGS → PHASE5_JUICE → PHASE5_SOUND → PHASE6 (order note in the juice manual). Phase 5+6 landing committed as `c241b86`. Brainstorm triage done 2026-08-17: all 18 ideas from `docs/Brainstorm_Features.md` accepted into BACKLOG.md (quick wins / moat bets / platform bets, dependency cross-links); uncommitted.
+Phase: 2 accepted 2026-08-16. Phases 3+4 landed 2026-08-16 (v0.0.0004), Phases 5+6 landed 2026-08-17 (v0.0.0005 + v0.0.0006) — ALL SIX PHASES CODE-COMPLETE, none of 3–6 manually accepted yet. Phase 5: full SFX layer `src/scene/sfx.ts` (howler per plan §2, 14 placeholder cues + 3 tool cues, ducking/cooldowns/throttle per `docs/design/SOUND_DESIGN.md`), Settings modal (`src/settings/`, persisted via `settings.rs` → app_config_dir, live claude-path override), SNES juice pass (scarf, anticipation, accumulation, dust, waiting choreography, calm-mode reduced motion, pause-when-hidden, demo filtering). Phase 6: `preset.rs`/`handoff.rs` + `src/preset/`/`src/handoff/` (never-clobber presets, HANDOFF.md with GENERATED header, Chat/Code/Design clipboard variants). Built from the frozen `docs/design/PHASE56_CONTRACT.md` by 4 parallel lanes, zero cross-lane defects; adversarial audit confirmed 24 findings, all fixed. Gates green: `npm run build`, clippy `-D warnings`, `cargo test` 88/88, invoke contract 23 commands. Acceptance walks pending (Marty-only): PHASE3/PHASE4 manuals, then SETTINGS → PHASE5_JUICE → PHASE5_SOUND → PHASE6 (order note in the juice manual). Phase 5+6 landing committed as `c241b86`; brainstorm triage (18 ideas → BACKLOG.md) as `6ac09bf`. v0.1.0 ship-prep landed 2026-08-17 (ultracode workflow, 9 agents): production CSP + relaxed devCsp in `tauri.conf.json` (version → 0.1.0), code-split (main chunk 1,334 → 207 kB; pixi/codemirror/xyflow vendor chunks, scene/inspector/modals lazy via React.lazy + manualChunks), ESLint 10 flat config + `npm run lint`, README positioning note, stale-docs cleanup. Adversarial review: 6 findings, 5 fixed — critical: PixiJS 8 requires `import "pixi.js/unsafe-eval"` under strict CSP (now first import of BarnScene.tsx) — 1 rejected as premature. Gates green: build, lint (0 errors/1 warning), clippy `-D warnings`, cargo test 88/88. CSP behavior is build-verified only — runtime check folded into the acceptance walks (invoke round-trip, SFX cues, fonts, Barn render). Ship-prep uncommitted; real sprites still open (assets, Marty-side).
 
 Update this line at the end of every session.

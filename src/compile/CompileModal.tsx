@@ -317,7 +317,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
     return () => window.removeEventListener("keydown", onKey);
   }, [canClose, onClose]);
 
-  const files = preview?.files ?? [];
+  const files = useMemo(() => preview?.files ?? [], [preview]);
 
   const diffs = useMemo(() => {
     const map = new Map<string, { hunks: DiffHunk[]; adds: number; dels: number }>();

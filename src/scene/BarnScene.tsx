@@ -20,6 +20,9 @@
 // BarnEvent sequence; `autoDemo` starts it automatically.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// MUST come before any other pixi.js import: patches the renderer to use
+// static uniform sync so Pixi works under the production CSP (no 'unsafe-eval').
+import "pixi.js/unsafe-eval";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Application, Container } from "pixi.js";
 import { useGraphStore, type MemoryNode } from "../store/graph";

@@ -21,7 +21,7 @@ Rationale for v0.0.0004: Phases 3 and 4 landed together in one fleet session, so
 
 Rationale for v0.0.0005 + v0.0.0006: Phases 5 and 6 also landed in one fleet session (2026-08-17), but this time each phase gets its own increment — the base one-bump-per-phase rule resumes. The two phases are separately scoped deliverables with separate acceptance manuals, and two bumps land the counter exactly on the long-standing projection (M5 ≈ v0.0.0005, M6 ≈ v0.0.0006 in MILESTONES.md). The v0.0.0004 shared bump remains a documented one-off, not the new norm.
 
-Phase 6 complete has now landed at v0.0.0006 as projected; a first shippable public cut would justify jumping to v0.1.0.
+Phase 6 complete has now landed at v0.0.0006 as projected; a first shippable public cut would justify jumping to v0.1.0. Ship-prep toward that cut landed 2026-08-17 (CSP, ESLint, code-split; `tauri.conf.json` version pre-bumped to 0.1.0) — the v0.1.0 cut itself waits on the acceptance walks.
 
 ## Phases
 
@@ -40,4 +40,4 @@ Phase 6 complete has now landed at v0.0.0006 as projected; a first shippable pub
 1. Phase 3 + 4 manual acceptance walk (see TASKS.md) — one real assemble in a running window; run Claude Code in a terminal and watch nodes light up. Marty-only gate, still open.
 2. Phase 5 + 6 manual acceptance walks (see TASKS.md) — four manuals: `docs/testing/PHASE5_SOUND_TEST_MANUAL.md`, `docs/testing/SETTINGS_TEST_MANUAL.md`, `docs/testing/PHASE5_JUICE_TEST_MANUAL.md`, `docs/testing/PHASE6_TEST_MANUAL.md`.
 3. ~~Commit the Phase 5+6 landing~~ — done, `c241b86` (2026-08-17).
-4. Post-Phase-6 planning: ~~triage `docs/Brainstorm_Features.md`~~ — done 2026-08-17, all 18 ideas in BACKLOG.md (quick wins / moat bets / platform bets). Remaining: ship-prep items (CSP, lint, code-split, real sprites) toward v0.1.0.
+4. Post-Phase-6 planning: ~~triage `docs/Brainstorm_Features.md`~~ — done 2026-08-17, all 18 ideas in BACKLOG.md (quick wins / moat bets / platform bets). Ship-prep landed 2026-08-17: production CSP + devCsp, ESLint + `npm run lint`, code-split (main chunk 1,334 → 207 kB). Remaining toward v0.1.0: real sprites (assets, Marty-side), CSP runtime check during the walks, then the version cut.
