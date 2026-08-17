@@ -174,6 +174,41 @@ If only ten `NEW` items ship, these:
 Two of these are product, not polish: **4.6** and **6.9**. Nothing else on the market shows
 what the agent actually reads versus what you told it to read.
 
+## Phase 3/4/5 build notes, ranked (research pass 2026-08-16)
+
+Competitor + UX research digest, scoped to what is being built now (Assemble, hooks feed, Barn).
+Importance: **P1** = build it in-phase or the phase underdelivers; **P2** = strong add if cheap;
+**P3** = note for later, do not build now. Competitive read: nothing on the market pairs a
+*visual* graph editor with compile + live hooks — closest adjacents are CLI linters
+(ai-context-kit: lint/token-cost across CLAUDE.md/AGENTS.md/.cursor/rules) and backend memory
+graphs (Zep/Graphiti, Mem0, Neo4j agent-memory) with no desktop authoring UI. Our moat is 4.6
+(resolved-context preview) and 6.9 (usage heatmap); protect them.
+
+| Rank | Feature | Imp | Rationale (one line) |
+|---|---|---|---|
+| 1 | 5.7 Streaming output into node while Assemble writes | P1 | Token streaming cuts perceived wait 55–70%; a spinner-only Assemble will feel broken next to every 2026 AI tool. |
+| 2 | 5.6 Cancel (Stop Generation) per node + retry | P1 | Universal expectation for AI generation; also saves API cost by killing the `claude -p` child early. |
+| 3 | 5.3 + explicit progress states (queued → running → diffing → done/failed) | P1 | Multi-layer status (ambient badge / glanceable panel / interrupt / summary) is the established agent-monitoring pattern. |
+| 4 | 5.4 Diff before overwrite on Assemble | P1 | Same trust boundary as Compile; blind overwrite is the one failure users never forgive. |
+| 5 | 6.3 Event log with timestamp + event-type icon + per-event metadata | P1 | Standard live-feed anatomy (AGUI / mission-control feeds); makes the black box transparent and doubles as Barn debug. |
+| 6 | 5.5 `claude` binary detection with a clear empty-state | P1 | First-run failure mode; competitors die here and it reads as "app is broken". |
+| 7 | 6.8 Event retention cap | P1 | Every live-feed pattern caps or virtualizes; an unbounded log will hang the webview mid-session. |
+| 8 | 3.6 Token counts surfaced during Assemble/Compile | P2 | ai-context-kit made token cost the headline metric; table stakes for a context tool, cheap to show. |
+| 9 | 6.7 Unmapped-read → one-click adopt | P2 | Turns the passive feed into an acquisition loop no competitor has; small UI on top of 6.3. |
+| 10 | Buffered markdown render while streaming (part of 5.7) | P2 | Half-open fences/bold must not break layout; defer code blocks until the closing fence. |
+| 11 | 7.6 Mute + calm mode shipped with the first Barn build | P2 | Reduced-motion/ambient-status is an accessibility norm; retrofitting sound/motion opt-out is always worse. |
+| 12 | Aggregate feed header (session totals: events, files touched, duration) | P3 | Common in agent dashboards (tokens/cost headers); nice glanceable layer, fits 6.10 later. |
+| 13 | AGENTS.md-first messaging in docs/UI copy | P3 | AGENTS.md is now the 30+-agent industry standard; positioning note, not code. |
+
+Sources: [ai-context-kit](https://github.com/ofershap/ai-context-kit) ·
+[AGENTS.md spec 2026](https://www.morphllm.com/agents-md-guide) ·
+[Streaming UX pattern](https://www.aiuxplayground.com/pattern/streaming/) ·
+[Agent status monitoring patterns](https://www.aiuxdesign.guide/patterns/agent-status-monitoring) ·
+[Agent activity patterns](https://agentic-design.ai/patterns/ui-ux-patterns/agent-status-activity-patterns) ·
+[AGUI control layer](https://www.mindstudio.ai/blog/what-is-agui-human-control-layer-ai-agents) ·
+[Graphiti/Zep](https://github.com/getzep/graphiti) ·
+[Mem0 graph memory](https://mem0.ai/blog/graph-memory-solutions-ai-agents)
+
 ## Phase rollup
 
 | Phase | Adds |

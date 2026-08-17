@@ -7,7 +7,7 @@ project. Sources: `CLAUDE.md`, `docs/FEATURES.md`, `docs/design/DESIGN_SPEC.md`,
 `docs/DESIGN_PROMPT.md`, the plan (`D:\Moo.exe\_Documents\Cowtext\COWTEXT_VIBECODE_PLAN.md`,
 cited below as "Plan §n"), `package.json`, `src-tauri/Cargo.toml`, and the source tree.
 Alphabetical within each group. "Planned" = specced but not yet in the codebase
-(Phase 0 accepted; Phase 1 graph-canvas work and the Phase 2 compile pipeline are in the tree).
+(Phases 0–2 accepted; Phase 3 Assemble, Phase 4 live feed, and an early barn prototype are in the tree).
 
 ---
 
@@ -16,13 +16,16 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | Term | Definition | Where it lives |
 |---|---|---|
 | Adopt as node | Turn an existing `.md` file — or an unknown path seen in the live feed — into a Memory Node with one click (`adoptFile` in the graph store). | Plan §9 P1; FEATURES 2.3, 6.7; `src/store/graph.ts` |
-| Assemble | Expand a node's one-line `brief` into a full `.md` file via headless `claude -p` child processes (queued, max 2 concurrent). Never blind-overwrites: diffs against the existing file first. | Plan §6; Phase 3 |
-| Barn | The signature PixiJS scene: 16-bit SNES-style isometric barn (2:1 tiles, 32×16 base) where the cow physically walks to props and reads memory files live. Toggles with the graph canvas (Canvas ⇄ Barn). | Plan §8; Phase 5 |
-| BarnEvent | Normalized live event `{ kind, filePath?, sessionId, ts }` produced by the hooks server from Claude Code hook JSON, emitted to the webview as `barn://event`. Drives both canvas pulses and barn animations. | Plan §7; Phase 4 |
+| Assemble | Expand a node's one-line `brief` into a full `.md` file via headless `claude -p` child processes (queued, max 2 concurrent). Prompt is piped over stdin; result parsed from `--output-format json`. | Plan §6; `src-tauri/src/assemble.rs`; `src/assemble/` |
+| Barn | The signature PixiJS scene: 16-bit SNES-style isometric barn (2:1 tiles, 32×16 base) where the cow physically walks to props and reads memory files live. Toggles with the graph canvas (Canvas ⇄ Barn). Placeholder-graphics prototype lives in `src/scene/`. | Plan §8; `src/scene/` |
+| Barnlight-29 | The barn's 29-colour named palette (warm dark ramp + role accents) used by the prototype's programmatic Graphics; art-direction contract for Phase 5 sprites. | `src/scene/palette.ts`; docs/design/ART_DIRECTION.md |
+| BarnEvent | Normalized live event `{ kind, filePath?, sessionId, ts }` produced by the hooks server from Claude Code hook JSON, emitted to the webview as `barn://event`. Drives both canvas pulses and barn animations. TS mirrors: `src/store/events.ts`, `src/scene/types.ts`. | Plan §7; `src-tauri/src/hooks_server.rs`; docs/design/PHASE34_BARN_CONTRACT.md |
+| Canvas ⇄ Barn toggle | Segmented control in the top bar switching the workspace between the React Flow canvas (which stays mounted, hidden) and the Pixi barn scene (mounted on demand, destroyed on exit). Resets to Canvas when a new project opens. | `src/App.tsx`; DESIGN_SPEC |
 | BarnGraph | Top-level shape of `graph.json`: `version: 1`, `projectName`, `nodes`, `edges`, `compileTargets`. Serialized with stable field order, sorted ids, LF + trailing newline (`serializeGraph`); loaded through the `migrateGraph` harness. | Plan §4; `src/store/graph.ts` |
 | Brief | One-line description stored on a Memory Node; the input Assemble expands into a full file. Presets keep briefs but not content. | Plan §4, §6 |
 | Calf | Smaller cow sprite representing a Claude subagent; spawns from the barn door, despawns on SubagentStop. | Plan §8 |
 | Calm mode | One toggle, two effects: no sound + reduced motion. Exists from day one of the barn, not later. | Plan §8; DESIGN_SPEC |
+| Demo mode | The barn's offline scripted mode: `DemoPlayer` loops a fake `BarnEvent` sequence through `useEventsStore.pushEvent` (so EventLog, DEMO badge, and node pulses all light up) with `DEMO_NODES` fallback props when no graph is open. Toggled by the in-scene "Demo" button or `<BarnScene autoDemo />`. | `src/scene/demo.ts`; `src/store/events.ts` |
 | Clean folder glob | A conditional condition of exactly `<dir>/**` where every `/`-segment is a plain path component (no `.`/`..`, no metacharacters, no drive colons) — the only shape that spawns a nested `{dir}/AGENTS.md`; dirty globs stay root bullets. | `src-tauri/src/compile.rs` (`clean_glob_dir`) |
 | Compile | One graph → N tool files: `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` generated from the single source of truth. Never writes without diff-preview approval. | Plan §5; `src/compile/`; `src-tauri/src/compile.rs` |
 | Compile adapter | Per-target generator (`claude`, `agents`, `cursor`) mapping one graph snapshot to one output format — `Ctx::emit_root` / `emit_nested_agents` / `emit_cursor`, run in fixed order for deterministic output. Pluggable adapters (Copilot, Windsurf…) are backlog. | Plan §5; `src-tauri/src/compile.rs` |
@@ -42,13 +45,14 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | Live monitor | The hooks pipeline as a feature: real agent activity lights up nodes on the canvas (Phase 4, "ugly version") and drives the barn (Phase 5). Unknown paths still show in the event log. | Plan §7; FEATURES §6 |
 | Memory Node | A node in the graph backed by a real `.md` file in the user's project. Fields: `id`, `title`, `role`, `brief`, `filePath`, `readOrder`, `pinned`, `position`, optional `scenePos`. The file on disk is the content source of truth; creating a node stubs the file immediately. | Plan §4; `src/store/graph.ts`, `src/canvas/MemoryNodeCard.tsx` |
 | Node role | One of seven per node: `persona`, `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` (`NodeRole` / `NODE_ROLES`). Drives the 8×8 glyph, role colour, and which barn prop represents the node (cabinet / bookshelf / corkboard…). | Plan §4, §8; DESIGN_SPEC; `src/store/graph.ts` |
-| Phase | The build order (0–6, then a `7+` backlog). Hard rule: never implement a feature before its phase. Currently: Phase 0 accepted, Phase 1 next. | Plan §9; FEATURES |
+| Phase | The build order (0–6, then a `7+` backlog). Hard rule: never implement a feature before its phase. Currently: Phases 0–2 accepted; 3–4 built, awaiting acceptance. | Plan §9; FEATURES |
 | Pinned | Node flag: always-in-context (compiled into the output in `readOrder`) vs on-demand. Pinning is an agent-facing guarantee, so its indicator is amber, not blue. | Plan §4; DESIGN_SPEC |
 | Preset | Saved graph structure + briefs (no file content); "New project from preset" stubs the files. Exportable as a single `.cowtext-preset.json`. | Plan §9 P6; FEATURES §8 |
 | readOrder | A node's manual position in compiled output. Topology wins first; readOrder is the tie-break — Kahn's ready set pops by `(readOrder, id)`, so manual order decides inside what the constraints allow, and equal readOrder falls back to id. Shown as a badge on the card. | Plan §4; DESIGN_SPEC; `src-tauri/src/compile.rs` |
-| Refine | Per-node Assemble variant: re-run generation with an extra user instruction. | Plan §6 |
+| Event log | Collapsible bottom panel listing live/demo `BarnEvent`s: 28px rows, kind tag (read=amber, edit/write=success), rtl paths, "not on graph" tag for unknown paths, DEMO badge, clear button; hosts the "install hooks" button. | `src/inspector/EventLog.tsx` |
+| Refine | Per-node Assemble variant: re-run generation with an extra user instruction (`refine_node`). | Plan §6; `src-tauri/src/assemble.rs` |
 | Resolved-context preview | The exact bytes the agent will see — imports expanded inline, with a total token count. One of the two "product, not polish" differentiators (with the usage heatmap). | FEATURES 4.6 |
-| Summarize | Per-node Assemble variant: compress an existing long file. | Plan §6 |
+| Summarize | Per-node Assemble variant: compress an existing long file (`summarize_node`). | Plan §6; `src-tauri/src/assemble.rs` |
 | Topological order | The compile node order: Kahn's algorithm over the constraint graph where `sequence` says source-before-target and `imports` says target-before-source; the same graph always compiles to the same bytes. A cycle is a validation error reported as one concrete node path. | `src-tauri/src/compile.rs` (`total_order`, `find_cycle`) |
 | Usage heatmap | Reads per node across sessions → unpin/prune suggestions. Shows what the agent *actually* reads vs what you told it to read. | FEATURES 6.9 |
 | Warmth | Theme temperature variant set via `data-warmth` on `<html>`: `neutral` / `warm` (recommended default) / `brown`. Swaps only the surface/border/text ramps; accents are shared. | DESIGN_SPEC; `src/styles/tokens.css` |
@@ -58,23 +62,28 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | Term | Definition | Where it lives |
 |---|---|---|
 | Capabilities | Tauri's deny-by-default native permission system. Any plugin permission beyond `core:default` / `opener:default` must be listed in `src-tauri/capabilities/default.json` or the call silently fails at runtime. | `src-tauri/capabilities/default.json`; CLAUDE.md |
+| `assemble://status` | Tauri event emitted by Rust on every assemble-job transition (`AssembleProgress { nodeId, mode, status, error }`); the frontend's only post-enqueue signal, wired to `useGraphStore.setAssembleStatus`. | `src-tauri/src/assemble.rs`; `src/store/events.ts` |
+| AssembleQueue | Tauri-managed state behind the assemble commands: FIFO queue, max 2 concurrent jobs, per-node dedupe (exact enqueue-Err prefixes), cancel of queued jobs; frees the concurrency slot before emitting the terminal event. | `src-tauri/src/assemble.rs` |
 | Atomic write | `write_atomic`: writes a temp file in the target directory, then renames into place (remove-first on Windows) — a crash never leaves a torn `graph.json` or node file. Both write commands use it. | `src-tauri/src/project.rs` |
 | checked_root | Shared root-validation helper: every command's `root` string must name an existing directory before any path work happens. `pub(crate)` in `project.rs`, reused by the compile commands. | `src-tauri/src/project.rs` |
-| Command (Tauri) | A `#[tauri::command]` Rust fn callable from JS. Adding one takes three coordinated edits: the fn, its `generate_handler![...]` entry, and the matching `invoke` call in TS. Seven exist today: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `compile_preview`, `compile_write`. | `src-tauri/src/lib.rs`, `project.rs`, `compile.rs` |
+| Command (Tauri) | A `#[tauri::command]` Rust fn callable from JS. Adding one takes three coordinated edits: the fn, its `generate_handler![...]` entry, and the matching `invoke` call in TS. Fourteen exist today: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `compile_preview`, `compile_write`, `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel`, `hooks_preview`, `hooks_write`. | `src-tauri/src/lib.rs`, `project.rs`, `compile.rs`, `assemble.rs`, `hooks.rs` |
 | CSP | Content-Security-Policy; currently `null` in `tauri.conf.json`. Tightening it is backlog 9.8 — why fonts are self-hosted, never CDN-linked. | `src-tauri/tauri.conf.json`; FEATURES 9.8 |
 | Errors XOR files | `compile_preview`'s contract: validation errors or preview files, never both — graph problems are data (`Ok` with `errors`), `Err` is reserved for infrastructure failure (bad root, unparseable JSON, unreadable file). | `src-tauri/src/compile.rs`; `src/compile/api.ts` |
 | Event pipeline | The one-way flow: Rust emits → Tauri `emit` (`barn://event`) → Zustand store → both views react. React Flow and PixiJS never import each other. | CLAUDE.md; Plan §2 |
 | FS boundary | All filesystem access goes through Rust commands; the webview never touches paths directly — it only passes back paths it got from Rust or the native dialog. | CLAUDE.md; `src-tauri/src/project.rs` |
 | Graph persistence | Store mutations mark the graph `dirty`, a 700ms debounce serializes it and invokes `write_graph` (atomic). Save state: `idle` / `dirty` / `saving` / `saved` / `error` (`SaveState`). | `src/store/graph.ts` |
 | Hooks (Claude Code) | `PostToolUse` / `UserPromptSubmit` / `Stop` entries Cowtext writes into a user project's `.claude/settings.json`; each `curl -s -m 1 -X POST`s hook JSON to the hooks server. `\|\| true` guarantees hooks never block Claude Code when the app is closed. | Plan §7; Phase 4 |
-| Hooks server | Planned axum HTTP server in `src-tauri/src/hooks_server.rs`, bound to `127.0.0.1:4923`, `POST /event`. Parses hook JSON (`hook_event_name`, `tool_name`, `tool_input.file_path`, `session_id`) → `BarnEvent` → `app.emit`. | Plan §7; Phase 4 |
+| Hooks server | axum HTTP server in `src-tauri/src/hooks_server.rs`, bound to `127.0.0.1:4923`, single `POST /event` (lenient parse, always 200 empty). Normalizes hook JSON (`hook_event_name`, `tool_name`, `tool_input.file_path`, `session_id`) → `BarnEvent` → `app.emit("barn://event")`. Bind failure logs and the app still starts. | Plan §7; `src-tauri/src/hooks_server.rs` |
+| `hooks_preview` / `hooks_write` | The trust-boundary command pair: preview merges the plan-§7 hooks block into `.claude/settings.json` preserving unrelated keys (invalid JSON never clobbered; already-installed file round-trips byte-verbatim → `unchanged: true`); write happens only with the exact previewed content, atomically. UI: `HooksModal` (full diff, Cancel holds focus, no auto-write). | `src-tauri/src/hooks.rs`; `src/inspector/HooksModal.tsx` |
 | invoke | `invoke("command_name", { args })` from `@tauri-apps/api/core` — the frontend's only way to call Rust. Args are camelCase in JS, snake_case in Rust; Tauri converts. | `src/store/project.ts` |
 | IPC | The two-process split: frontend (`src/`, webview) ↔ backend (`src-tauri/src/`, Rust) over Tauri's inter-process channel — `invoke` inbound, `emit` outbound. | CLAUDE.md |
 | Port 1420 | Vite dev port, pinned with `strictPort: true` in *both* `vite.config.ts` and `tauri.conf.json` — if occupied, `tauri dev` fails rather than drifting. Change both together. | CLAUDE.md; `vite.config.ts` |
 | Port 4923 | Localhost port of the hooks server (`127.0.0.1:4923`). Port-conflict handling (pick a free port, inject into the hook command) is FEATURES 6.6. | Plan §7 |
 | Path guard | `resolve_within_root`: every webview-supplied relative path is resolved lexically against the project root — absolute paths, `..`, drive prefixes, and UNC paths are rejected before touching the filesystem. | `src-tauri/src/project.rs` |
+| resolveNodeId | Events-store helper mapping a `BarnEvent.filePath` to a graph node: `\`→`/` normalize, root-prefix strip, case-insensitive `filePath` match. Shared by EventLog, the canvas pulse (`lastLiveTs` / `LIVE_PULSE_MS`), and the barn's `resolveProp`. | `src/store/events.ts`; `src/scene/mapper.ts` |
+| Runner trait | Test seam in the assemble module: production `ClaudeRunner` resolves `claude` via `where` (cached in `OnceLock`, `.exe` preferred over `.cmd`, `CREATE_NO_WINDOW`), pipes the prompt over stdin to `claude -p --output-format json`, parses the `result` field; tests inject fake runners. | `src-tauri/src/assemble.rs` |
 | scan_project | Rust command that recursively scans a folder for `.md` files, skipping hidden dirs and `SKIP_DIRS` (`.git`, `node_modules`, `target`, `dist`, …); returns `ProjectScan { root, files }` with sizes and mtimes. | `src-tauri/src/project.rs` |
-| Store (Zustand) | The single state source both views subscribe to. Two stores today: `useProjectStore` (open folder + `.md` scan, `src/store/project.ts`) and `useGraphStore` (nodes, edges, selection, pending connection, persistence — `src/store/graph.ts`). | `src/store/`; Plan §3 |
+| Store (Zustand) | The single state source both views subscribe to. Three stores today: `useProjectStore` (open folder + `.md` scan), `useGraphStore` (nodes, edges, selection, persistence, transient assemble status), and `useEventsStore` (`BarnEvent` ring buffer MAX 200, `demoMode`, `pushEvent`; wired once via idempotent `initEventListener`). | `src/store/`; Plan §3 |
 | Trust boundary | Writing hooks into a user project's `.claude/settings.json`. Always shown as a confirmation diff — never silent. | CLAUDE.md; FEATURES 6.1 |
 | Unified diff / LCS | The hand-rolled line diff behind the diff preview — no diff library: standard DP LCS over line arrays, ops grouped into unified-style hunks with 3 context lines; pathological sizes (`m*n > 1e6`) fall back to one whole-file hunk. | `src/compile/diff.ts` |
 | `windows_subsystem = "windows"` | Attribute in `main.rs` that suppresses the console window in release builds; use `npm run tauri dev` to see `println!` and panics. | `src-tauri/src/main.rs`; CLAUDE.md |
@@ -93,7 +102,7 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | dagre / elk *(planned, P6)* | Auto-layout engine for the "tidy" button. Choice not yet made. | FEATURES 2.11 |
 | howler.js *(planned, P5)* | Barn SFX: sound sprites, volume ducking. | Plan §2 |
 | lucide-react | Stroke icon set (24 grid, 1.5px at 16px) for all app chrome. Role glyphs are in-repo SVG regardless. Approved by Marty 2026-08-15. | `package.json`; DESIGN_SPEC |
-| PixiJS 8 *(planned, P5)* | WebGL 2D renderer for the barn scene. Explicitly no Three.js, no real 3D — 16-bit isometric is a 2D problem. | Plan §2 |
+| PixiJS 8 | WebGL 2D renderer for the barn scene (`Application` async init, `Container`/`Graphics` — placeholder graphics are programmatic, no binary assets). Explicitly no Three.js, no real 3D — 16-bit isometric 2:1 tiles (32×16, 12×12 grid) are a 2D problem (`src/scene/iso.ts`). | Plan §2, §8; `src/scene/` |
 | React 19.1 | UI framework. Plan §2 said React 18; the scaffold installed 19.1 and it was kept — check ecosystem integration notes against 19 before trusting plan-era guidance. | `package.json`; CLAUDE.md |
 | React Flow (@xyflow/react) 12 | Node-graph canvas. Custom node/edge components live in `src/canvas/` (`MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`); view types in `src/canvas/types.ts` map from the store's domain model — React Flow never owns the state. | `package.json`; `src/canvas/` |
 | Tailwind CSS 3.4 | Utility-first styling, themed from the design tokens; with `postcss` + `autoprefixer`. | `package.json`; `tailwind.config.js` |
@@ -106,7 +115,7 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 
 | Term | Definition | Where it lives |
 |---|---|---|
-| axum *(planned, P4)* | HTTP framework for the hooks server on `127.0.0.1:4923`. | Plan §2, §7 |
+| axum 0.8 | HTTP framework running the hooks server on `127.0.0.1:4923`. | `Cargo.toml`; `src-tauri/src/hooks_server.rs` |
 | cargo clippy | Lint gate: `cargo clippy -- -D warnings` must pass (warnings are errors). | CLAUDE.md |
 | cowtext_lib | The crate's lib name (`crate-type = ["staticlib", "cdylib", "rlib"]`); suffixed `_lib` to avoid a bin-name clash on Windows. `main.rs` is a thin shim calling `cowtext_lib::run()`. | `src-tauri/Cargo.toml`, `main.rs` |
 | notify *(planned, P2)* | FS-watch crate for external-change detection (reload or conflict banner when dirty). | Plan §2; FEATURES 3.5 |
@@ -114,7 +123,7 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | tauri 2 | The app shell: tiny binary, native FS, in-process localhost server, plugin system. `tauri::Builder` chain in `lib.rs::run()` registers plugins + the `invoke_handler`. | `Cargo.toml`; `src-tauri/src/lib.rs` |
 | tauri-build | Build-dependency that generates the Tauri glue at compile time. | `Cargo.toml`; `build.rs` |
 | tauri-plugin-dialog / -opener 2 | Rust halves of the dialog and opener plugins, registered in the builder chain. | `Cargo.toml`; `lib.rs` |
-| tokio *(planned, P3–4)* | Async runtime for the event pipeline and the `claude -p` child-process queue. | Plan §2 |
+| tokio 1 | Async runtime for the hooks server and the `claude -p` child-process queue (`tauri::async_runtime` rides on it). | `Cargo.toml`; `assemble.rs`, `hooks_server.rs` |
 
 ## Design terms
 
@@ -155,4 +164,6 @@ Alphabetical within each group. "Planned" = specced but not yet in the codebase
 | GENERATED header | First line of every compiled file: `<!-- GENERATED BY COWTEXT — edit the graph or context/*.md, not this file -->` (`GENERATED_HEADER`; `.mdc` carries it right after the frontmatter, so `has_header` scans the first 10 lines). Its absence on an existing file is what marks it handwritten; `compile_write` refuses content without it. Tamper detection (body hash) planned. | Plan §5; FEATURES 4.4, 4.8; `src-tauri/src/compile.rs` |
 | `HANDOFF.md` | Output of the Handoff button — session summary a next agent/chat can pick up. | Plan §9 P6 |
 | `COWTEXT_VIBECODE_PLAN.md` | The full authoritative product spec (outside this repo, in `D:\Moo.exe\_Documents\Cowtext\`). §2 stack, §4 data model, §5 adapters, §8 scene, §9 phases. | `_Documents`; CLAUDE.md |
+| `docs/design/PHASE34_BARN_CONTRACT.md` | The frozen Phase 3/4 fleet contract: command signatures, `BarnEvent`/`AssembleProgress` wire shapes, store shapes, scene seam; "§8 Revisions" records audit-authorized changes (stdin arg form, `.exe` preference, error-field serialization). | `docs/design/` |
+| `docs/design/BARN_PROTOTYPE.md` | Integration doc for the barn prototype: mount API (`<BarnScene />`, `autoDemo`, `connectEvents` seam), store-read rules, demo mode. | `docs/design/` |
 | `docs/design/tokens.css` + `tailwind.config.js` | Paste-ready design implementation files — the source of truth for token *values*; DESIGN_SPEC records the decisions around them. | `docs/design/` |

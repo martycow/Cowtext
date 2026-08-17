@@ -68,6 +68,81 @@ Phase mapping: the three tool-layer cues can technically ship with Phases 2–3,
 sequencing: all audio lands in Phase 5 together with the toggles (feature 7.6, "day one
 of sound").
 
+## 2b. Phase-5 implementation cue sheet (against `src/scene/` as built)
+
+The barn prototype now exists (silent). This section maps every cue to the **exact code
+hook point** in the shipped event→animation pipeline: `mapper.ts` `handleEvent()` →
+`cow.ts` task queue (`enqueue`/`interrupt` → `startTask` → `arrive` → busy loop).
+The `// SFX cue:` comments already in `mapper.ts` mark the switch arms; the *moment*
+within each animation is specified here. Audio must be triggered from a thin
+`sfx.ts` module called at these points — never from inside `Cow` (the cow queues and
+drops tasks; sound must fire for the event, not the possibly-dropped task, except
+where noted).
+
+Key timing facts from the code: walk ≤ 1.5 s total, per-step ≤ 150 ms; bubbles live
+1.4 s; edit/write busy loop is `busyMs: 900`; `Cow.enqueue` drops oldest tasks beyond a
+queue cap of 3; `stop` uses `cow.interrupt()` (queue cleared, current step finishes).
+
+| BarnEvent (mapper arm) | Animation | Cue | Target len | Trigger point | Priority/duck notes |
+|---|---|---|---|---|---|
+| `prompt` | cow stays, "!" bubble | `kb_clack` | 0.10 s | the instant `handleEvent` runs the `prompt` arm (event receipt, not task start — the bubble may be queued behind a walk) | Action −9; kills ambient bed fade-in; ≤1× per prompt |
+| `read` (resolved to cabinet prop: rules/persona) | walk → prop, filename bubble, `flashProp` | `drawer_slide` | 0.26 s | inside the task's `onArrive` callback, synchronous with `layout.flashProp` — sound lands on the flash, not on the walk start | Action −11; read-burst throttle §3 applies *at event receipt*, before enqueue — a throttled read still walks/flashes, just silently |
+| `read` (bookshelf prop: architecture/reference) | same | `page_flip` | 0.15 s | same: `onArrive`, with the flash | Texture −13; same throttle |
+| `read` (corkboard/crate prop: task/workflow) | same | `paper_shuffle` | 0.28 s | same: `onArrive`, with the flash | Texture −13; same throttle |
+| `read` (unresolved path) | none (`resolveProp` → null, early return) | **SILENT** | — | — | no animation = no sound; the EventLog row is the only trace. Sound never fires for off-graph activity |
+| `edit`/`write` | walk → side desk, bubble, 900 ms typewriter bob | `typewriter` (loop) | 0.5 s/bar, plays 900 ms ≈ 2 bars | loop **starts** in `onArrive` when the busy bob begins; loop **stops** when `busyLeft` hits 0 (hard stop ≤ 50 ms fade). If the task is dropped by the queue cap or an `interrupt`, the loop never starts / stops immediately | Action −10; ducks ambient −6 dB |
+| `edit`/`write` completion | bob ends, paper-stack flash (sprite pass) | `ding` | 0.70 s | the frame the busy loop ends (`busyLeft` ≤ 0 → `setBob(0)`) — only if the typewriter actually ran | Confirm −10; ≥2 s cooldown; skipped if the busy loop was interrupted (no fake completion) |
+| `grep`/`glob` | sniff walk between two props, "?" bubbles | `sniff` | 0.22 s | on `bubbleOnStart` of the **first** sniff task only (task start, not arrival); the second hop is silent | Whisper −16; 1 s cooldown — volleys collapse to one sniff |
+| `stop` | `cow.interrupt()` → trot to dev desk, "✓" bubble | `moo_happy` | 0.55 s | on the "✓" `bubbleOnArrive` at the dev desk — the moo crowns the arrival, not the interrupt. If a new event interrupts before arrival, the moo is dropped (never queued) | **Hero −7**; ducks everything else −12 dB; ≤1× per turn |
+| `subagent_stop` | ignored in prototype (calf is a Phase-5 sprite) | `calf_despawn` | 0.18 s | when the calf despawn animation lands (with the sprite pass; until then: **SILENT**) | Texture −13; batch rule §2 |
+| `other` | ignored | **SILENT** | — | — | unknown kinds never sound — future hook kinds must opt in |
+
+**Also stays SILENT, deliberately:** cow footsteps (up to 10 steps/walk at 150 ms would
+be a drum roll; walks are constant, sound must mark *destinations*); bubble
+show/expire; camera pan/zoom (user action, not cow action); `flashProp` when triggered
+by anything other than a read arrival; demo-mode toggle button; Canvas⇄Barn view
+toggle; queue-cap task drops (dropping silently is the point). Demo mode plays cues
+normally — demo events flow through the same `pushEvent` path and the demo exists to
+show the sound off.
+
+**Ducking/priority recap for the implementer** (full rules in §3): voice pool = 3
+one-shots + typewriter + ambient; steal oldest; moo ducks all −12 dB; bed ducks −6 dB
+under anything and fades out 250 ms on any event; never queue a cue — drop it.
+
+**Calm mode:** calm = mute (hard, ≤ 50 ms) + reduced motion; the mapper keeps running
+so the log/pulse stay truthful. Implementation: `sfx.ts` checks one
+`isCalmOrMuted()` gate at the top of every `play()` — no per-cue logic. Window
+hidden/minimized suspends all sound (pairs with the Pixi pause guard); unfocused-but-
+visible keeps sounding.
+
+### Howler sprite-map skeleton (file/sprite names only — no assets, howler not installed)
+
+```ts
+// src/scene/sfx.ts (Phase 5) — the only file that imports howler.
+// Offsets [start, len] are generated from assets/sfx/cues.json at build time.
+const sprite = new Howl({
+  src: ["sfx_sprite.webm", "sfx_sprite.mp3"],
+  sprite: {
+    kb_clack:      [0, 0],   // generated
+    drawer_slide:  [0, 0],
+    page_flip:     [0, 0],
+    paper_shuffle: [0, 0],
+    ding:          [0, 0],
+    sniff:         [0, 0],
+    moo_happy:     [0, 0],
+    calf_spawn:    [0, 0],
+    calf_despawn:  [0, 0],
+    compile_ok:    [0, 0],
+    assemble_done: [0, 0],
+    error_soft:    [0, 0],
+  },
+});
+const typewriter = new Howl({ src: ["typewriter.webm", "typewriter.mp3"], loop: true });
+const ambient    = new Howl({ src: ["ambient_loop.webm", "ambient_loop.mp3"], loop: true });
+// Public API: play(cue), startTypewriter(), stopTypewriter(), tickAmbient(idleMs),
+// setCalm(b), setMuted(b), setGroupGain("barn" | "tool" | "ambient", g)
+```
+
 ## 3. Mixing rules
 
 ### Volume hierarchy (baked into masters + runtime gain)

@@ -2,30 +2,33 @@
 
 Sprints map 1:1 to plan §9 phases — a sprint is "the evenings it takes to land a phase plus its acceptance walk". Estimates from the plan assume vibe-coding evenings (~2–3 h).
 
-## Current sprint — Sprint 2: Compile (Phase 2)
+## Current sprint — Sprint 3: Assemble + Live feed (Phases 3+4, + early Barn prototype)
 
-- **Goal:** one graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` with validation and diff-preview approval; never write without approval.
-- **Started:** 2026-08-16 · **Plan estimate:** 1–2 evenings
-- **Exit criteria:** Phase 2 acceptance passes — compiled `CLAUDE.md` works in a real Claude Code session; `AGENTS.md` readable by Codex.
-- **Sprint status:** 🟡 Code complete (v0.0.0003 landed), acceptance walk pending.
+- **Goal:** per-node Assemble/Refine/Summarize via a `claude -p` queue; hooks pipeline (:4923 → `barn://event` → event log + node pulse) behind a confirmation-diff trust boundary; early Barn prototype (Marty's explicit authorization).
+- **Started:** 2026-08-16 · **Plan estimate:** 2–3 evenings (two phases in one fleet session)
+- **Exit criteria:** Phase 3 acceptance (5 briefs → 5 sensible `.md` files, no text editor) + Phase 4 acceptance (nodes light up live while Claude Code runs in a terminal).
+- **Sprint status:** 🟡 Code complete (v0.0.0004 landed), acceptance walk pending.
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
-| Frozen implementation spec | spec | Contract for two parallel coders; §3 IPC surface frozen | P0 | 2026-08-16 | ✅ Done |
-| Rust compile.rs + adapters + tests | rust | Full detail in TASKS.md | P0 | 2026-08-16 | ✅ Done |
-| Audit + 3 fixes | rust, review | Full detail in TASKS.md / BUGS.md | P1 | 2026-08-16 | ✅ Done |
-| Frontend compile module + modal | frontend | Full detail in TASKS.md | P0 | 2026-08-16 | ✅ Done |
-| UI polish (7 fixes incl. rescan bug) | frontend, design | Full detail in TASKS.md / BUGS.md | P1 | 2026-08-16 | ✅ Done |
-| Verification pass | verify | tsc / clippy / 23 tests / contract — all green | P1 | 2026-08-16 | ✅ Done |
-| Phase 2 manual acceptance walk | qa | The sprint's only open item — see TASKS.md | P0 | 2026-08-16 | 🔲 Open |
+| assemble.rs — claude -p queue + 5 commands | rust | Full detail in TASKS.md | P0 | 2026-08-16 | ✅ Done |
+| hooks.rs + hooks_server.rs (:4923) | rust, hooks | Full detail in TASKS.md | P0 | 2026-08-16 | ✅ Done |
+| Frontend assemble + events store + EventLog + HooksModal | frontend | Full detail in TASKS.md | P0 | 2026-08-16 | ✅ Done |
+| Barn prototype (src/scene/, Pixi 8) | pixi, barn | Full detail in TASKS.md | P1 | 2026-08-16 | ✅ Done |
+| Integration pass (Canvas⇄Barn toggle, event wiring, spec re-check) | frontend, integration | Full detail in TASKS.md | P1 | 2026-08-16 | ✅ Done |
+| Adversarial audit + 6 fixes | review, fix | Full detail in TASKS.md / BUGS.md | P1 | 2026-08-16 | ✅ Done |
+| Verification pass | verify | build / clippy / 60 tests / 14-name invoke contract — all green | P1 | 2026-08-16 | ✅ Done |
+| Product research pass (FEATURES ranking) | research | Full detail in TASKS.md; pulls in BACKLOG.md | P2 | 2026-08-16 | ✅ Done |
+| Phase 3+4 manual acceptance walk | qa | The sprint's only open item — see TASKS.md | P0 | 2026-08-16 | 🔲 Open |
 
 ## Past sprints
 
 | Sprint | Phase | Window | Outcome |
 |---|---|---|---|
+| Sprint 2: Compile | Phase 2 | closed 2026-08-16 | ✅ Closed — adapters, diff-preview modal, validation; accepted by Marty 2026-08-16 (Phase 1 in-window UX verified in the same walk) |
 | Sprint 0: Skeleton | Phase 0 | pre-2026-08-15 | ✅ Closed — dark shell, open folder, `.md` scan; accepted |
 | Sprint 1: Graph canvas | Phase 1 | closed 2026-08-15 | ✅ Closed — canvas, inspector, persistence, adopt-.md; automated checks green (in-window UX verification folded into the Sprint 2 acceptance walk) |
 
 ## Next sprint (planned)
 
-**Sprint 3: Assemble (Phase 3)** — `claude -p` child-process queue, per-node Assemble/Refine/Summarize, node progress states. Starts after Sprint 2's acceptance walk closes Phase 2. Prep task in BACKLOG.md.
+**Sprint 4: The Barn (Phase 5 completion)** — real sprites (Aseprite originals per ART_DIRECTION.md), SFX, calm mode + mute from day one, HUD restyle, scene code-split. Starts after Sprint 3's acceptance walk closes Phases 3+4. Prep items in BACKLOG.md.

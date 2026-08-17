@@ -164,6 +164,10 @@ export interface PendingConnection {
 
 export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
+/** Assemble job lifecycle for one node (Phase 3 contract §3.1).
+ *  TRANSIENT — never serialized into graph.json, no version bump. */
+export type AssembleStatus = "idle" | "queued" | "running" | "assembled" | "error";
+
 interface GraphState {
   root: string | null;
   projectName: string;
@@ -176,6 +180,12 @@ interface GraphState {
   loaded: boolean;
   saveState: SaveState;
   loadError: string | null;
+
+  /** nodeId → status; absent = "idle". Transient, not persisted. */
+  assembleStatus: Record<string, AssembleStatus>;
+  /** nodeId → last error line. Transient, not persisted. */
+  assembleErrors: Record<string, string>;
+  setAssembleStatus: (nodeId: string, status: AssembleStatus, error?: string) => void;
 
   loadGraph: (root: string) => Promise<void>;
   flushSave: () => Promise<void>;
@@ -225,6 +235,20 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   loaded: false,
   saveState: "idle",
   loadError: null,
+  assembleStatus: {},
+  assembleErrors: {},
+
+  setAssembleStatus: (nodeId, status, error) => {
+    set((st) => {
+      const nextStatus = { ...st.assembleStatus };
+      if (status === "idle") delete nextStatus[nodeId];
+      else nextStatus[nodeId] = status;
+      const nextErrors = { ...st.assembleErrors };
+      if (status === "error" && error !== undefined) nextErrors[nodeId] = error;
+      else delete nextErrors[nodeId];
+      return { assembleStatus: nextStatus, assembleErrors: nextErrors };
+    });
+  },
 
   loadGraph: async (root) => {
     clearTimeout(saveTimer);
@@ -238,6 +262,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       selectedNodeIds: [],
       selectedEdgeIds: [],
       pending: null,
+      assembleStatus: {},
+      assembleErrors: {},
       projectName: projectNameFromRoot(root),
     });
     try {
@@ -359,11 +385,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   deleteNodes: (ids) => {
     const gone = new Set(ids);
-    set((st) => ({
-      nodes: st.nodes.filter((n) => !gone.has(n.id)),
-      edges: st.edges.filter((e) => !gone.has(e.source) && !gone.has(e.target)),
-      selectedNodeIds: st.selectedNodeIds.filter((i) => !gone.has(i)),
-    }));
+    set((st) => {
+      const nextStatus = { ...st.assembleStatus };
+      const nextErrors = { ...st.assembleErrors };
+      for (const id of ids) {
+        delete nextStatus[id];
+        delete nextErrors[id];
+      }
+      return {
+        nodes: st.nodes.filter((n) => !gone.has(n.id)),
+        edges: st.edges.filter((e) => !gone.has(e.source) && !gone.has(e.target)),
+        selectedNodeIds: st.selectedNodeIds.filter((i) => !gone.has(i)),
+        assembleStatus: nextStatus,
+        assembleErrors: nextErrors,
+      };
+    });
     scheduleSave();
   },
 

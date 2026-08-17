@@ -6,7 +6,7 @@ allowed to exist). Dates come from `git log --follow` where the file is tracked,
 otherwise from the session that created it. Update this grid whenever a doc is
 added, moved, renamed, or retired.
 
-Last audit: 2026-08-16.
+Last audit: 2026-08-16 (Phase 3/4 fleet session — second pass).
 
 ## The grid
 
@@ -19,6 +19,8 @@ Last audit: 2026-08-16.
 | `docs/design/DESIGN_SPEC.md` | UI design spec (v1, dark only) digested from the Claude Design project; decisions, rules, component specs around `tokens.css` / `tailwind.config.js`. | Marty + Claude (design digest) | 2026-08-15 | Source of UI truth for the tool layer ("blue is you, amber is the cow"). |
 | `docs/design/ART_DIRECTION.md` | Barn art direction: 16-bit iso style contract, Barnlight-29 palette, sprite rules for the Phase 5 scene. | Agent Art Director | 2026-08-16 | Settles visual style before any Pixi code exists; governs asset production. |
 | `docs/design/SOUND_DESIGN.md` | Sound bible: aesthetic direction, cue sheet, mixing rules, file specs, placeholder-to-crafted SFX plan. | Agent Sound Designer | 2026-08-16 | Governs `assets/sfx/` and the Phase 5 howler.js runtime before it lands. |
+| `docs/design/PHASE34_BARN_CONTRACT.md` | Phase 3/4 + barn-prototype build contract: frozen command/event/type shapes across the Rust, UI, and Barn lanes, plus a "Revisions" audit section (Code Lead). | Rust Coder / Multifunctional Coder / Barn Coder / Code Lead (fleet session) | 2026-08-16 (untracked) | Freezing invoke names, event wire shapes, and store contracts let three coder lanes build in parallel without drift. |
+| `docs/design/BARN_PROTOTYPE.md` | Barn scene integration doc: BarnScene mounting, event wiring via useEventsStore, demo mode, Canvas⇄Barn toggle. | Agent Barn Coder, updated by Agent Integrator | 2026-08-16 (untracked) | Contract-required companion so the scene's seams survive Phase 5 work. |
 | `docs/research/UX_NOTES.md` | UX review: journey maps, friction points, improvement proposals keyed to FEATURES numbers. | Agent UX Designer | 2026-08-16 | Feeds backlog items and phase acceptance criteria from a user-journey angle. |
 | `docs/research/JUICE.md` | Research on game-feel for the barn: reference games, charm budget, storyboard for the six core BarnEvents. | Agent Researcher (game feel) | 2026-08-16 | Phase 5 designed in advance, not improvised. |
 | `docs/research/PRODUCTIVITY.md` | Cold-start research: how a new project reaches a productive agent context fastest; recommendations tagged to FEATURES items. | Agent Researcher (productivity), uncommitted edits pending | 2026-08-16 (uncommitted) | Defines the cold-start moat (structure + briefs + Assemble). |
@@ -43,7 +45,7 @@ Canonical layout — a documentation `.md` belongs in exactly one of these place
 | `README.md` (root) | Public repo description. | Marty |
 | `docs/FEATURES.md` | The feature backlog. Fixed filename, lives at `docs/` root. | Marty + fleet |
 | `docs/TERMINOLOGY.md` | The terminology sheet. Fixed filename, lives at `docs/` root. | Agent Terminologist |
-| `docs/design/` | Visual + sound design: `DESIGN_SPEC.md`, `ART_DIRECTION.md`, `SOUND_DESIGN.md`. (`tokens.css` and `tailwind.config.js` live here as the spec's paste-ready value files — a documented exception, not a precedent for code in `docs/`.) | Design agents |
+| `docs/design/` | Visual + sound design + build contracts: `DESIGN_SPEC.md`, `ART_DIRECTION.md`, `SOUND_DESIGN.md`, `PHASE34_BARN_CONTRACT.md`, `BARN_PROTOTYPE.md`. (`tokens.css` and `tailwind.config.js` live here as the spec's paste-ready value files — a documented exception, not a precedent for code in `docs/`.) | Design agents |
 | `docs/research/` | Analysis and research notes (`UX_NOTES.md`, `JUICE.md`, `PRODUCTIVITY.md`, future research). | Research agents |
 | `docs/tasks/` | Task Manager's files: `ROADMAP.md`, `TASKS.md`, `BACKLOG.md`, `BUGS.md`, `SPRINTS.md`, `MILESTONES.md`. | Agent Task Manager |
 | `docs/testing/` | Tester's manual test scripts, one per phase/feature. | Agent Tester |
@@ -57,11 +59,35 @@ Rules:
 4. **Renames/moves/deletions update cross-references.** A doc that references a moved or deleted file is stale until fixed (see Violations).
 5. **Fixed filenames stay fixed.** `FEATURES.md`, `TERMINOLOGY.md`, and the `docs/tasks/` set are singletons — extend them, don't fork variants.
 
+## Session audit — 2026-08-16 (Phase 3/4 + barn prototype fleet session)
+
+Non-doc files created/edited this session (uncommitted), by lane. Docs changes are in the grid above.
+
+| Path | Who | Why |
+|---|---|---|
+| `src-tauri/src/assemble.rs` + `src-tauri/src/assemble/tests.rs` (new) | Agent Rust Coder; fixed by Agent Verifier | Phase 3 Assemble queue: FIFO max-2-concurrent `claude -p` runner, prompt build per plan §6, atomic writes, `assemble://status` events. Verifier fix: prompt piped over stdin, `.exe` preferred, no console flash. |
+| `src-tauri/src/hooks.rs` + `src-tauri/src/hooks/tests.rs` (new) | Agent Rust Coder | Phase 4 `hooks_preview`/`hooks_write`: merge plan-§7 block into `.claude/settings.json` preserving unrelated keys, never-clobber guards. |
+| `src-tauri/src/hooks_server.rs` + `src-tauri/src/hooks_server/tests.rs` (new) | Agent Rust Coder | Phase 4 axum server on 127.0.0.1:4923, `POST /event` → BarnEvent normalization → `barn://event` emit. |
+| `src-tauri/src/lib.rs` | Agent Rust Coder | Module decls, AssembleQueue managed state, hooks_server startup, 7 new commands in `generate_handler![]`. |
+| `src-tauri/Cargo.toml` + `Cargo.lock` | Agent Rust Coder | Added `axum = "0.8"`, `tokio` (contract allowance; nothing else). |
+| `src/store/events.ts` (new) | Agent Multifunctional Coder | Events store: BarnEvent ring buffer (200), demoMode, resolveNodeId, initEventListener, live-pulse helpers. |
+| `src/assemble/` — `types.ts`, `api.ts` (new) | Agent Multifunctional Coder | Assemble wire types + the five invoke wrappers. |
+| `src/inspector/EventLog.tsx` (new) | Agent Multifunctional Coder; polished by Agent Integrator | Collapsible live event feed panel; Integrator made the header a full toggle target and fixed a font-tier violation. |
+| `src/inspector/HooksModal.tsx` (new) | Agent Multifunctional Coder; hardened by Agent Integrator | Hooks-install trust-boundary diff modal; Integrator set Cancel as initial focus and clarified the warning copy. |
+| `src/store/graph.ts` | Agent Multifunctional Coder | Transient assembleStatus/assembleErrors + setAssembleStatus (no schema/version change). |
+| `src/inspector/Inspector.tsx` | Agent Multifunctional Coder; race fixed by Agent Verifier | Assemble/Refine/Summarize UI with status badges; Verifier moved the optimistic "queued" mark before the await. |
+| `src/canvas/MemoryNodeCard.tsx` | Agent Multifunctional Coder | Live-read pulse, assembling/assembled/error visual states per DESIGN_SPEC. |
+| `src/scene/` — `BarnScene.tsx`, `palette.ts`, `iso.ts`, `props.ts`, `sceneGraph.ts`, `cow.ts`, `mapper.ts`, `demo.ts`, `types.ts` (new) | Agent Barn Coder; wired/fixed by Agent Integrator + Agent Verifier | Barn prototype: Pixi 8 iso scene, cow task queue, event mapper, demo mode. Integrator wired store subscription + demo→pushEvent; Verifier fixed mid-step interrupt and resolveProp delegation. |
+| `src/App.tsx` | Agent Integrator | Canvas⇄Barn segmented toggle, initEventListener mount, EventLog mount. |
+| `package.json` + `package-lock.json` | (modified in working tree) | Modified per git status — not claimed by any fleet build report this session; flagged for Marty's review (fleet rule: agents do not touch package.json). |
+
+Gate at session end: `npm run build` green, `cargo clippy --all-targets -- -D warnings` clean, `cargo test` 60/60, invoke-name contract verified (14 names).
+
 ## Violations
 
 | # | File | Problem | Suggested fix |
 |---|---|---|---|
-| V1 | `docs/DESIGN_PROMPT.md` | Deleted from the working tree (was created 2026-08-15) but the deletion is uncommitted, and it is still cited as a source by `docs/TERMINOLOGY.md` (header) and `docs/research/UX_NOTES.md` (inputs list). | Commit the deletion (Marty's call per git workflow) and strip the two stale references; content is superseded by `docs/design/DESIGN_SPEC.md`. |
+| V1 | `docs/DESIGN_PROMPT.md` | Deletion staged **by Marty himself** (intentional — do not restore); still cited as a source by `docs/TERMINOLOGY.md` (header) and `docs/research/UX_NOTES.md` (inputs list). | Marty commits the staged deletion when ready; Terminologist/UX strip the two stale references; content is superseded by `docs/design/DESIGN_SPEC.md`. |
 | V2 | `README.md` | Stale: two lines, no mention of what the app is now (Phase 2 code landed), no build/run instructions. | Flesh out once a phase is accepted; low priority, but it is the repo's public face. |
 | V3 | `docs/TERMINOLOGY.md` | Header claims it is "maintained by hand", but it is fleet-maintained (Agent Terminologist) and currently carries uncommitted edits alongside V1's stale `DESIGN_PROMPT.md` citation. | Terminologist updates the source list next pass. |
 

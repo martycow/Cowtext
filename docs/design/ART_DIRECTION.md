@@ -152,6 +152,95 @@ Filename bubbles show real paths truncated to 24 chars (§8), rendered in Silksc
    if one is adopted, add it to the asset licence manifest (FEATURES 7.8) the day
    it lands.
 
+## Production sprite plan (replaces the src/scene placeholders)
+
+The Barn prototype (`src/scene/props.ts`, `sceneGraph.ts`, `cow.ts`) currently draws
+everything as programmatic Pixi `Graphics`. This section is the exact Aseprite
+inventory that replaces each placeholder, one sheet per subject. All sheets are
+drawn on the **32×16 iso base tile** (`src/scene/iso.ts`: `TILE_W 32`, `TILE_H 16`,
+12×12 grid); the canvas width is a multiple of the tile footprint, height overflows
+upward only. Anchor = bottom-centre (Pixi `anchor 0.5, 1.0`), matching
+`tileToScreen` + `depthOf` in the prototype.
+
+### Sheet inventory (18 sheets)
+
+| Sheet | Frame canvas | Footprint | Frames | Replaces (src/scene) |
+|---|---|---|---|---|
+| `cow_idle` | 32×32 | 1 tile | 2 (tail flick / ear twitch, 600 ms) | `makeCow()` static body |
+| `cow_walk` | 32×32 | 1 tile | 4 (trot, 140 ms) | 2-phase `setBob` trot |
+| `cow_sit` | 32×32 | 1 tile | 2 (settle + breathe, 500 ms) | — (new; typewriter/idle-at-desk pose) |
+| `cow_write` | 32×32 | 1 tile | 2 (typewriter bob, 180 ms) | `setBob` at side desk |
+| `calf_walk` | 24×24 | 1 tile | 4 (140 ms) | — (not yet in scene) |
+| `calf_spawn` | 24×24 | 1 tile | 3 (120 ms, reversed for despawn) | — |
+| `cabinet` | 24×40 | 1 tile | 2 (`closed`, `open` drawer) | `makeCabinet()` isoBox |
+| `bookshelf` | 32×44 | 1 tile | 2 (`closed`, `book-pop`) | `makeBookshelf()` isoBox |
+| `corkboard` | 32×28 | 1 tile (wall) | 2 (`idle`, `paper-lift`) | — missing: crate stands in for it |
+| `crate` | 24×24 | 1 tile | 2 (`closed`, `open` papers up) | `makeCrate()` |
+| `dev_desk` | 64×40 | 2×1 tiles | 2 (screen flicker, optional) | desk half of `makeDevDesk()` |
+| `dev` | 16×24 | sits on desk tile | 2 typing + 1 lean + 2 coffee | dev figure baked into `makeDevDesk()` |
+| `side_desk` | 32×28 | 1 tile | 1 | `makeSideDesk()` |
+| `floor_tile` | 32×16 | 1 tile | 1 (+1 plank variant) | `buildGround()` checker fills |
+| `wall` | 32×24 | edge | 2 (slit shimmer) | — (no walls in prototype) |
+| `door` | 24×28 | edge | 2 (open) | — |
+| `paper` | 8×8 | — | 4 (fly arc) | polygon papers in crate/side desk |
+| `bubble` | 48×16 | — | 3 statics (`!` `?` `✓`) + 9-slice plate | `makeBubble()` Graphics (text stays live Pixi `Text`, Silkscreen) |
+
+Frames-per-cycle never exceeds 4 (style contract). Role accents (cabinet drawer
+tabs, book spines, crate paper tint) are **not** baked into the sheets — the sheet
+is neutral; the accent is a tiny 3–5 px overlay sprite (`accent_tab` 6×2, one per
+role hue) tinted at runtime from `ROLE_ACCENT`, keeping one sheet per prop instead
+of seven role variants.
+
+### Palette, dither, shadow
+
+Sheets use Barnlight-29 exactly as tabled above (hex column is authoritative;
+`src/scene/palette.ts` mirrors it 1:1 — verified in sync). Outline `#241A12` only;
+dither = 50 % checker only for ground shadows and large-surface bottom bands;
+light upper-left; ≤ 10 colours per sprite. Shadows stay **separate**: one shared
+`shadow` sheet (24×12, 3 sizes: 16/24/32 px casters, dithered `#241A12` at 45 %
+alpha — matching `makeShadow()`'s current alpha) drawn on the floor layer.
+
+### Aseprite export convention
+
+- Sources: `assets/sprites/ase/<sheet>.ase`, committed. One subject per file.
+- Export: `aseprite -b assets/sprites/ase/*.ase --sheet assets/sprites/barn.png
+  --data assets/sprites/barn.json --format json-array --sheet-pack
+  --filename-format '{title}_{tag}_{frame}'`.
+- Frame names: `cow_walk_0` … `cow_walk_3`, `cabinet_open_0`, `dev_typing_1` —
+  lower_snake, `<subject>_<cycle>_<frame>`. Pixi `Spritesheet` + `AnimatedSprite`
+  consume these directly; `scaleMode: 'nearest'`, integer zooms only.
+- **Never base64 in source** (repo hard rule). The packed PNG/JSON are assets under
+  `assets/sprites/`; code references them by path only.
+
+### Placeholder deviations flagged (src/scene audit)
+
+1. **`props.ts` `makeCabinet()` — role hue on structure.** Drawer handle strips are
+   filled with `ROLE_ACCENT[role]` directly on the cabinet body, violating "role
+   hues appear only as contents, never structure". Production: neutral `slate`
+   handles + the small tinted `accent_tab` overlay (a *label*, i.e. contents).
+2. **`props.ts` `makeDevDesk()` — dev baked into the desk.** Art direction specs
+   `dev` (16×20) and `desk` (32×24) as separate sprites so typing/lean/coffee can
+   animate; the placeholder fuses them into one static Graphics.
+3. **`sceneGraph.ts` — no corkboard.** `propForRole` maps `task`/`workflow` only to
+   `makeCrate()`; the wall corkboard variant from the inventory is absent (no walls
+   exist yet, acceptable for the prototype, but the sprite is still required).
+4. **`sceneGraph.ts` `buildGround()` — full-floor checkerboard.** Alternating
+   `woodMid`/`woodShadow` whole tiles is exactly the "chess" look the dither rule
+   forbids (checker is shadow-only). Production `floor_tile` uses one wood value
+   with plank-seam pixels + the second `floor_tile` plank variant scattered.
+5. **`sceneGraph.ts` — `glossary` role unmapped in art direction.** Scene renders
+   glossary as a bookshelf; the inventory table above now inherits that mapping
+   (glossary ⇒ bookshelf) — recorded here so it's a decision, not an accident.
+6. **`makeSideDesk()` was never in the sprite inventory** — added above as
+   `side_desk` 32×28.
+7. Missing entirely from the scene (needed for Phase 5 events): `calf`, `wall`,
+   `door`, `paper`, and the cow's `sit` cycle. Not deviations, but the sheets exist
+   in the plan so the mapper's spawn/door events have art on day one.
+8. Compliant, no change needed: `palette.ts` (byte-exact Barnlight-29),
+   `makeShadow()` (separate, dithered, ~40 % width), bubble truncation (24 chars,
+   Silkscreen — a sanctioned use), iso metrics and anchors, ≤4-frame/≤1.5 s
+   animation discipline in `cow.ts`/`sceneGraph.ts`.
+
 ## Follow-ups
 
 - `paper` and `bubble_*` micro-sprites (trivial grids, add to `gen_sprites.py`).

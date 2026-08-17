@@ -4,16 +4,19 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Trash2 } from "lucide-react";
+import { Sparkles, Trash2, X } from "lucide-react";
 import {
   NODE_ROLES,
+  serializeGraph,
   useGraphStore,
+  type AssembleStatus,
   type MemoryEdge,
   type MemoryNode,
   type NodeRole,
 } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
+import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
 
 // ── Small controls ────────────────────────────────────────────────────
@@ -46,9 +49,157 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+// ── Assemble section (Phase 3) ────────────────────────────────────────
+// Fire-and-forget enqueue: the invoke only rejects at enqueue time (unknown
+// node, already queued, bad root). Everything after that arrives through
+// "assemble://status" events → graph store → this badge + the canvas card.
+
+const STATUS_BADGE: Record<Exclude<AssembleStatus, "idle">, { label: string; cls: string }> = {
+  queued: { label: "queued", cls: "border-border bg-surface-2 text-content-secondary" },
+  running: { label: "assembling", cls: "border-accent-border bg-accent-surface text-accent-text" },
+  assembled: { label: "assembled", cls: "border-transparent bg-success-surface text-success-text" },
+  error: { label: "error", cls: "border-danger bg-danger-surface text-danger-text" },
+};
+
+function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
+  const status = useGraphStore((s) => s.assembleStatus[node.id] ?? "idle");
+  const jobError = useGraphStore((s) => s.assembleErrors[node.id] ?? null);
+  const setAssembleStatus = useGraphStore((s) => s.setAssembleStatus);
+  const [instruction, setInstruction] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const busy = status === "queued" || status === "running";
+
+  const run = (fn: (graphJson: string) => Promise<void>) => {
+    setActionError(null);
+    void (async () => {
+      // Disk and prompt must agree — same flush discipline as Compile.
+      await useGraphStore.getState().flushSave();
+      const s = useGraphStore.getState();
+      const graphJson = serializeGraph({
+        version: 1,
+        projectName: s.projectName,
+        nodes: s.nodes,
+        edges: s.edges,
+        compileTargets: s.compileTargets,
+      });
+      // Optimistic freeze BEFORE the invoke: Rust emits its own events from
+      // a concurrent task, and a fast-failing job can deliver its terminal
+      // status before the invoke promise settles — real events must always
+      // win over this optimistic mark, never be overwritten by it.
+      setAssembleStatus(node.id, "queued");
+      try {
+        await fn(graphJson);
+      } catch (e) {
+        // Enqueue rejected — roll back the optimistic mark unless a real
+        // event has already moved the status on.
+        if (useGraphStore.getState().assembleStatus[node.id] === "queued") {
+          setAssembleStatus(node.id, "idle");
+        }
+        throw e;
+      }
+    })().catch((e: unknown) => setActionError(String(e)));
+  };
+
+  const cancel = () => {
+    setActionError(null);
+    assembleCancel(node.id)
+      .then((removed) => {
+        if (removed) setAssembleStatus(node.id, "idle");
+      })
+      .catch((e: unknown) => setActionError(String(e)));
+  };
+
+  const secondaryBtn =
+    "flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2";
+
+  return (
+    <div className="border-t border-border-subtle pt-3">
+      <div className="mb-2 flex items-center gap-2">
+        <FieldLabel>Assemble</FieldLabel>
+        <div className="flex-1" />
+        {status !== "idle" && (
+          <span
+            className={`inline-flex h-[17px] items-center gap-1 rounded-sm border px-1 font-mono text-micro ${STATUS_BADGE[status].cls}`}
+          >
+            {status === "running" && (
+              <span className="h-[5px] w-[5px] animate-blink bg-accent" />
+            )}
+            {STATUS_BADGE[status].label}
+          </span>
+        )}
+        {status === "queued" && (
+          <button
+            onClick={cancel}
+            title="Remove from queue"
+            className="grid h-control-sm w-control-sm place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+          >
+            <X size={12} strokeWidth={1.5} />
+          </button>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => run((graphJson) => assembleNode(root, graphJson, node.id))}
+          disabled={busy}
+          title={
+            node.brief === ""
+              ? "Uses the title and neighbors — a brief makes it better"
+              : "Expand the brief into a full file via claude -p"
+          }
+          className="flex h-control items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
+        >
+          <Sparkles size={13} strokeWidth={1.5} />
+          Assemble
+        </button>
+        <button
+          onClick={() => run((graphJson) => summarizeNode(root, graphJson, node.id))}
+          disabled={busy}
+          title="Compress the current file content"
+          className={secondaryBtn}
+        >
+          Summarize
+        </button>
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          disabled={busy}
+          placeholder="Refine: e.g. add a testing section"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && instruction.trim() !== "" && !busy) {
+              run((graphJson) => refineNode(root, graphJson, node.id, instruction.trim()));
+            }
+          }}
+          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
+        />
+        <button
+          onClick={() =>
+            run((graphJson) => refineNode(root, graphJson, node.id, instruction.trim()))
+          }
+          disabled={busy || instruction.trim() === ""}
+          className={secondaryBtn}
+        >
+          Refine
+        </button>
+      </div>
+      <p className="mt-1.5 text-xs leading-snug text-content-muted">
+        Runs headless <span className="font-mono">claude -p</span> and rewrites{" "}
+        <span className="font-mono">{node.filePath}</span> on disk.
+      </p>
+      {(actionError !== null || jobError !== null) && (
+        <p className="mt-1.5 break-words font-mono text-xs text-danger-text">
+          {actionError ?? jobError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Properties tab ────────────────────────────────────────────────────
 
-function PropertiesTab({ node }: { node: MemoryNode }) {
+function PropertiesTab({ node, root }: { node: MemoryNode; root: string }) {
   const updateNode = useGraphStore((s) => s.updateNode);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
 
@@ -127,6 +278,8 @@ function PropertiesTab({ node }: { node: MemoryNode }) {
           {node.filePath}
         </div>
       </div>
+
+      <AssembleSection node={node} root={root} />
 
       <div className="mt-2 border-t border-border-subtle pt-3">
         <button
@@ -356,7 +509,7 @@ export function Inspector({ root }: { root: string }) {
             ))}
           </div>
           {tab === "properties" ? (
-            <PropertiesTab node={node} />
+            <PropertiesTab node={node} root={root} />
           ) : (
             <MarkdownTab node={node} root={root} />
           )}

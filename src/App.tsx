@@ -11,9 +11,41 @@ import {
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
 import { useGraphStore, type SaveState } from "./store/graph";
+import { initEventListener } from "./store/events";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { Inspector } from "./inspector/Inspector";
+import { EventLog } from "./inspector/EventLog";
 import { CompileModal } from "./compile/CompileModal";
+import { BarnScene } from "./scene/BarnScene";
+
+/** The two faces of an open project: the graph editor and the barn monitor. */
+type View = "canvas" | "barn";
+
+/** Canvas ⇄ Barn segmented control (DESIGN_SPEC: 2px padding frame on
+ *  surface-2, active segment surface-3, compact 24px segments). One click,
+ *  always visible while a project is open — no shortcut needed. */
+function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
+  const seg = (v: View, label: string) => (
+    <button
+      onClick={() => onChange(v)}
+      aria-pressed={view === v}
+      title={v === "canvas" ? "Edit the context graph" : "Watch the agent in the barn"}
+      className={`flex h-control-sm items-center rounded-sm px-3 text-sm transition-colors duration-fast ${
+        view === v
+          ? "bg-surface-3 font-medium text-content"
+          : "text-content-muted hover:text-content-secondary"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
+      {seg("canvas", "Canvas")}
+      {seg("barn", "Barn")}
+    </div>
+  );
+}
 
 /** 4×4 amber pixel mark with knocked-out cow spots — the only mascot moment in the chrome. */
 function PixelLogo() {
@@ -69,7 +101,15 @@ function SaveIndicator() {
   );
 }
 
-function TopBar({ onCompile }: { onCompile: () => void }) {
+function TopBar({
+  onCompile,
+  view,
+  onViewChange,
+}: {
+  onCompile: () => void;
+  view: View;
+  onViewChange: (v: View) => void;
+}) {
   const { root, openProject } = useProjectStore();
   const nodeCount = useGraphStore((s) => s.nodes.length);
   return (
@@ -88,6 +128,8 @@ function TopBar({ onCompile }: { onCompile: () => void }) {
           </span>
         </>
       )}
+      <div className="flex-1" />
+      {root !== null && <ViewToggle view={view} onChange={onViewChange} />}
       <div className="flex-1" />
       {root !== null && <SaveIndicator />}
       {root !== null && (
@@ -264,7 +306,7 @@ function FileRail() {
   );
 }
 
-function Workspace({ root }: { root: string }) {
+function Workspace({ root, view }: { root: string; view: View }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
 
@@ -284,14 +326,22 @@ function Workspace({ root }: { root: string }) {
             </p>
           </div>
         ) : loaded ? (
-          <GraphCanvas />
+          <>
+            {/* The canvas stays mounted (hidden) in Barn view so the React
+                Flow viewport survives toggling; the Pixi scene mounts on
+                demand and destroys itself cleanly on the way out. */}
+            <div className={view === "canvas" ? "h-full" : "hidden"}>
+              <GraphCanvas />
+            </div>
+            {view === "barn" && <BarnScene />}
+          </>
         ) : (
           <div className="flex h-full">
             <Scanning caption="the cow is reading" />
           </div>
         )}
       </main>
-      {loaded && loadError === null && <Inspector root={root} />}
+      {loaded && loadError === null && view === "canvas" && <Inspector root={root} />}
     </div>
   );
 }
@@ -300,11 +350,23 @@ export default function App() {
   const { root, scanning, error } = useProjectStore();
   const loadGraph = useGraphStore((s) => s.loadGraph);
   const [compileOpen, setCompileOpen] = useState(false);
+  const [view, setView] = useState<View>("canvas");
+
+  // A new project always opens on the canvas.
+  useEffect(() => {
+    setView("canvas");
+  }, [root]);
 
   // Project opened → load (or start) its graph.
   useEffect(() => {
     if (root !== null) void loadGraph(root);
   }, [root, loadGraph]);
+
+  // Wire barn://event + assemble://status once (idempotent — StrictMode-safe).
+  // The listeners live for the app's lifetime; no teardown on re-render.
+  useEffect(() => {
+    void initEventListener();
+  }, []);
 
   // Best-effort flush of a pending debounced save when the window goes away.
   useEffect(() => {
@@ -317,7 +379,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-surface-0">
-      <TopBar onCompile={() => setCompileOpen(true)} />
+      <TopBar onCompile={() => setCompileOpen(true)} view={view} onViewChange={setView} />
       {error !== null && (
         <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
           <span className="h-1.5 w-1.5 flex-none bg-danger" />
@@ -334,7 +396,10 @@ export default function App() {
           <EmptyState />
         )
       ) : (
-        <Workspace root={root} />
+        <>
+          <Workspace root={root} view={view} />
+          <EventLog root={root} />
+        </>
       )}
       {compileOpen && root !== null && (
         <CompileModal root={root} onClose={() => setCompileOpen(false)} />
