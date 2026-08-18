@@ -63,7 +63,12 @@
    connection drag is live. A transparent ::after keeps a generous
    pointer/connection hit area without growing the visible mark. */
 .react-flow__handle.ct-port {
-  position: relative;
+  /* Explicit absolute + side-center placement: the input sits mid-height on
+     the LEFT edge, the output mid-height on the RIGHT edge, regardless of
+     card height and of @xyflow's own handle defaults. */
+  position: absolute;
+  top: 50%;
+  transform: translate(0, -50%);
   width: 10px;
   height: 22px;
   border: none;

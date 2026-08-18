@@ -45,3 +45,21 @@ export const useInspectorTabStore = create<InspectorTabState>((set) => ({
   requestRename: () => set({ tab: "properties", renamePending: true }),
   consumeRename: () => set({ renamePending: false }),
 }));
+
+// Transient hover highlight — set while the pointer rests on a row in the
+// Inspector's Relations grid (one neighbour + one edge) or on a file-rail
+// row (the node plus its whole neighbourhood); canvas cards and edges echo
+// it with an accent ring/stroke. UI-only, never persisted.
+interface HighlightState {
+  nodeIds: string[];
+  edgeIds: string[];
+  setHighlight: (nodeIds: string[], edgeIds: string[]) => void;
+  clearHighlight: () => void;
+}
+
+export const useHighlightStore = create<HighlightState>((set) => ({
+  nodeIds: [],
+  edgeIds: [],
+  setHighlight: (nodeIds, edgeIds) => set({ nodeIds, edgeIds }),
+  clearHighlight: () => set({ nodeIds: [], edgeIds: [] }),
+}));

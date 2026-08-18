@@ -1,4 +1,4 @@
-import { useEffect, useState, Suspense, lazy } from "react";
+import { useEffect, useRef, useState, Suspense, lazy } from "react";
 import {
   Copy,
   FileOutput,
@@ -17,7 +17,7 @@ import {
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
 import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
-import { useInspectorTabStore } from "./canvas/types";
+import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
@@ -439,6 +439,36 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
   const setSelection = useGraphStore((s) => s.setSelection);
   const rescan = useProjectStore((s) => s.rescan);
   const contextMenu = useContextMenu();
+  // Selection sync: the rail row, the canvas card and the Inspector always
+  // point at the same node — the row of the selected node is tinted and
+  // kept in view.
+  const isSelected = useGraphStore(
+    (s) => node !== undefined && s.selectedNodeIds.includes(node.id),
+  );
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (isSelected) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [isSelected]);
+
+  // Hovering a mapped row lights up the node AND its whole neighbourhood
+  // (touching edges + the nodes on their far ends) on the canvas. Computed
+  // at hover time from a snapshot — no extra store subscription per row.
+  const hoverHighlight = () => {
+    if (node === undefined) return;
+    const touching = useGraphStore
+      .getState()
+      .edges.filter((e) => e.source === node.id || e.target === node.id);
+    useHighlightStore
+      .getState()
+      .setHighlight(
+        [node.id, ...touching.map((e) => (e.source === node.id ? e.target : e.source))],
+        touching.map((e) => e.id),
+      );
+  };
+  const clearHighlight = () => useHighlightStore.getState().clearHighlight();
+  // Rows unmount wholesale on rescan/file removal — drop any highlight left
+  // behind (mouseleave never fires on a removed element).
+  useEffect(() => clearHighlight, []);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op."
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -509,11 +539,18 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
   return (
     <li className="group flex flex-col" onContextMenu={openMenu}>
       <div
-        className="flex h-row cursor-default items-center gap-2 px-3 hover:bg-[var(--surface-hover)]"
+        ref={rowRef}
+        className={`flex h-row cursor-default items-center gap-2 px-3 ${
+          isSelected
+            ? "bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
+            : "hover:bg-[var(--surface-hover)]"
+        }`}
         title={file.relPath}
         onClick={() => {
           if (node !== undefined) setSelection([node.id], []);
         }}
+        onMouseEnter={hoverHighlight}
+        onMouseLeave={clearHighlight}
       >
         {node !== undefined ? (
           <span
@@ -524,7 +561,11 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
         ) : (
           <FileText size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary [direction:rtl] [text-align:left]">
+        <span
+          className={`min-w-0 flex-1 truncate font-mono text-xs [direction:rtl] [text-align:left] ${
+            isSelected ? "text-accent-text" : "text-content-secondary"
+          }`}
+        >
           {file.relPath}
         </span>
         <span className="flex-none font-mono text-2xs text-content-disabled group-hover:hidden">

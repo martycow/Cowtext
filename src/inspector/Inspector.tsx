@@ -6,6 +6,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import {
+  EDGE_KINDS,
   NODE_ROLES,
   isRenameProtected,
   serializeGraph,
@@ -18,7 +19,7 @@ import {
 import { useProjectStore } from "../store/project";
 import { useSettingsStore } from "../store/settings";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
-import { useInspectorTabStore } from "../canvas/types";
+import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
 import { ROLE_DESCRIPTIONS } from "../canvas/roleMeta";
 import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
@@ -541,35 +542,87 @@ function FileField({
 }
 
 /** Relations grid — every edge touching this node, one row each: direction,
- *  kind (click selects the edge), the other node (click selects it). */
+ *  kind (click selects the edge), the other node (click selects it).
+ *  Sortable by port (inputs then outputs), by the other node's name, or by
+ *  connection kind. */
+type RelationsSort = "port" | "name" | "kind";
+
 function RelationsSection({ node }: { node: MemoryNode }) {
   const edges = useGraphStore((s) => s.edges);
   const nodes = useGraphStore((s) => s.nodes);
   const setSelection = useGraphStore((s) => s.setSelection);
-  const related = edges.filter((e) => e.source === node.id || e.target === node.id);
+  const setHighlight = useHighlightStore((s) => s.setHighlight);
+  const [sort, setSort] = useState<RelationsSort>("port");
+
+  // Never leave a stale highlight behind when the grid goes away (node
+  // switch, tab switch, deselection) — mouseleave won't fire then.
+  useEffect(() => () => useHighlightStore.getState().clearHighlight(), []);
+
+  const rows = edges
+    .filter((e) => e.source === node.id || e.target === node.id)
+    .map((e) => {
+      const out = e.source === node.id;
+      const otherId = out ? e.target : e.source;
+      return { e, out, otherId, other: nodes.find((n) => n.id === otherId) };
+    });
+  const name = (r: (typeof rows)[number]): string => r.other?.title ?? "";
+  rows.sort((a, b) => {
+    if (sort === "port" && a.out !== b.out) return Number(a.out) - Number(b.out);
+    if (sort === "kind" && a.e.kind !== b.e.kind) {
+      return EDGE_KINDS.indexOf(a.e.kind) - EDGE_KINDS.indexOf(b.e.kind);
+    }
+    return name(a).localeCompare(name(b));
+  });
 
   return (
     <div>
-      <FieldLabel>Relations</FieldLabel>
-      {related.length === 0 ? (
+      <div className="mb-1 flex items-center gap-1">
+        <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
+          Relations
+        </span>
+        <div className="flex-1" />
+        {rows.length > 1 &&
+          (["port", "name", "kind"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setSort(k)}
+              title={
+                k === "port" ? "Inputs first, then outputs" : k === "name" ? "By node name" : "By connection kind"
+              }
+              className={`h-[18px] rounded-sm border px-1.5 font-mono text-micro transition-colors duration-fast ${
+                sort === k
+                  ? "border-accent-border bg-accent-surface text-accent-text"
+                  : "border-border text-content-muted hover:border-border-strong hover:text-content-secondary"
+              }`}
+            >
+              {k}
+            </button>
+          ))}
+      </div>
+      {rows.length === 0 ? (
         <p className="text-xs leading-snug text-content-muted">
           No relations yet — drag from a port on the canvas.
         </p>
       ) : (
         <div className="grid grid-cols-[auto_auto_1fr] items-center gap-x-2 gap-y-1 rounded border border-border-subtle bg-surface-inset px-2 py-1.5">
-          {related.map((e) => {
-            const out = e.source === node.id;
-            const otherId = out ? e.target : e.source;
-            const other = nodes.find((n) => n.id === otherId);
+          {rows.map(({ e, out, otherId, other }) => {
+            // Hover anywhere on the row → echo the neighbour + edge on the
+            // canvas. Handlers sit on every cell (the grid has no row element).
+            const hover = {
+              onMouseEnter: () => setHighlight([otherId], [e.id]),
+              onMouseLeave: () => useHighlightStore.getState().clearHighlight(),
+            };
             return (
               <Fragment key={e.id}>
                 <span
+                  {...hover}
                   title={out ? "outgoing" : "incoming"}
                   className={`font-mono text-xs ${out ? "text-content" : "text-content-muted"}`}
                 >
                   {out ? "→" : "←"}
                 </span>
                 <button
+                  {...hover}
                   onClick={() => setSelection([], [e.id])}
                   title="Select edge"
                   className="rounded-sm border border-border px-1 py-px text-left font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-border-strong hover:text-content"
@@ -577,6 +630,7 @@ function RelationsSection({ node }: { node: MemoryNode }) {
                   {e.kind}
                 </button>
                 <button
+                  {...hover}
                   onClick={() => setSelection([otherId], [])}
                   title={other?.filePath}
                   className="truncate text-left text-sm text-content transition-colors duration-fast hover:text-accent-text hover:underline"
@@ -888,23 +942,40 @@ function InspectorHeader({
   };
 
   return (
-    <div
-      onContextMenu={openHeaderMenu}
-      className="flex h-[30px] flex-none items-end gap-4 border-b border-border-subtle px-3"
-    >
-      {(["properties", "markdown"] as const).map((t) => (
-        <button
-          key={t}
-          onClick={() => setTab(t)}
-          className={`-mb-px border-b-2 pb-1 text-sm capitalize transition-colors duration-fast ${
-            tab === t
-              ? "border-accent font-medium text-content"
-              : "border-transparent text-content-muted hover:text-content-secondary"
-          }`}
-        >
-          {t}
-        </button>
-      ))}
+    <div onContextMenu={openHeaderMenu} className="flex-none">
+      {/* Identity bar — always shows WHICH node the Inspector is editing,
+          in the same highlight language as the file rail's selected row
+          (accent surface + inset accent bar): glyph in role colour, bold
+          title, mini read-order badge. */}
+      <div
+        className="flex h-[30px] items-center gap-2 border-b border-border-subtle bg-accent-surface px-3 shadow-[inset_2px_0_0_var(--accent)]"
+        title={node.title}
+      >
+        <span className="flex-none" style={{ color: roleVar(node.role) }}>
+          <RoleGlyph role={node.role} size={12} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-content">
+          {node.title}
+        </span>
+        <span className="flex h-[18px] min-w-[18px] flex-none items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1 font-mono text-xs font-bold tabular-nums text-content">
+          {node.readOrder}
+        </span>
+      </div>
+      <div className="flex h-[30px] items-end gap-4 border-b border-border-subtle px-3">
+        {(["properties", "markdown"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`-mb-px border-b-2 pb-1 text-sm capitalize transition-colors duration-fast ${
+              tab === t
+                ? "border-accent font-medium text-content"
+                : "border-transparent text-content-muted hover:text-content-secondary"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
       {headerMenu.menu !== null && (
         <ContextMenu
           x={headerMenu.menu.x}

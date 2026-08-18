@@ -29,7 +29,7 @@ import { lastLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
 import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
-import { useInspectorTabStore, type CanvasNode } from "./types";
+import { useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
@@ -84,11 +84,16 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const stripe =
     live ? "var(--amber)" : assembleStatus === "error" ? "var(--danger)" : role;
 
+  // Hover-highlight echo from the Inspector's Relations grid: a softer
+  // accent ring than real selection, so the two states stay tellable.
+  const highlighted = useHighlightStore((s) => s.nodeIds.includes(node.id));
   const ring = selected
     ? "0 0 0 2px var(--accent), 0 4px 14px rgba(0,0,0,.45)"
-    : flash
-      ? "0 0 0 2px var(--success), var(--elev-1)"
-      : "var(--elev-1)";
+    : highlighted
+      ? "0 0 0 2px var(--accent-border), var(--elev-1)"
+      : flash
+        ? "0 0 0 2px var(--success), var(--elev-1)"
+        : "var(--elev-1)";
   const boxShadow = live ? `${ring}, var(--glow-live)` : ring;
 
   // Fire-and-forget enqueue, mirroring Inspector's AssembleSection — the
@@ -231,7 +236,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       className={`ct-node group relative w-node rounded border bg-surface-2 transition-colors duration-fast ${
         selected ? "border-transparent" : "border-border hover:border-border-strong"
       }`}
-      style={{ minHeight: 97, boxShadow }}
+      style={{ minHeight: 80, boxShadow }}
     >
       {/* Live-read pulse ring — 2px amber, inset −4px, scale+fade loop */}
       {live && (
@@ -247,8 +252,16 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         style={{ background: stripe }}
       />
 
-      <div className="flex flex-col gap-1 py-2 pl-3 pr-2">
-        {/* 2/3/4 — glyph + role label · live square · pin · read-order badge */}
+      {/* Read-order badge — a corner marker overhanging the top-right edge
+          so it is CLEARLY visible at any zoom without inflating the card:
+          30px, bold xl numerals, strong border; grows for 2-3 digits. */}
+      <span className="absolute -right-2 -top-2 z-10 flex h-[30px] min-w-[30px] items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1.5 font-mono text-xl font-bold tabular-nums text-content shadow-card">
+        {node.readOrder}
+      </span>
+
+      <div className="flex flex-col gap-1 py-1.5 pl-3 pr-2">
+        {/* 2/3 — glyph + role label · live square · pin (read-order badge
+            moved to the top-right corner marker above) */}
         <div className="flex items-center gap-1.5">
           <span style={{ color: role }}>
             <RoleGlyph role={node.role} />
@@ -270,11 +283,6 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           {node.pinned && (
             <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />
           )}
-          {/* Read-order badge — must be CLEARLY visible at a glance: 26px,
-              bold base-size numerals, strong border; grows for 2-3 digits. */}
-          <span className="flex h-[26px] min-w-[26px] flex-none items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1.5 font-mono text-base font-bold tabular-nums text-content">
-            {node.readOrder}
-          </span>
         </div>
 
         {/* 5 — title: single line, never wraps */}

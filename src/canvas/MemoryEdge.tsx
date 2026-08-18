@@ -13,7 +13,7 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import { routeEdge } from "./edgePath";
-import type { CanvasEdge } from "./types";
+import { useHighlightStore, type CanvasEdge } from "./types";
 
 const STROKE: Record<EdgeKind, { width: number; dash?: string }> = {
   imports: { width: 1.75 },
@@ -107,7 +107,9 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
   const setSelection = useGraphStore((s) => s.setSelection);
   const contextMenu = useContextMenu();
   const { path, labelX, labelY } = routeEdge(sourceX, sourceY, targetX, targetY);
-  const isSelected = selected === true;
+  // Hover-highlight echo from the Relations grid renders like selection.
+  const highlighted = useHighlightStore((s) => s.edgeIds.includes(id));
+  const isSelected = selected === true || highlighted;
   const colour = isSelected ? "var(--edge-selected)" : `var(--edge-${kind})`;
   const stroke = STROKE[kind];
 
