@@ -197,12 +197,109 @@ it).
 28. Press **Compile** (top bar). *Expected:* the modal still opens and behaves exactly as in
     the Phase 2 manual — lens styling is canvas-only and never touches Compile.
 
-## Cleanup
+## Block B — Token budget
 
-29. Close the app and delete the scratch project:
+Extends WO01 Block B / T3 (`docs/INPUT_PROMPT.md`): per-file token/line chips in the
+Compile modal, a per-target budget bar, the amber warn flip on an oversized root file, and
+the canvas node badge staying live off both a Save and an external edit. Written against the
+code as of 2026-08-18 (`src/store/tokens.ts`, `src/compile/CompileModal.tsx`,
+`src/canvas/MemoryNodeCard.tsx`). Uses two new throwaway projects — `C:\_cowlens` from
+section A is left alone (its `old-notes` node has a stale `filePath` after the C3 rename, so
+Compile on that project now fails validation with a "missing file" error; don't reuse it here).
+
+29. Close the Compile modal left open from step 28 (**Cancel**). Make a small scratch project
+    and open it:
 
     ```powershell
-    Remove-Item -Recurse -Force C:\_cowlens
+    mkdir C:\_cowsmall
+    Set-Content C:\_cowsmall\alpha.md "# Alpha`n`nFirst budget-test node."
+    Set-Content C:\_cowsmall\beta.md "# Beta`n`nSecond budget-test node."
+    ```
+
+    Press **Open folder** and pick `C:\_cowsmall`. *Expected:* the file rail reads
+    **`2 markdown files`**, canvas is empty.
+30. Adopt both files (`+ adopt` on each rail row), then drag a **references** edge from
+    `alpha` to `beta` (same idiom as B6/step 26). *Expected:* two node cards, one dashed
+    references edge `alpha → beta`.
+31. Press **Compile**. Targets default to `claude` only. *Expected:* one `FileSection` row,
+    `CLAUDE.md`, with a mono chip between the path and the target `Badge` reading
+    **`≈45 tok · 7 lines`**. Below the target-toggle row, a new **budget** row shows one item:
+    label `claude`, a short near-empty accent-blue fill (`≈45` is 2% of the 2000-token warn
+    scale), and the number `≈45` in the default muted-secondary color — no amber anywhere.
+32. Click the **agents** target chip too (leave `claude` on). *Expected:* brief pixel-march
+    reload, then **two** `FileSection` rows — `CLAUDE.md` (still `≈45 tok · 7 lines`) and
+    `AGENTS.md` (`≈47 tok · 7 lines`) — and the budget row now shows **two** items,
+    `claude ≈45` and `agents ≈47`, both still accent-blue (neither target's root crosses
+    either warn threshold).
+33. Close the modal (**Cancel**). Select the `alpha` node, open the inspector's Markdown tab.
+    *Expected:* the card's footer chip (bottom-left, e.g. `8 tok`) reads a small number.
+    Append five or six lines of filler text in the editor and press **Save** (or Ctrl+S).
+    *Expected:* the footer chip's number increases immediately after the save completes — no
+    manual refresh, no full rescan spinner — confirming `write_md_file` → `rescan()` still
+    updates `sizeBytes` and the card reads it reactively.
+34. Touch `alpha.md` from **outside** the app (grow it further, well past the last save):
+
+    ```powershell
+    Add-Content C:\_cowsmall\alpha.md ("`n" + ("More filler content for the watcher check. " * 10))
+    ```
+
+    **Do nothing in the app.** *Expected, within ≤ 1 s:* the `alpha` card's footer chip
+    increases again to reflect the new file size, via the `fs://change` watcher path (same
+    idiom as B3) — still no rescan spinner.
+35. Build a project whose `CLAUDE.md` output alone crosses the 150-line warn threshold. The
+    root only contains one `@path` bullet per **references**/**conditional** edge (not
+    per-node, not the file's own content), so hitting 150+ lines through node-by-node
+    adoption would mean ~150 individual `+ adopt` clicks — script it instead, writing
+    `.cowtext/graph.json` directly (one hub node, 160 children, 160 references edges):
+
+    ```powershell
+    mkdir C:\_cowbudget
+    1..160 | ForEach-Object { Set-Content "C:\_cowbudget\child$_.md" "# Child $_" }
+    Set-Content C:\_cowbudget\hub.md "# Hub"
+    mkdir C:\_cowbudget\.cowtext
+    $children = 1..160 | ForEach-Object {
+      [ordered]@{
+        id = "child$_"; title = "Child $_"; role = "reference"; brief = ""
+        filePath = "child$_.md"; readOrder = $_; pinned = $false
+        position = @{ x = ($_ * 24); y = 200 }
+      }
+    }
+    $hub = [ordered]@{
+      id = "hub"; title = "Hub"; role = "reference"; brief = ""
+      filePath = "hub.md"; readOrder = 0; pinned = $false
+      position = @{ x = 0; y = 0 }
+    }
+    $edges = 1..160 | ForEach-Object {
+      [ordered]@{ id = "e$_"; source = "hub"; target = "child$_"; kind = "references" }
+    }
+    $graph = [ordered]@{
+      version = 2
+      projectName = ""
+      nodes = @($hub) + $children
+      edges = $edges
+      compileTargets = @("claude")
+    }
+    $graph | ConvertTo-Json -Depth 8 | Set-Content -Encoding ascii C:\_cowbudget\.cowtext\graph.json
+    ```
+
+    Press **Open folder** and pick `C:\_cowbudget`. *Expected:* the graph loads straight from
+    the pre-built `graph.json` (no adopting needed) — 161 nodes appear on the canvas.
+    Press **Compile**. *Expected:* the `CLAUDE.md` row's chip reads **`≈1.8k tok · 166
+    lines`**; the `claude` budget bar's fill turns amber (`bg-amber`, ~92% of the track —
+    the fill width is only ever the token/2000 ratio, 1847/2000, it does **not** jump to
+    100% just because the *line* threshold is what tripped the warn), and the number `≈1.8k`
+    renders in amber text. Hover the `claude` budget item. *Expected:* a tooltip reading
+    exactly **`CLAUDE.md: 166 lines (over 150)`** — the token count (1847) stays under the
+    2000 warn threshold, so this is specifically the *line*-threshold branch, not the token
+    one; the fill-width/color split (width = token ratio always, color = either threshold)
+    is worth double-checking here since it's an easy spot for a future regression.
+
+## Cleanup
+
+36. Close the app and delete all three scratch projects:
+
+    ```powershell
+    Remove-Item -Recurse -Force C:\_cowlens, C:\_cowsmall, C:\_cowbudget
     ```
 
 ## Sign-off
@@ -213,5 +310,6 @@ it).
 | B Happy path | | |
 | C Validation | | |
 | D Regression | | |
+| Block B Token budget | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________

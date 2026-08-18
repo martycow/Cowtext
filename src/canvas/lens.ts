@@ -28,9 +28,13 @@ export function activityEmphasis(nowMs: number, modifiedMs: number | null): numb
   return clamp01(1 - age / ACTIVITY_WINDOW_MS);
 }
 
-/** Block A placeholder: bytes/4 over all scanned .md. Real token semantics
- *  (per-node count, compiled totals, thresholds) arrive with Block B — see
- *  docs/INPUT_PROMPT.md T3. */
+/** Weight lens semantics (Block B / T3, docs/INPUT_PROMPT.md): a node's
+ *  emphasis is its token estimate relative to the heaviest scanned .md in
+ *  the project — still bytes/4 (`tokensForBytes` in store/tokens.ts) since
+ *  the lens only needs a relative ranking, not an exact count. The compiled
+ *  totals and COMPILE_WARN_LINES/COMPILE_WARN_TOKENS thresholds live in
+ *  store/tokens.ts and are surfaced in the compile modal, not here — this
+ *  lens colors the canvas, it doesn't gate a compile. */
 export function weightEmphasis(sizeBytes: number | undefined, maxBytes: number): number {
   if (sizeBytes === undefined) return 0;
   return maxBytes > 0 ? sizeBytes / maxBytes : 0;

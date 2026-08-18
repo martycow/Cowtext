@@ -19,6 +19,29 @@ export function formatTokenCount(tokens: number): string {
   return `${(tokens / 1000).toFixed(1)}k`;
 }
 
+// Compile-modal budget thresholds (Work Order 01 Block B / T3). A target's
+// root file (CLAUDE.md / AGENTS.md) tripping either one flips its total bar
+// to the warning treatment — static amber, per the token law (amber = the
+// agent/warning channel, never mixed with the user-initiated accent blue).
+export const COMPILE_WARN_LINES = 150;
+export const COMPILE_WARN_TOKENS = 2000;
+
+/** Same chars/4-via-bytes heuristic as `tokensForBytes`, applied to a string
+ *  already in memory (a compile preview's `newContent`) rather than an
+ *  on-disk size. UTF-8 byte length, not UTF-16 code units, so it agrees with
+ *  the Rust-side byte counts used elsewhere. */
+export function compiledTokens(content: string): number {
+  return tokensForBytes(new TextEncoder().encode(content).length);
+}
+
+/** Text line count (à la `wc -l`): counts newlines, plus one more if the
+ *  content doesn't end with a trailing newline. Empty string is 0 lines. */
+export function lineCount(content: string): number {
+  if (content === "") return 0;
+  const newlines = (content.match(/\n/g) ?? []).length;
+  return content.endsWith("\n") ? newlines : newlines + 1;
+}
+
 /** Pinned-set estimate: pinned nodes' file sizes. The effective-pinned
  *  closure (transitive imports) arrives with Work Order Block B. */
 export function pinnedContextTokens(

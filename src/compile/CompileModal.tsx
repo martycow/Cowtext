@@ -8,6 +8,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { GRAPH_VERSION, serializeGraph, useGraphStore, type CompileTarget } from "../store/graph";
 import { useProjectStore } from "../store/project";
+import {
+  COMPILE_WARN_LINES,
+  COMPILE_WARN_TOKENS,
+  compiledTokens,
+  formatTokenCount,
+  lineCount,
+} from "../store/tokens";
 import { compilePreview, compileWrite } from "./api";
 import { play as sfxPlay } from "../scene/sfx";
 import { diffLines, type DiffHunk } from "./diff";
@@ -16,6 +23,26 @@ import type { CompilePreview, PreviewFile, ValidationError } from "./types";
 type Phase = "loading" | "errors" | "preview" | "writing" | "done" | "failed";
 
 const ALL_TARGETS: readonly CompileTarget[] = ["claude", "agents", "cursor"];
+
+/** The single top-level file each adapter treats as "the" budget gate.
+ *  Cursor has no analogous root — its output is a set of `.mdc` rule files —
+ *  so it never warns, only totals. */
+const ROOT_FILE: Partial<Record<CompileTarget, string>> = {
+  claude: "CLAUDE.md",
+  agents: "AGENTS.md",
+};
+
+interface TargetBudget {
+  target: CompileTarget | "agent";
+  totalTokens: number;
+  warn: boolean;
+  warnReason: string | null;
+  /** Which threshold tripped `warn` — the fill width always reflects the
+   *  token ratio (T3: total tokens for the target), but color/warn can flip
+   *  on a *line*-count breach instead. Surfaced as a short inline label so
+   *  the two channels never get silently read as the same metric. */
+  warnKind: "lines" | "tokens" | null;
+}
 
 // ── Small pieces ──────────────────────────────────────────────────────
 
@@ -84,6 +111,36 @@ function ApproveCheckbox({
     >
       {checked && <Check size={11} strokeWidth={3} className="text-content-inverse" />}
     </button>
+  );
+}
+
+/** One target's budget: slim track (surface-3) + accent fill scaled against
+ *  COMPILE_WARN_TOKENS (clamped at 100%), number beside it. Warn flips both
+ *  to amber — static amber = warning, never mixed with the blue user accent.
+ *  The fill width always reads the *token* ratio; when `warn` was tripped by
+ *  the *line* count instead (root file long but not token-heavy), the width
+ *  and the color would otherwise imply different things. A short "lines"
+ *  tag disambiguates without needing to change what the fill measures. */
+function BudgetBar({ target, totalTokens, warn, warnReason, warnKind }: TargetBudget) {
+  const pct = Math.min(1, totalTokens / COMPILE_WARN_TOKENS) * 100;
+  return (
+    <div className="flex items-center gap-1.5" title={warn ? (warnReason ?? undefined) : undefined}>
+      <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">{target}</span>
+      <div className="h-1.5 w-16 flex-none overflow-hidden rounded-pill bg-surface-3">
+        <div
+          className={`h-full rounded-pill ${warn ? "bg-amber" : "bg-accent"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span
+        className={`flex-none font-mono text-2xs ${warn ? "text-amber-text" : "text-content-secondary"}`}
+      >
+        {`≈${formatTokenCount(totalTokens)}`}
+        {warn && warnKind === "lines" && (
+          <span className="ml-1 uppercase tracking-wide text-content-muted">(lines)</span>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -190,6 +247,8 @@ function FileSection({
   onToggleApproved,
   onToggleCollapsed,
 }: FileSectionProps) {
+  const tok = compiledTokens(file.newContent);
+  const ln = lineCount(file.newContent);
   return (
     <section className="border-b border-border-subtle">
       <div
@@ -204,6 +263,12 @@ function FileSection({
         />
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-content" title={file.relPath}>
           {file.relPath}
+        </span>
+        <span
+          className="flex-none whitespace-nowrap rounded-sm border border-border bg-surface-2 px-1 font-mono text-micro text-content-muted"
+          title={`≈${tok} tokens · ${ln} lines`}
+        >
+          {`≈${formatTokenCount(tok)} tok · ${ln} ${ln === 1 ? "line" : "lines"}`}
         </span>
         <Badge label={file.target} />
         {file.oldContent === null ? (
@@ -271,6 +336,11 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
     let live = true;
     setPhase("loading");
     setErrText(null);
+    // Drop the previous target set's preview immediately — otherwise the
+    // budget row (gated on `phase !== "done"`, not on `phase === "preview"`)
+    // would keep showing stale totals from before the toggle while the body
+    // already shows the loading state.
+    setPreview(null);
     (async () => {
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
@@ -334,6 +404,50 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
       map.set(f.relPath, { hunks, adds, dels });
     }
     return map;
+  }, [files]);
+
+  // Per-target totals: every file that adapter produced, changed or not —
+  // this is "the total for the compiled output per target" (T3), the true
+  // current size of what a target reads into context, not just today's
+  // delta. That's deliberate: a root file that's already oversized should
+  // keep warning even on a run that happens not to touch it.
+  //
+  // `TARGET_ROW_ORDER` covers the three selectable adapters plus "agent" —
+  // per-node managed context blocks inside .claude/agents/*.md, emitted
+  // independently of `compileTargets` (compile.rs PreviewFile.target).
+  // "agent" isn't a toggle-able target (ALL_TARGETS stays claude/agents/
+  // cursor for the chips above), but its files still carry real token
+  // weight and already get a per-file chip in the list below — folding them
+  // into their own budget row keeps that weight visible instead of silently
+  // dropping it from every total on screen.
+  const targetBudgets = useMemo<TargetBudget[]>(() => {
+    const TARGET_ROW_ORDER: readonly (CompileTarget | "agent")[] = [...ALL_TARGETS, "agent"];
+    const out: TargetBudget[] = [];
+    for (const t of TARGET_ROW_ORDER) {
+      const targetFiles = files.filter((f) => f.target === t);
+      if (targetFiles.length === 0) continue;
+      const totalTokens = targetFiles.reduce((sum, f) => sum + compiledTokens(f.newContent), 0);
+      const rootName = t === "agent" ? undefined : ROOT_FILE[t];
+      const root = rootName !== undefined ? targetFiles.find((f) => f.relPath === rootName) : undefined;
+      let warn = false;
+      let warnReason: string | null = null;
+      let warnKind: "lines" | "tokens" | null = null;
+      if (root !== undefined) {
+        const rootLines = lineCount(root.newContent);
+        const rootTokens = compiledTokens(root.newContent);
+        if (rootLines > COMPILE_WARN_LINES) {
+          warn = true;
+          warnKind = "lines";
+          warnReason = `${rootName}: ${rootLines} lines (over ${COMPILE_WARN_LINES})`;
+        } else if (rootTokens > COMPILE_WARN_TOKENS) {
+          warn = true;
+          warnKind = "tokens";
+          warnReason = `${rootName}: ≈${formatTokenCount(rootTokens)} tokens (over ${formatTokenCount(COMPILE_WARN_TOKENS)})`;
+        }
+      }
+      out.push({ target: t, totalTokens, warn, warnReason, warnKind });
+    }
+    return out;
   }, [files]);
 
   const approvedFiles = files.filter((f) => approved[f.relPath] === true);
@@ -438,6 +552,19 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Budget — one bar per target producing files, sum of that
+            target's newContent tokens against COMPILE_WARN_TOKENS */}
+        {phase !== "done" && targetBudgets.length > 0 && (
+          <div className="flex h-[28px] flex-none items-center gap-4 border-b border-border-subtle px-4">
+            <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
+              budget
+            </span>
+            {targetBudgets.map((b) => (
+              <BudgetBar key={b.target} {...b} />
+            ))}
           </div>
         )}
 
