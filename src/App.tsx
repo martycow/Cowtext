@@ -7,6 +7,7 @@ import {
   Package,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   RefreshCw,
   Send,
@@ -15,7 +16,8 @@ import {
 } from "lucide-react";
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
-import { useGraphStore, type SaveState } from "./store/graph";
+import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
+import { useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
@@ -442,6 +444,7 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
   const [revealError, setRevealError] = useState<string | null>(null);
 
   const openMenu = (e: React.MouseEvent) => {
+    const protectedFile = isRenameProtected(file.relPath);
     const items: MenuItem[] = [
       node !== undefined
         ? {
@@ -458,6 +461,22 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
             icon: Plus,
             onSelect: () => adoptFile(file.relPath),
           },
+      ...(node !== undefined
+        ? ([
+            {
+              kind: "item",
+              id: "rename",
+              label: "Rename file…",
+              icon: Pencil,
+              disabled: protectedFile,
+              hint: protectedFile ? "generated file — not renameable" : undefined,
+              onSelect: () => {
+                setSelection([node.id], []);
+                useInspectorTabStore.getState().requestRename();
+              },
+            },
+          ] satisfies MenuItem[])
+        : []),
       {
         kind: "item",
         id: "reveal",

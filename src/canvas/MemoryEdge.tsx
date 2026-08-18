@@ -6,12 +6,13 @@
 //   sequence     1.5px solid, open chevron + numbered step dot
 
 import { memo } from "react";
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, type EdgeProps } from "@xyflow/react";
 import { Edit3, Trash2 } from "lucide-react";
 import { EDGE_KINDS, useGraphStore, type EdgeKind } from "../store/graph";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
+import { routeEdge } from "./edgePath";
 import type { CanvasEdge } from "./types";
 
 const STROKE: Record<EdgeKind, { width: number; dash?: string }> = {
@@ -98,37 +99,14 @@ export function EdgeMarkerDefs() {
   );
 }
 
-/** Curvature for getBezierPath (contract §7.11.3): ~0.28 for a normal
- *  left-to-right run, rising toward 0.6 when the target sits behind the
- *  source or the vertical delta dominates — so the curve bulges out and
- *  around a card instead of folding back through it. */
-function computeCurvature(sourceX: number, sourceY: number, targetX: number, targetY: number): number {
-  const dx = targetX - sourceX;
-  const dy = targetY - sourceY;
-  const dist = Math.hypot(dx, dy) || 1;
-  const behind = dx < 0 ? 1 : 0;
-  const verticalDominant = Math.min(1, Math.abs(dy) / dist);
-  const t = Math.max(behind, verticalDominant);
-  return 0.28 + t * (0.6 - 0.28);
-}
-
 function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
-  const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected } =
-    props;
+  const { id, sourceX, sourceY, targetX, targetY, selected } = props;
   const kind: EdgeKind = props.data?.kind ?? "references";
   const updateEdge = useGraphStore((s) => s.updateEdge);
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const setSelection = useGraphStore((s) => s.setSelection);
   const contextMenu = useContextMenu();
-  const [path, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    curvature: computeCurvature(sourceX, sourceY, targetX, targetY),
-  });
+  const { path, labelX, labelY } = routeEdge(sourceX, sourceY, targetX, targetY);
   const isSelected = selected === true;
   const colour = isSelected ? "var(--edge-selected)" : `var(--edge-${kind})`;
   const stroke = STROKE[kind];

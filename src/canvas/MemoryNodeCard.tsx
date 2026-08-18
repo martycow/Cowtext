@@ -49,6 +49,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
   const setSelection = useGraphStore((s) => s.setSelection);
   const setInspectorTab = useInspectorTabStore((s) => s.setTab);
+  const requestRename = useInspectorTabStore((s) => s.requestRename);
   const role = roleVar(node.role);
   const contextMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
@@ -158,7 +159,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         hint: protectedFile ? "generated file — not renameable" : undefined,
         onSelect: () => {
           setSelection([node.id], []);
-          setInspectorTab("properties");
+          requestRename();
         },
       },
       {
@@ -269,9 +270,9 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           {node.pinned && (
             <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />
           )}
-          {/* Read-order badge — enlarged per contract §7.6: 20px tall, grows
-              horizontally for 2-3 digits, primary text (not secondary). */}
-          <span className="flex h-5 min-w-[20px] flex-none items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1 font-mono text-2xs font-semibold tabular-nums text-content">
+          {/* Read-order badge — must be CLEARLY visible at a glance: 26px,
+              bold base-size numerals, strong border; grows for 2-3 digits. */}
+          <span className="flex h-[26px] min-w-[26px] flex-none items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1.5 font-mono text-base font-bold tabular-nums text-content">
             {node.readOrder}
           </span>
         </div>
@@ -323,34 +324,11 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         </div>
       </div>
 
-      {/* 8 — handles: 7px sharp squares, offset −4px. Target (input) handles
-          on the left half, source (output) handles on the right half — ids
-          frozen by contract §7.11, chosen per-edge at render time by
-          canvas/handles.ts#pickHandles. */}
-      <Handle type="target" id="t-top" position={Position.Top} className="ct-handle" style={{ left: 16 }} />
-      <Handle type="target" id="t-left" position={Position.Left} className="ct-handle" />
-      <Handle
-        type="target"
-        id="t-bottom"
-        position={Position.Bottom}
-        className="ct-handle"
-        style={{ left: 16 }}
-      />
-      <Handle
-        type="source"
-        id="s-top"
-        position={Position.Top}
-        className="ct-handle"
-        style={{ left: "auto", right: 16 }}
-      />
-      <Handle type="source" id="s-right" position={Position.Right} className="ct-handle" />
-      <Handle
-        type="source"
-        id="s-bottom"
-        position={Position.Bottom}
-        className="ct-handle"
-        style={{ left: "auto", right: 16 }}
-      />
+      {/* 8 — ports: ONE input funnel (left) and ONE output funnel (right),
+          always visible — a port you cannot see is a port you cannot aim
+          at. Edges carry no handle ids; routing is canvas/edgePath.ts. */}
+      <Handle type="target" position={Position.Left} className="ct-port ct-port-in" />
+      <Handle type="source" position={Position.Right} className="ct-port ct-port-out" />
 
       {revealError !== null && (
         <div className="absolute left-0 right-0 top-full z-tooltip mt-1 flex items-center gap-1.5 rounded border border-danger bg-danger-surface px-2 py-1 shadow-card">

@@ -2,7 +2,7 @@
 // form) + Markdown (CodeMirror on the node's file; explicit save writes to
 // disk through Rust). The file on disk is the content source of truth.
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import {
@@ -398,7 +398,12 @@ function BriefField({ node }: { node: MemoryNode }) {
   );
 }
 
-function PropertiesTab({
+/** Editable file path with direct rename (the "Rename file…" menu entries
+ *  land here). Commits on Enter/blur when changed, Escape reverts, errors
+ *  (collision, protected, IO) show inline. Protected files render read-only.
+ *  Keyed by node.id from PropertiesTab, so in-flight commits can never paint
+ *  onto another node (same remount discipline as TitleField). */
+function FileField({
   node,
   root,
   onRevealError,
@@ -407,13 +412,46 @@ function PropertiesTab({
   root: string;
   onRevealError: (msg: string) => void;
 }) {
-  const updateNode = useGraphStore((s) => s.updateNode);
-  const deleteNodes = useGraphStore((s) => s.deleteNodes);
+  const renameNodeFile = useGraphStore((s) => s.renameNodeFile);
+  const renamePending = useInspectorTabStore((s) => s.renamePending);
+  const consumeRename = useInspectorTabStore((s) => s.consumeRename);
   const setTab = useInspectorTabStore((s) => s.setTab);
   const fileMenu = useContextMenu();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState(node.filePath);
+  const [error, setError] = useState<string | null>(null);
+  const protectedFile = isRenameProtected(node.filePath);
+
+  useEffect(() => {
+    setDraft(node.filePath);
+    setError(null);
+  }, [node.filePath]);
+
+  // A "Rename file…" menu entry fired (possibly before this field mounted):
+  // consume the flag by moving focus into the input, basename selected.
+  useEffect(() => {
+    if (!renamePending) return;
+    consumeRename();
+    const el = inputRef.current;
+    if (el === null) return;
+    el.focus();
+    const slash = node.filePath.lastIndexOf("/");
+    const dot = node.filePath.toLowerCase().lastIndexOf(".md");
+    el.setSelectionRange(slash + 1, dot > slash ? dot : node.filePath.length);
+  }, [renamePending, consumeRename, node.filePath]);
+
+  const commit = () => {
+    const next = draft.trim().replace(/\\/g, "/");
+    if (next === "" || next === node.filePath) {
+      setDraft(node.filePath);
+      setError(null);
+      return;
+    }
+    setError(null);
+    renameNodeFile(node.id, next).catch((e: unknown) => setError(String(e)));
+  };
 
   const openFileMenu = (e: React.MouseEvent) => {
-    const protectedFile = isRenameProtected(node.filePath);
     fileMenu.openAt(e, [
       {
         kind: "item",
@@ -438,7 +476,7 @@ function PropertiesTab({
         icon: Pencil,
         disabled: protectedFile,
         hint: protectedFile ? "generated file — not renameable" : undefined,
-        onSelect: () => setTab("properties"),
+        onSelect: () => inputRef.current?.focus(),
       },
       {
         kind: "item",
@@ -449,6 +487,122 @@ function PropertiesTab({
       },
     ]);
   };
+
+  return (
+    <div onContextMenu={openFileMenu}>
+      <FieldLabel>File</FieldLabel>
+      {protectedFile ? (
+        <>
+          <div
+            className="truncate rounded border border-border-subtle bg-surface-inset px-2 py-1.5 font-mono text-2xs text-content-secondary [direction:rtl] [text-align:left]"
+            title={node.filePath}
+          >
+            {node.filePath}
+          </div>
+          <p className="mt-1 text-xs text-content-muted">generated file — not renameable</p>
+        </>
+      ) : (
+        <>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                setDraft(node.filePath);
+                setError(null);
+                e.currentTarget.blur();
+              }
+            }}
+            spellCheck={false}
+            title={node.filePath}
+            className="h-control w-full rounded border border-border bg-surface-2 px-2 font-mono text-xs text-content focus:border-accent"
+          />
+          <p className="mt-1 text-xs leading-snug text-content-muted">
+            Enter renames the file on disk. Esc cancels.
+          </p>
+        </>
+      )}
+      {error !== null && (
+        <p className="mt-1 break-words text-xs leading-snug text-danger-text">{error}</p>
+      )}
+      {fileMenu.menu !== null && (
+        <ContextMenu
+          x={fileMenu.menu.x}
+          y={fileMenu.menu.y}
+          items={fileMenu.menu.items}
+          onClose={fileMenu.close}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Relations grid — every edge touching this node, one row each: direction,
+ *  kind (click selects the edge), the other node (click selects it). */
+function RelationsSection({ node }: { node: MemoryNode }) {
+  const edges = useGraphStore((s) => s.edges);
+  const nodes = useGraphStore((s) => s.nodes);
+  const setSelection = useGraphStore((s) => s.setSelection);
+  const related = edges.filter((e) => e.source === node.id || e.target === node.id);
+
+  return (
+    <div>
+      <FieldLabel>Relations</FieldLabel>
+      {related.length === 0 ? (
+        <p className="text-xs leading-snug text-content-muted">
+          No relations yet — drag from a port on the canvas.
+        </p>
+      ) : (
+        <div className="grid grid-cols-[auto_auto_1fr] items-center gap-x-2 gap-y-1 rounded border border-border-subtle bg-surface-inset px-2 py-1.5">
+          {related.map((e) => {
+            const out = e.source === node.id;
+            const otherId = out ? e.target : e.source;
+            const other = nodes.find((n) => n.id === otherId);
+            return (
+              <Fragment key={e.id}>
+                <span
+                  title={out ? "outgoing" : "incoming"}
+                  className={`font-mono text-xs ${out ? "text-content" : "text-content-muted"}`}
+                >
+                  {out ? "→" : "←"}
+                </span>
+                <button
+                  onClick={() => setSelection([], [e.id])}
+                  title="Select edge"
+                  className="rounded-sm border border-border px-1 py-px text-left font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-border-strong hover:text-content"
+                >
+                  {e.kind}
+                </button>
+                <button
+                  onClick={() => setSelection([otherId], [])}
+                  title={other?.filePath}
+                  className="truncate text-left text-sm text-content transition-colors duration-fast hover:text-accent-text hover:underline"
+                >
+                  {other?.title ?? "?"}
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PropertiesTab({
+  node,
+  root,
+  onRevealError,
+}: {
+  node: MemoryNode;
+  root: string;
+  onRevealError: (msg: string) => void;
+}) {
+  const updateNode = useGraphStore((s) => s.updateNode);
+  const deleteNodes = useGraphStore((s) => s.deleteNodes);
 
   return (
     <div className="flex flex-col gap-3 overflow-y-auto p-3">
@@ -488,24 +642,9 @@ function PropertiesTab({
         />
       </div>
 
-      <div>
-        <FieldLabel>File</FieldLabel>
-        <div
-          onContextMenu={openFileMenu}
-          className="truncate rounded border border-border-subtle bg-surface-inset px-2 py-1.5 font-mono text-2xs text-content-secondary [direction:rtl] [text-align:left]"
-          title={node.filePath}
-        >
-          {node.filePath}
-        </div>
-        {fileMenu.menu !== null && (
-          <ContextMenu
-            x={fileMenu.menu.x}
-            y={fileMenu.menu.y}
-            items={fileMenu.menu.items}
-            onClose={fileMenu.close}
-          />
-        )}
-      </div>
+      <RelationsSection node={node} />
+
+      <FileField key={`file-${node.id}`} node={node} root={root} onRevealError={onRevealError} />
 
       <AssembleSection node={node} root={root} />
 
@@ -707,6 +846,7 @@ function InspectorHeader({
 }) {
   const tab = useInspectorTabStore((s) => s.tab);
   const setTab = useInspectorTabStore((s) => s.setTab);
+  const requestRename = useInspectorTabStore((s) => s.requestRename);
   const headerMenu = useContextMenu();
 
   const openHeaderMenu = (e: React.MouseEvent) => {
@@ -735,7 +875,7 @@ function InspectorHeader({
         icon: Pencil,
         disabled: protectedFile,
         hint: protectedFile ? "generated file — not renameable" : undefined,
-        onSelect: () => setTab("properties"),
+        onSelect: () => requestRename(),
       },
       {
         kind: "item",

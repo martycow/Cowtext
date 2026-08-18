@@ -55,47 +55,51 @@
   cursor: default;
 }
 
-/* Node handles — 7px sharp squares, offset 4px outside the card; fade in on
-   hover/selection (DESIGN_SPEC.md: the one place the pixel grid shows in a
-   control). A transparent ::after enlarges the pointer/connection hit area
-   to ~16px square (contract §7.11.5) without growing the visible mark. */
-.react-flow__handle.ct-handle {
+/* Node ports — ONE funnel-shaped input on the left edge, ONE funnel-shaped
+   output on the right, ALWAYS visible (a port you cannot see is a port you
+   cannot aim at). The funnel mouth opens away from the card — the wide end
+   is where the wire lands — with sharp clipped edges per the pixel-charm
+   rule. Neutral at rest; accent (blue = user action) while hovered or a
+   connection drag is live. A transparent ::after keeps a generous
+   pointer/connection hit area without growing the visible mark. */
+.react-flow__handle.ct-port {
   position: relative;
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 22px;
+  border: none;
   border-radius: 0;
-  background: var(--surface-3);
-  border: 1px solid var(--border-strong);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
+  background: var(--border-strong);
+  opacity: 1;
+  transition: background var(--dur-fast) var(--ease-out);
 }
-.react-flow__handle.ct-handle::after {
+.react-flow__handle.ct-port::after {
   content: "";
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 32px;
   transform: translate(-50%, -50%);
   background: transparent;
 }
-.react-flow__handle.ct-handle.react-flow__handle-left {
-  left: -4px;
+/* Input: wide mouth facing out (left), throat narrowing into the card. */
+.react-flow__handle.ct-port-in {
+  left: -11px;
+  clip-path: polygon(0 0, 100% 30%, 100% 70%, 0 100%);
 }
-.react-flow__handle.ct-handle.react-flow__handle-right {
-  right: -4px;
+/* Output: throat leaving the card, mouth widening outward (right). */
+.react-flow__handle.ct-port-out {
+  right: -11px;
+  clip-path: polygon(0 30%, 100% 0, 100% 100%, 0 70%);
 }
-.react-flow__handle.ct-handle.react-flow__handle-top {
-  top: -4px;
+.ct-node:hover .ct-port,
+.react-flow__node.selected .ct-port {
+  background: var(--text-muted);
 }
-.react-flow__handle.ct-handle.react-flow__handle-bottom {
-  bottom: -4px;
-}
-.ct-node:hover .ct-handle,
-.react-flow__node.selected .ct-handle,
-.react-flow__handle.connectingfrom,
-.react-flow__handle.connectingto {
-  opacity: 1;
+.react-flow__handle.ct-port:hover,
+.react-flow__handle.ct-port.connectingfrom,
+.react-flow__handle.ct-port.connectingto {
+  background: var(--accent);
 }
 
 /* Controls + minimap recoloured to the surface ramp. */

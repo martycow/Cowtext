@@ -22,7 +22,6 @@ import { revealPath } from "../fs/api";
 import { MemoryNodeCard } from "./MemoryNodeCard";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
 import { KindPicker } from "./KindPicker";
-import { pickHandles } from "./handles";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
@@ -73,27 +72,18 @@ function CanvasInner() {
   }, [domainNodes, setNodes]);
 
   // Store → RF edges. Sequence edges carry the target's readOrder as the
-  // numbered step dot (DESIGN_SPEC.md edge rules). sourceHandle/targetHandle
-  // are derived here (contract §7.11 — pickHandles) purely for rendering;
-  // they are never written back to the store or graph.json.
+  // numbered step dot (DESIGN_SPEC.md edge rules). Each card has exactly one
+  // input (left) and one output (right) port, so edges carry no handle ids;
+  // routing around cards is the edge path's job (canvas/edgePath.ts).
   useEffect(() => {
     const orderById = new Map(domainNodes.map((n) => [n.id, n.readOrder] as const));
-    const nodeById = new Map(domainNodes.map((n) => [n.id, n] as const));
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e] as const));
       return domainEdges.map((e): CanvasEdge => {
-        const sourceNode = nodeById.get(e.source);
-        const targetNode = nodeById.get(e.target);
-        const picked =
-          sourceNode !== undefined && targetNode !== undefined
-            ? pickHandles(sourceNode, targetNode)
-            : undefined;
         return {
           id: e.id,
           source: e.source,
           target: e.target,
-          sourceHandle: picked?.sourceHandle,
-          targetHandle: picked?.targetHandle,
           type: "memory",
           selected: prevById.get(e.id)?.selected ?? false,
           data: {

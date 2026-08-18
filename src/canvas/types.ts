@@ -29,9 +29,19 @@ export type InspectorTab = "properties" | "markdown";
 interface InspectorTabState {
   tab: InspectorTab;
   setTab: (tab: InspectorTab) => void;
+  /** Set by every "Rename file…" entry point; the Inspector's File field
+   *  consumes it by focusing itself for editing. A flag (consumed on focus)
+   *  rather than a counter so it survives the field remounting when the
+   *  request also changes the selection. */
+  renamePending: boolean;
+  requestRename: () => void;
+  consumeRename: () => void;
 }
 
 export const useInspectorTabStore = create<InspectorTabState>((set) => ({
   tab: "properties",
   setTab: (tab) => set({ tab }),
+  renamePending: false,
+  requestRename: () => set({ tab: "properties", renamePending: true }),
+  consumeRename: () => set({ renamePending: false }),
 }));

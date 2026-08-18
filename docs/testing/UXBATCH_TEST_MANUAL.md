@@ -75,6 +75,19 @@ a bug (or this manual is stale; either way, note it).
 11. Change the Title to `Renamed manually never` and blur. *Expected:* title updates on the
     card; the File field is **unchanged** (`context/decoy-2.md`) — no rename attempted.
 12. Re-open **Settings** and flip **Rename file with title** back ON.
+
+> **Added in the v2 pass — direct rename.** The Inspector's **File** field is now an
+> editable input (mono text) for non-protected files:
+>
+> 12a. Select a node, click into the **File** field, change the basename (keep `.md`), press
+>      **Enter**. *Expected:* the file renames on disk (check the file rail), the field shows
+>      the new path, helper line reads "Enter renames the file on disk. Esc cancels."
+> 12b. Edit the field again and press **Esc**. *Expected:* the draft reverts, nothing renamed.
+> 12c. Enter a path that collides with an existing file. *Expected:* an inline red error under
+>      the field ("Already exists: …"), file untouched.
+> 12d. Every **Rename file…** context-menu entry (node card, file-rail row, Inspector header,
+>      File-field menu) now switches to Properties and puts focus in the File field with the
+>      basename pre-selected, ready to type.
 13. **Protected file.** Select the node adopted from `notes.md` (adopt it now via the file
     rail's **adopt** button if not already a node). Right-click the node card → **Rename
     file…** is present but **greyed out**, with a tooltip-equivalent hint line under it
@@ -103,14 +116,25 @@ a bug (or this manual is stale; either way, note it).
 ### B3. Bigger read-order badge (#7)
 
 17. Connect two nodes with a **sequence** edge (drag a connection, pick **sequence** in the
-    Edge-kind picker). *Expected:* the target node's card shows a read-order badge — now
-    **20px tall**, minimum 20px wide, tabular numerals, a visible border (`border-border-strong`)
-    and full-strength text colour (not the old dim grey) — distinctly larger than the old 16×16
-    square.
+    Edge-kind picker). *Expected (revised in the v2 pass):* the target node's card shows a
+    read-order badge — now **26px tall**, minimum 26px wide, **bold base-size** tabular
+    numerals, a visible border (`border-border-strong`) and full-strength text colour —
+    unmistakably the most prominent element in the card's top row.
 18. Chain enough sequence edges that a node reaches a **3-digit** order (or, quicker: this is a
     visual-only check — confirm at zoom 0.5, via the canvas zoom control or mouse wheel, the
     badge digits stay legible and don't collide with the pin icon or push the title into
     wrapping.
+
+> **Added in the v2 pass — Relations grid.**
+>
+> 18a. Select a node that has at least one incoming and one outgoing edge. *Expected:* the
+>      Properties tab shows a **Relations** section — one row per edge: a direction arrow
+>      (**→** outgoing, **←** incoming), a kind chip (`imports`/`references`/…), and the other
+>      node's title.
+> 18b. Click the other node's **title** in a row. *Expected:* selection jumps to that node.
+>      Click a **kind chip**. *Expected:* the edge itself is selected (edge panel opens).
+> 18c. Select a node with no edges. *Expected:* "No relations yet — drag from a port on the
+>      canvas."
 
 ### B4. Hooks-installed indicator (#2)
 
@@ -294,13 +318,22 @@ Reopen `C:\_uxtest` for this section.
 60. Open **Settings** → flip **Calm mode** ON, close Settings, trigger another rescan.
     *Expected:* the pixel-march squares are static (no blink animation), caption still shows.
     Flip Calm mode back OFF afterward.
+> **Revised in the v2 pass (connector revert):** the six per-half handles were removed.
+> Each card now has exactly **one funnel-shaped input port** on its left edge and **one
+> funnel-shaped output port** on its right edge, both **always visible** (neutral at rest,
+> accent-blue on hover/while connecting). Edges route with stubs + a clearance lane so they
+> never fold back across the endpoint cards.
+
 61. **Edge routing.** Create two nodes stacked roughly vertically (one well above the other,
-    similar X). Connect them. *Expected:* the edge curves out to the side rather than drawing
-    a straight line through any card that sits between them, and it does **not** visibly pass
-    through either endpoint card.
+    similar X). Connect them (drag from the right funnel of one to the left funnel of the
+    other). *Expected:* the edge leaves the output port heading right, detours through the
+    gap between the cards (or around them) with rounded corners, and enters the input port
+    heading right — it never draws through either endpoint card. Also place a target to the
+    **left** of its source. *Expected:* a clean U-shaped detour around the cards, no
+    spaghetti fold-back.
 62. **Snap radius.** Start dragging a connection from a spot roughly 30–40px away from a
-    node's actual handle square (not directly on it). *Expected:* the connection still snaps
-    to the handle — the accepted radius is noticeably larger than the visible 7px square.
+    node's funnel port (not directly on it). *Expected:* the connection still snaps to the
+    port — the accepted radius is noticeably larger than the visible funnel.
 63. Zoom the canvas to roughly 2× (mouse wheel / trackpad zoom in) and inspect an arrowhead
     closely. *Expected:* a single clean triangular/chevron shape, no stray line stub poking
     through the tip. Zoom out to ~0.4× and re-check — arrowhead still reads as one shape, not
@@ -346,16 +379,16 @@ Reopen `C:\_uxtest` for this section.
     Recent, open one, and *immediately* (within roughly a second) open the other from the
     Recent list before the Event log has settled. Watch the hooks badge in the Event log over
     the next couple of seconds. *Expected:* the badge always reflects the **currently open**
-    project. **If the badge flips to reflect the project you just left (e.g. shows "install
-    hooks" or "hooks installed" for the wrong project) after switching, that is a confirmed
-    race-condition defect — note which project's state appeared on the wrong project.**
+    project. *(Regression check — the original race was fixed with a stale-guard in
+    `refreshHooksStatus`; a badge showing the previous project's state means the guard
+    regressed.)*
 71. **Rapid node switching mid-rename.** Trigger a title-rename collision on Node A (per step
     8, so the red error + "Rename to …" suggestion is showing under Node A's Title field), then
     *immediately* select Node B in the Inspector before clicking the suggestion. *Expected:*
-    Node B's Title field shows no leftover error/suggestion from Node A. **If Node B's Title
-    field shows Node A's collision message or "Rename to …" suggestion, do NOT click it — this
-    is a confirmed defect (clicking it would rename Node B's file using Node A's suggested
-    name). Note it and move on.**
+    Node B's Title field shows no leftover error/suggestion from Node A. *(Regression check —
+    the original stale-closure defect was fixed by remounting the Title field per node; any
+    leftover message from Node A means the fix regressed. If it appears, do NOT click the
+    suggestion.)*
 
 ---
 
