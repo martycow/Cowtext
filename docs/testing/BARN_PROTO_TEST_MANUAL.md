@@ -15,7 +15,7 @@ either way, note it).
 
 ## A. Preconditions
 
-1. Free ports 1420/4923 and start the app from `D:\Moo.exe\Cowtext`:
+1. Free ports 1420/4923 and start the app from the repo root:
 
    ```powershell
    npm run tauri dev
@@ -26,10 +26,10 @@ either way, note it).
 3. **Make a throwaway test project:**
 
    ```powershell
-   mkdir D:\_cowtestb
+   mkdir C:\_cowtestb
    ```
 
-4. **Open folder** → `D:\_cowtestb`. *Expected:* the workspace opens on the **canvas**
+4. **Open folder** → `C:\_cowtestb`. *Expected:* the workspace opens on the **canvas**
    view, and a segmented control appears **centered in the top bar**: a 2 px framed
    pill with two segments, **Canvas** (active — raised surface, medium weight) and
    **Barn** (muted). Hover tooltips: "Edit the context graph" / "Watch the agent in
@@ -140,7 +140,7 @@ an interrupt lands only after the in-flight tile step finishes.
     (hooks server on :4923 — app must be running):
 
     ```powershell
-    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"m","tool_input":{"file_path":"D:\\_cowtestb\\context\\rules.md"}}' |
+    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"m","tool_input":{"file_path":"C:\\_cowtestb\\context\\rules.md"}}' |
       curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
     Start-Sleep -Milliseconds 300
     '{"hook_event_name":"Stop","session_id":"m"}' |
@@ -153,7 +153,7 @@ an interrupt lands only after the in-flight tile step finishes.
     files back-to-back (repeat the first command of step 21 with each path, no Stop).
     *Expected:* the cow visits the props **one after another in order** — reads queue,
     they do not interrupt each other.
-23. **Unknown-path event:** send a read for `D:\\_cowtestb\\nope.md`. *Expected:* the
+23. **Unknown-path event:** send a read for `C:\\_cowtestb\\nope.md`. *Expected:* the
     cow does **not** move (unknown paths are feed-only), while the event feed shows
     the accent-tinted "not on graph" row.
 
@@ -183,7 +183,7 @@ an interrupt lands only after the in-flight tile step finishes.
 28. Delete the scratch project:
 
     ```powershell
-    Remove-Item -Recurse -Force D:\_cowtestb
+    Remove-Item -Recurse -Force C:\_cowtestb
     ```
 
 ## Sign-off

@@ -1,25 +1,37 @@
 # Agent Fleet Roster
 
-Maintained by **Agent Administrator** (PRIMARY). Impact defines an agent's influence when several work on the same thing; default is 50/100 and changes only with a stated reason. Working callsigns describe duties; Marty assigns given names later.
+Maintained by **project-manager**. The fleet is 6 agents plus one on-call analyst,
+defined in `.claude/agents/` and dispatched by the `/ultracode` skill
+(`.claude/skills/ultracode/SKILL.md`). Rewritten 2026-08-18 from the old 13-callsign
+roster (see mapping below); the Impact column was dropped — verdict authority now
+decides conflicts directly.
 
-| Agent (callsign) | Given name | Role | Duties | Impact /100 | Priority | Status |
-|---|---|---|---|---|---|---|
-| Administrator | TBD | Primary agent | Stores and updates this roster (names, roles, impact, priority); remembers briefly what every agent — including himself — was doing; immediately informs Marty about lazy or useless agents | 50 | Highest | Active |
-| File System Manager | TBD | Docs custodian | Watches every project .md; maintains the file grid (who created/edited, when, why); keeps file/folder hierarchy strict, clean and fresh inside and outside docs/ | 50 | High | Active |
-| Code Lead | TBD | Lead Programmer | Writes no code; thinks deeply about high- and low-level architecture, frontend and backend; keeps Cowtext expandable, simple, lightweight and modular — CORE modules vs feature modules, connect/disconnect (eventually dynamically via an in-app UI menu) | 75 — sole author of all three frozen contracts (Phase 2; Phase 3+4+Barn; Phase 5+6 with Stage-0 seams + zero-overlap ownership grid, 23-command invoke contract); three adversarial audits caught 3, 6, then 24 confirmed defects — incl. one CRITICAL (claude spawn broken on Windows, invisible to all 60 tests) — every one fixed and verified; raised 70→75 because the third contract produced ZERO cross-lane integration defects across four parallel lanes, proving the method scales | High | Active |
-| Product Analyst | TBD | Lead Product Analyst | Understands what the User really wants; ranks importance; suggests features; researches competitors on the internet | 50 — 2026-08-17: produced docs/Brainstorm_Features.md, 18 ranked post-Phase-6 ideas from 3 lenses + competitor scan | Medium | Active |
-| Tester | TBD | QA Engineer | Writes human-readable developer manuals for manual testing: what to test, in what order, where | 50 — 2026-08-17: no separate pass; the four new Phase 5+6 manuals were authored by the lanes in the Tester's established PHASE2 format | High | Active |
-| Librarian | TBD | Terminology keeper | Every term, library and technology recorded in docs/TERMINOLOGY.md as a human-readable grid | 50 | Medium | Active |
-| Core Coder | TBD | Senior Fullstack Programmer | Writes code for CORE modules | 50 — 2026-08-17: Stage 0 laid every shared seam (settings store/rs, sfx stub + call sites, set_claude_override, preset/handoff stubs, 23-command lib.rs, dialog capability) so four lanes built in parallel with zero file overlap | High | Active |
-| Multifunctional Coder | TBD | Senior Fullstack Programmer | Writes code for all non-CORE modules; implements new features | 50 — 2026-08-17: delivered Phase 6 whole (preset.rs + handoff.rs with never-clobber and reused Windows-safe ClaudeRunner, full preset/handoff UI with confirmation modals + 3 clipboard variants, manual, 10+ tests) | High | Active |
-| UI Coder | TBD | Senior Frontend Programmer | Proper UI implementation per the Prototype's Design; re-checks other coders' work; the best at building interfaces | 50 — 2026-08-17: SettingsModal per design tokens (volume, sound switches, mute, calm, live claude-path override, port/context display) + its manual; "blue is you" toggle deviation ratified | High | Active |
-| Barn Coder | TBD | PixiJS / game programmer | Owns the Barn: the 16-bit isometric game-like visualization; retro SNES gamer and game developer; suggests fun ideas for the app in general | 50 — 2026-08-17: SNES juice pass (scarf flutter, anticipation, session accumulation, pooled dust, waiting choreography, calm-mode motion, pause-when-hidden perf, DEMO badge) + its manual | Medium (rises in Phase 5) | Active |
-| Task Manager | TBD | Lead Project Manager | Everything about tasks, sprints, milestones; defines the current app version (default v0.0.0001); owns docs/tasks/ — BACKLOG, TASKS, ROADMAP, BUGS, SPRINTS, MILESTONES; every task has Name, Tags, Description, Priority, Date Created, Status | 50 | High | Active |
-| Sound Designer | TBD | Lead Sound Designer | Juicy, cool, awesome, funny, understandable sounds; decides which elements are more or less soundy, or silent; fan of 16-bit SNES games — Zelda, Super Metroid, Harvest Moon | 50 — 2026-08-17: first code delivery — full sfx.ts (14 placeholder + 3 tool-layer cues with ducking, cooldowns, voice pool, never-queue, calm/mute/hidden gates), purged 14 stale wavs, wrote the sound manual | Medium (rises in Phase 5) | Active |
-| 2D Artist | TBD | Lead Graphical Artist | Draws icons, sprites, textures, fonts | 50 | Medium (rises in Phase 5) | Active |
+| Agent | Role | Lane (paths) | Verdict authority | Status |
+|---|---|---|---|---|
+| tech-lead | Architect; frozen-contract author; adversarial auditor. Writes no app code | `docs/design/` (contracts), audit reports | Architecture, module boundaries | Active |
+| tech-general | Senior fullstack (core + feature modules). Runs as multiple instances with disjoint per-task file zones | `src-tauri/src/*`, `src/store/*`, non-UI `src/` logic — exact zone assigned per task | — | Active |
+| tech-ui | Senior frontend; builds and re-checks UI chrome per design tokens | `src/canvas/`, `src/inspector/`, `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `App.tsx` chrome | Interface | Active |
+| tech-barn | PixiJS / game programmer + sound designer; owns the Barn and SFX | `src/scene/` (incl. `sfx.ts` — the only howler importer) | — | Active |
+| tester | QA: manuals in the PHASE2 format, automated gates, adversarial audits. Edits no app code | `docs/testing/`; read-only everywhere else | Gate pass/fail | Active |
+| project-manager | Docs & tasks custodian; records every session; always the final agent | `docs/fleet/`, `docs/tasks/`, `docs/TERMINOLOGY*.md`, the CLAUDE.md Status line | — | Active — always final |
+| product-analyst | Product research: competitors, rankings, feature suggestions. **Outside the default fleet** — never launched by `/ultracode` | `docs/` (research docs, BACKLOG-ready tables) | — | On call |
 
-## Notes
+## Rules
 
-- **Impact overlap rule**: when two agents touch the same thing (e.g. Multifunctional Coder builds UI, UI Coder re-checks it), impact decides whose call wins. UI Coder's design verdict overrides on interface matters; Code Lead's architecture verdict overrides on module boundaries.
-- **Idle (by scope)** means the current phase had no work in that agent's lane — it is not laziness and is not flagged.
-- Roster updates happen at the end of every fleet session, together with `ACTIVITY_LOG.md`.
+- **Zones never overlap.** When lanes run in parallel, each gets an explicit file
+  zone; leaving the zone is forbidden — an agent that needs a foreign file stops
+  and reports instead.
+- **Conflicts:** architecture/module boundaries → tech-lead's verdict; interface →
+  tech-ui's verdict.
+- **Idle by scope** means the task had no work in that agent's lane — it is not
+  laziness and is not flagged. The dispatcher lists idle agents in one line.
+- Roster and `ACTIVITY_LOG.md` are updated by project-manager at the end of every
+  fleet session; the log keeps only the three most recent sessions.
+
+## Mapping from the old 13-callsign roster
+
+Code Lead → tech-lead · Core Coder + Multifunctional Coder → tech-general ·
+UI Coder → tech-ui · Barn Coder + Sound Designer → tech-barn · Tester → tester ·
+Task Manager + Administrator + Librarian + File System Manager → project-manager ·
+Product Analyst → product-analyst · 2D Artist → retired (sprites are Marty-side
+asset work; art rules live in the `art-direction` skill).

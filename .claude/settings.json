@@ -1,0 +1,45 @@
+{
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/scripts/session-start.ps1"
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/scripts/docs-guard.ps1"
+                    }
+                ]
+            }
+        ],
+        "SubagentStop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/scripts/log-subagent.ps1"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/scripts/gates.ps1"
+                    }
+                ]
+            }
+        ]
+    }
+}

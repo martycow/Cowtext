@@ -17,7 +17,7 @@ that is a bug (or this manual is stale; either way, note it).
 1. **Free ports 1420 and 4923.** The hooks server binds 127.0.0.1:4923 at app start;
    if something else owns it the app still starts but live events are dead (a
    bind-failure line appears in the `tauri dev` terminal).
-2. Start the app from `D:\Moo.exe\Cowtext`:
+2. Start the app from the repo root:
 
    ```powershell
    npm run tauri dev
@@ -26,12 +26,12 @@ that is a bug (or this manual is stale; either way, note it).
 3. **Make a throwaway test project with two node files:**
 
    ```powershell
-   mkdir D:\_cowtest4\context
-   Set-Content D:\_cowtest4\context\persona.md "# Persona`n`nBe terse."
-   Set-Content D:\_cowtest4\context\rules.md "# Rules`n`nNo emoji."
+   mkdir C:\_cowtest4\context
+   Set-Content C:\_cowtest4\context\persona.md "# Persona`n`nBe terse."
+   Set-Content C:\_cowtest4\context\rules.md "# Rules`n`nNo emoji."
    ```
 
-4. **Open folder** → `D:\_cowtest4`. In the file rail, **adopt** both files (hover row →
+4. **Open folder** → `C:\_cowtest4`. In the file rail, **adopt** both files (hover row →
    adopt button). *Expected:* two nodes on the canvas, `persona` and `rules`.
 5. Find the **event feed** strip along the very bottom of the window (below the canvas
    AND below the file rail — full width). *Expected, collapsed by default:* a 31 px
@@ -47,7 +47,7 @@ that is a bug (or this manual is stale; either way, note it).
 
 ### B1. Fresh install into a project with no settings.json
 
-7. Confirm nothing exists yet: `Test-Path D:\_cowtest4\.claude\settings.json` → `False`.
+7. Confirm nothing exists yet: `Test-Path C:\_cowtest4\.claude\settings.json` → `False`.
 8. Press **install hooks** in the event-feed header. *Expected:* a modal "**Install
    hooks**" opens — header shows the mono path `.claude/settings.json` on the right and
    a ✕; then (after a brief "Reading .claude/settings.json…") the preview:
@@ -68,7 +68,7 @@ that is a bug (or this manual is stale; either way, note it).
 10. **Every dismissal writes nothing.** Try each in turn, reopening the modal after
     each: press **Escape**; click the dark scrim outside the panel; press **✕**; press
     **Cancel**. *Expected:* modal closes all four ways, and after each,
-    `Test-Path D:\_cowtest4\.claude\settings.json` is still `False`.
+    `Test-Path C:\_cowtest4\.claude\settings.json` is still `False`.
 11. Reopen, press **Approve & install**. *Expected:* button shows `· · ·` briefly
     (✕/Escape/scrim inert while writing), then the done screen: "**hooks installed**",
     the mono path, "Claude Code sessions in this project now report to the barn on
@@ -77,7 +77,7 @@ that is a bug (or this manual is stale; either way, note it).
 12. Verify disk:
 
     ```powershell
-    Get-Content D:\_cowtest4\.claude\settings.json -Raw
+    Get-Content C:\_cowtest4\.claude\settings.json -Raw
     ```
 
     *Expected:* valid JSON, byte-identical in content to the previewed diff.
@@ -94,7 +94,7 @@ that is a bug (or this manual is stale; either way, note it).
 14. Add an unrelated key and a foreign hook, then reopen the modal:
 
     ```powershell
-    Set-Content D:\_cowtest4\.claude\settings.json '{"model": "opus", "hooks": {"PreToolUse": []}}'
+    Set-Content C:\_cowtest4\.claude\settings.json '{"model": "opus", "hooks": {"PreToolUse": []}}'
     ```
 
 15. Press **install hooks**. *Expected:* a real diff (no "new file" marker) in which
@@ -108,7 +108,7 @@ that is a bug (or this manual is stale; either way, note it).
 16. Corrupt the file, then reopen the modal:
 
     ```powershell
-    Set-Content D:\_cowtest4\.claude\settings.json '{ this is not json'
+    Set-Content C:\_cowtest4\.claude\settings.json '{ this is not json'
     ```
 
 17. Press **install hooks**. *Expected:* a red error strip in the modal (parse failure
@@ -128,7 +128,7 @@ Keep the event feed panel **expanded** and the canvas visible.
     normalization is under test):
 
     ```powershell
-    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"manual-1","tool_input":{"file_path":"D:\\_cowtest4\\context\\persona.md"}}' |
+    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"manual-1","tool_input":{"file_path":"C:\\_cowtest4\\context\\persona.md"}}' |
       curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
     ```
 
@@ -162,7 +162,7 @@ Keep the event feed panel **expanded** and the canvas visible.
 22. Send a read of a file that is NOT on the graph:
 
     ```powershell
-    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"manual-1","tool_input":{"file_path":"D:\\_cowtest4\\README.md"}}' |
+    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"manual-1","tool_input":{"file_path":"C:\\_cowtest4\\README.md"}}' |
       curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
     ```
 
@@ -193,7 +193,7 @@ Keep the event feed panel **expanded** and the canvas visible.
     has a role dot the matching card pulsed; for every "not on graph" row nothing
     pulsed. Re-run steps 18 and 22 side-by-side and confirm the invariant.
 28. Case-insensitivity: repeat step 18 with the path uppercased
-    (`D:\\_COWTEST4\\CONTEXT\\PERSONA.MD`). *Expected:* still resolves — role dot +
+    (`C:\\_COWTEST4\\CONTEXT\\PERSONA.MD`). *Expected:* still resolves — role dot +
     pulse.
 
 ---
@@ -201,7 +201,7 @@ Keep the event feed panel **expanded** and the canvas visible.
 ## E. Restart survival
 
 29. Close the Cowtext window, run `npm run tauri dev` again, Open folder →
-    `D:\_cowtest4`. *Expected:* the feed starts **empty** (events are session-local,
+    `C:\_cowtest4`. *Expected:* the feed starts **empty** (events are session-local,
     not persisted), and step 18 works again immediately — the server rebound to 4923
     on startup.
 
@@ -209,11 +209,11 @@ Keep the event feed panel **expanded** and the canvas visible.
 
 ## F. A real Claude Code session
 
-30. With Cowtext running and `D:\_cowtest4` open, run a real headless session from a
+30. With Cowtext running and `C:\_cowtest4` open, run a real headless session from a
     second terminal **in the project folder**:
 
     ```powershell
-    cd D:\_cowtest4
+    cd C:\_cowtest4
     claude -p "Read context/persona.md and context/rules.md, then briefly say what they contain."
     ```
 
@@ -243,7 +243,7 @@ The installed command ends in `|| true` with `-m 1` — a dead server must cost 
     The raw curl exit code is non-zero — that is exactly why the installed command has
     `|| true`; the hook as installed exits 0.
 33. Still with Cowtext closed, run a real session: `claude -p "say hi"` from
-    `D:\_cowtest4`. *Expected:* the session runs at full speed with **no error, no
+    `C:\_cowtest4`. *Expected:* the session runs at full speed with **no error, no
     visible pause, no hook warning** — hooks are a silent no-op while the barn is away.
 34. Reopen Cowtext + the project. *Expected:* live events flow again with no
     reinstall needed.
@@ -255,7 +255,7 @@ The installed command ends in `|| true` with `-m 1` — a dead server must cost 
 35. Close the app and delete the scratch project:
 
     ```powershell
-    Remove-Item -Recurse -Force D:\_cowtest4
+    Remove-Item -Recurse -Force C:\_cowtest4
     ```
 
 ## Sign-off

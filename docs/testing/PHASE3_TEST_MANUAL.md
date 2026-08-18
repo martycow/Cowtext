@@ -24,7 +24,7 @@ the queue section deliberately exploits that.
    *Expected:* at least one path prints and `--version` answers. If not, install Claude
    Code first — every Assemble action in this manual will otherwise fail with a spawn
    error (that failure mode is tested separately in E, not here).
-2. **Free port 1420**, then start the app from `D:\Moo.exe\Cowtext`:
+2. **Free port 1420**, then start the app from the repo root:
 
    ```powershell
    npm run tauri dev
@@ -35,10 +35,10 @@ the queue section deliberately exploits that.
    node files on disk):
 
    ```powershell
-   mkdir D:\_cowtest3
+   mkdir C:\_cowtest3
    ```
 
-4. Press **Open folder** (top-right) and pick `D:\_cowtest3`.
+4. Press **Open folder** (top-right) and pick `C:\_cowtest3`.
    *Expected:* workspace opens — file rail `0 markdown files`, empty canvas, inspector
    placeholder text, collapsed **event feed** strip along the bottom.
 
@@ -84,7 +84,7 @@ the queue section deliberately exploits that.
 13. Verify the file on disk:
 
     ```powershell
-    Get-Content D:\_cowtest3\context\persona.md
+    Get-Content C:\_cowtest3\context\persona.md
     ```
 
     *Expected:* real markdown content expanding the brief (not the stub), ending with a
@@ -116,7 +116,7 @@ the queue section deliberately exploits that.
 19. When all five are done, verify disk:
 
     ```powershell
-    Get-ChildItem D:\_cowtest3\context\*.md | Select Name, Length
+    Get-ChildItem C:\_cowtest3\context\*.md | Select Name, Length
     ```
 
     *Expected:* five files, all substantially larger than a stub.
@@ -147,7 +147,7 @@ the queue section deliberately exploits that.
     its file out from under it:
 
     ```powershell
-    Remove-Item D:\_cowtest3\context\ghost.md
+    Remove-Item C:\_cowtest3\context\ghost.md
     ```
 
 25. With `Ghost` selected, press **Summarize** (Summarize must read the current file
@@ -209,7 +209,7 @@ the queue section deliberately exploits that.
 36. Close the app and delete the scratch project:
 
     ```powershell
-    Remove-Item -Recurse -Force D:\_cowtest3
+    Remove-Item -Recurse -Force C:\_cowtest3
     ```
 
 ## Sign-off

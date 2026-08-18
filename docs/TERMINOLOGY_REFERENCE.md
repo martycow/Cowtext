@@ -1,0 +1,179 @@
+# Cowtext — Terminology & Technology Sheet
+
+> **Maintained by hand — update when introducing a new term or dependency.**
+
+Full reference sheet for every term, technology, and library used by the Cowtext
+project; the short canon lives in [`TERMINOLOGY.md`](TERMINOLOGY.md). Sources:
+`CLAUDE.md`, the Feature inventory in `docs/tasks/BACKLOG.md` (cited as "FEATURES n.n"),
+`docs/design/DESIGN_SPEC.md`, the plan (`COWTEXT_VIBECODE_PLAN.md`, kept outside the
+repo; cited below as "Plan §n"), `package.json`, `src-tauri/Cargo.toml`, and the source tree.
+Alphabetical within each group. "Planned" = specced but not yet in the codebase.
+All seven phases (0–6) are code-complete and accepted as of 2026-08-18; current version v0.0.0007.
+
+---
+
+## Product terms
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| Adopt as node | Turn an existing `.md` file — or an unknown path seen in the live feed — into a Memory Node with one click (`adoptFile` in the graph store). | Plan §9 P1; FEATURES 2.3, 6.7; `src/store/graph.ts` |
+| Assemble | Expand a node's one-line `brief` into a full `.md` file via headless `claude -p` child processes (queued, max 2 concurrent). Prompt is piped over stdin; result parsed from `--output-format json`. | Plan §6; `src-tauri/src/assemble.rs`; `src/assemble/` |
+| Barn | The signature PixiJS scene: 16-bit SNES-style isometric barn (2:1 tiles, 32×16 base) where the cow physically walks to props and reads memory files live. Toggles with the graph canvas (Canvas ⇄ Barn). Placeholder-graphics prototype lives in `src/scene/`. | Plan §8; `src/scene/` |
+| Barnlight-29 | The barn's 29-colour named palette (warm dark ramp + role accents) used by the prototype's programmatic Graphics; art-direction contract for Phase 5 sprites. | `src/scene/palette.ts`; docs/design/ART_DIRECTION.md |
+| BarnEvent | Normalized live event `{ kind, filePath?, sessionId, ts }` produced by the hooks server from Claude Code hook JSON, emitted to the webview as `barn://event`. Drives both canvas pulses and barn animations. TS mirrors: `src/store/events.ts`, `src/scene/types.ts`. | Plan §7; `src-tauri/src/hooks_server.rs`; docs/design/PHASE34_BARN_CONTRACT.md |
+| Canvas ⇄ Barn toggle | Segmented control in the top bar switching the workspace between the React Flow canvas (which stays mounted, hidden) and the Pixi barn scene (mounted on demand, destroyed on exit). Resets to Canvas when a new project opens. | `src/App.tsx`; DESIGN_SPEC |
+| BarnGraph | Top-level shape of `graph.json`: `version: 1`, `projectName`, `nodes`, `edges`, `compileTargets`. Serialized with stable field order, sorted ids, LF + trailing newline (`serializeGraph`); loaded through the `migrateGraph` harness. | Plan §4; `src/store/graph.ts` |
+| Brief | One-line description stored on a Memory Node; the input Assemble expands into a full file. Presets keep briefs but not content. | Plan §4, §6 |
+| Calf | Smaller cow sprite representing a Claude subagent; spawns from the barn door, despawns on SubagentStop. | Plan §8 |
+| Calm mode | One toggle, two effects: no sound + reduced motion. Exists from day one of the barn, not later. | Plan §8; DESIGN_SPEC |
+| Demo mode | The barn's offline scripted mode: `DemoPlayer` loops a fake `BarnEvent` sequence through `useEventsStore.pushEvent` (so EventLog, DEMO badge, and node pulses all light up) with `DEMO_NODES` fallback props when no graph is open. Toggled by the in-scene "Demo" button or `<BarnScene autoDemo />`. | `src/scene/demo.ts`; `src/store/events.ts` |
+| Detached mode | SFX behaviour while the barn scene is unmounted (Canvas view): the sfx module itself listens for events and fires event-receipt cues (keystroke clack, read cues, the ratified detached assemble "ding") so the audio monitor keeps working with no cow on screen; animation-bound sounds stay silent. | docs/design/PHASE56_CONTRACT.md §5.4; `src/scene/sfx.ts` |
+| Clean folder glob | A conditional condition of exactly `<dir>/**` where every `/`-segment is a plain path component (no `.`/`..`, no metacharacters, no drive colons) — the only shape that spawns a nested `{dir}/AGENTS.md`; dirty globs stay root bullets. | `src-tauri/src/compile.rs` (`clean_glob_dir`) |
+| Compile | One graph → N tool files: `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` generated from the single source of truth. Never writes without diff-preview approval. | Plan §5; `src/compile/`; `src-tauri/src/compile.rs` |
+| Compile adapter | Per-target generator (`claude`, `agents`, `cursor`) mapping one graph snapshot to one output format — `Ctx::emit_root` / `emit_nested_agents` / `emit_cursor`, run in fixed order for deterministic output. Pluggable adapters (Copilot, Windsurf…) are backlog. | Plan §5; `src-tauri/src/compile.rs` |
+| Compile target | One of `"claude" \| "agents" \| "cursor"`, stored per project in `graph.json` (`compileTargets`) and toggled via checkbox chips in the Compile modal; `cursor` is off by default. Unknown future targets parse fine and compile to nothing. | Plan §4, §5; `src/compile/CompileModal.tsx` |
+| Cow (the) | Small cow with a blue scarf — the Moo.exe mascot — representing the Claude agent in the barn. Amber is its colour in the tool layer. | Plan §8; DESIGN_PROMPT |
+| Cowtext | The product (working name): a desktop context-graph editor where an AI agent's context is a visual graph of Memory Nodes. Made by **Moo.exe**. | Plan §1 |
+| Diff preview | Modal showing exactly what a write will change before it happens — per-file unified-style hunks, `+`/`−` counts, per-file approve checkboxes, "Approve & write" as the only write path. Mandatory for compile output and for hook installation. | Plan §5; DESIGN_SPEC; `src/compile/CompileModal.tsx` |
+| Ducking | Mix rule set: the ambient bed ducks −6 dB under any one-shot/typewriter (400ms recovery); the moo ducks all other barn cues −12 dB for its duration — the turn-complete moment belongs to the cow; tool-layer confirms are never ducked. | docs/design/SOUND_DESIGN.md §3; `src/scene/sfx.ts` |
+| Edge kind: `imports` | Hard include — target's content is inlined into the source's compiled output; always in context. Drawn 1.75px solid with a filled arrow. | Plan §4; DESIGN_SPEC; `src/canvas/MemoryEdge.tsx` |
+| Edge kind: `references` | Soft link — "see \<file\> when relevant"; mentioned by path, never inlined; agent reads on demand. Drawn 1.5px dashed with an open-circle marker. | Plan §4; DESIGN_SPEC; `src/canvas/MemoryEdge.tsx` |
+| Edge kind: `conditional` | Include/point only when a condition matches — a glob (`src/net/**`) or natural language. Drawn dotted with a mono condition chip at the midpoint (the chip is the cue, not colour). | Plan §4; DESIGN_SPEC; `src/canvas/MemoryEdge.tsx` |
+| Edge kind: `sequence` | Pure ordering — target must be read after source; affects `readOrder` only. Drawn 1.5px solid with an open chevron and a numbered step dot. | Plan §4; DESIGN_SPEC; `src/canvas/MemoryEdge.tsx` |
+| Edge kind picker | Popover shown when a connection is drawn between two nodes: choose one of the four kinds (plus a condition input for `conditional`) or cancel — no edge exists until confirmed (`pending` connection in the store). | `src/canvas/KindPicker.tsx`; `src/store/graph.ts` |
+| Effective-pinned | The nodes compiled as always-in-context: `pinned: true` nodes plus the transitive closure of their `imports` targets — an imported node is in context even when its own flag is off. | `src-tauri/src/compile.rs` (`effective_pinned`) |
+| Glob condition | A conditional edge's condition counts as a glob iff it has no whitespace and contains `*`, `?`, `[`, or `/`; globs render as "When touching \`…\`" and feed `.mdc` `globs:`, anything else is natural language ("When …, read …"). | `src-tauri/src/compile.rs` (`is_glob`) |
+| Handoff | Button that has `claude -p` fill a template (current state / decisions / open threads / next actions) from the graph + recent event log → `HANDOFF.md` plus clipboard variants for Claude Chat / Code / Design. | Plan §9 P6; FEATURES §8 |
+| Handwritten file | An existing, non-empty compile-output path that lacks the GENERATED header — Cowtext did not write it. The preview flags it, the modal shows a red overwrite warning, it starts un-approved, and the footer counts approved handwritten overwrites. | `src-tauri/src/compile.rs`; `src/compile/CompileModal.tsx` |
+| Live monitor | The hooks pipeline as a feature: real agent activity lights up nodes on the canvas (Phase 4, "ugly version") and drives the barn (Phase 5). Unknown paths still show in the event log. | Plan §7; FEATURES §6 |
+| Memory Node | A node in the graph backed by a real `.md` file in the user's project. Fields: `id`, `title`, `role`, `brief`, `filePath`, `readOrder`, `pinned`, `position`, optional `scenePos`. The file on disk is the content source of truth; creating a node stubs the file immediately. | Plan §4; `src/store/graph.ts`, `src/canvas/MemoryNodeCard.tsx` |
+| Node role | One of seven per node: `persona`, `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` (`NodeRole` / `NODE_ROLES`). Drives the 8×8 glyph, role colour, and which barn prop represents the node (cabinet / bookshelf / corkboard…). | Plan §4, §8; DESIGN_SPEC; `src/store/graph.ts` |
+| Phase | The build order (0–6, then a `7+` backlog). Hard rule during the build: never implement a feature before its phase. All seven phases accepted 2026-08-18; remaining scope comes from BACKLOG.md. | Plan §9; FEATURES |
+| Pinned | Node flag: always-in-context (compiled into the output in `readOrder`) vs on-demand. Pinning is an agent-facing guarantee, so its indicator is amber, not blue. | Plan §4; DESIGN_SPEC |
+| Preset | Saved graph structure + briefs (no file content); "New project from preset" stubs the files. Exportable as a single `.cowtext-preset.json`. | Plan §9 P6; FEATURES §8 |
+| readOrder | A node's manual position in compiled output. Topology wins first; readOrder is the tie-break — Kahn's ready set pops by `(readOrder, id)`, so manual order decides inside what the constraints allow, and equal readOrder falls back to id. Shown as a badge on the card. | Plan §4; DESIGN_SPEC; `src-tauri/src/compile.rs` |
+| Read-burst throttle | Agents read files in volleys, so at most one read cue fires per 150ms, and ≥4 reads inside 500ms collapse to a single `paper_shuffle` then silence until the burst ends. Claimed at *event receipt*, before enqueue — a throttled read still walks/flashes, just silently. Sound summarizes; visuals enumerate. | docs/design/SOUND_DESIGN.md §3; `src/scene/sfx.ts` |
+| Event log | Collapsible bottom panel listing live/demo `BarnEvent`s: 28px rows, kind tag (read=amber, edit/write=success), rtl paths, "not on graph" tag for unknown paths, DEMO badge, clear button; hosts the "install hooks" button. | `src/inspector/EventLog.tsx` |
+| Refine | Per-node Assemble variant: re-run generation with an extra user instruction (`refine_node`). | Plan §6; `src-tauri/src/assemble.rs` |
+| Resolved-context preview | The exact bytes the agent will see — imports expanded inline, with a total token count. One of the two "product, not polish" differentiators (with the usage heatmap). | FEATURES 4.6 |
+| SFX cue / cue sheet | A cue is one named sound (`SfxCue`: 14 barn placeholder cues + 3 tool-layer cues) fired via `play()`; the cue sheet is SOUND_DESIGN's table mapping each cue to trigger, duration, character, mix level, and suppression rules. All gating (mute/calm/group gains/cooldowns/voice pool/ducking) lives *inside* `play()` — call sites stay dumb. | docs/design/SOUND_DESIGN.md §2/§2b; `src/scene/sfx.ts` |
+| Summarize | Per-node Assemble variant: compress an existing long file (`summarize_node`). | Plan §6; `src-tauri/src/assemble.rs` |
+| Topological order | The compile node order: Kahn's algorithm over the constraint graph where `sequence` says source-before-target and `imports` says target-before-source; the same graph always compiles to the same bytes. A cycle is a validation error reported as one concrete node path. | `src-tauri/src/compile.rs` (`total_order`, `find_cycle`) |
+| Usage heatmap | Reads per node across sessions → unpin/prune suggestions. Shows what the agent *actually* reads vs what you told it to read. | FEATURES 6.9 |
+| Voice pool | Concurrency cap on SFX: max 3 simultaneous one-shot voices (+1 typewriter loop, +1 ambient bed); a fourth one-shot steals the oldest voice. Paired with the never-queue rule — a cue that can't play now is dropped, not delayed, because late sound is wrong sound. | docs/design/SOUND_DESIGN.md §3; `src/scene/sfx.ts` |
+| Warmth | Theme temperature variant set via `data-warmth` on `<html>`: `neutral` / `warm` (recommended default) / `brown`. Swaps only the surface/border/text ramps; accents are shared. | DESIGN_SPEC; `src/styles/tokens.css` |
+
+## Architecture terms
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| Capabilities | Tauri's deny-by-default native permission system. Any plugin permission beyond `core:default` / `opener:default` must be listed in `src-tauri/capabilities/default.json` or the call silently fails at runtime. | `src-tauri/capabilities/default.json`; CLAUDE.md |
+| `assemble://status` | Tauri event emitted by Rust on every assemble-job transition (`AssembleProgress { nodeId, mode, status, error }`); the frontend's only post-enqueue signal, wired to `useGraphStore.setAssembleStatus`. | `src-tauri/src/assemble.rs`; `src/store/events.ts` |
+| AssembleQueue | Tauri-managed state behind the assemble commands: FIFO queue, max 2 concurrent jobs, per-node dedupe (exact enqueue-Err prefixes), cancel of queued jobs; frees the concurrency slot before emitting the terminal event. | `src-tauri/src/assemble.rs` |
+| App settings | App-level (not per-project) preferences persisted to `app_config_dir/settings.json` via `read_app_settings` / `write_app_settings` (atomic; frontend owns the JSON shape, Rust stores bytes). Shape v1: `masterVolume`, `barnSounds`, `toolSounds`, `muted`, `calmMode`, `claudeBinaryPath`; tolerant merge on load, flushed on quit. | `src-tauri/src/settings.rs`; `src/store/settings.ts` |
+| Atomic write | `write_atomic`: writes a temp file in the target directory, then renames into place (remove-first on Windows) — a crash never leaves a torn `graph.json` or node file. Both write commands use it. | `src-tauri/src/project.rs` |
+| checked_root | Shared root-validation helper: every command's `root` string must name an existing directory before any path work happens. `pub(crate)` in `project.rs`, reused by the compile commands. | `src-tauri/src/project.rs` |
+| Claude binary override | The `claudeBinaryPath` setting routes every `claude -p` spawn (assemble + handoff) to an explicit binary; `""` = auto-resolve via `where` (`.exe` preferred; `.cmd` resolved for bare names). Applied live through the `set_claude_override` seam in `assemble.rs` on every settings write — no restart. | `src-tauri/src/settings.rs`, `assemble.rs`; `src/settings/SettingsModal.tsx` |
+| Command (Tauri) | A `#[tauri::command]` Rust fn callable from JS. Adding one takes three coordinated edits: the fn, its `generate_handler![...]` entry, and the matching `invoke` call in TS. Twenty-three exist today — the full grouped list is in the canon (`docs/TERMINOLOGY.md` §Invoke commands). | `src-tauri/src/lib.rs`, `project.rs`, `compile.rs`, `assemble.rs`, `hooks.rs`, `settings.rs`, `preset.rs`, `handoff.rs` |
+| CSP | Content-Security-Policy; production-grade `csp` + relaxed `devCsp` defined in `tauri.conf.json` since the v0.0.0007 ship-prep (strict CSP requires `import "pixi.js/unsafe-eval"` as BarnScene's first import). Why fonts are self-hosted, never CDN-linked. | `src-tauri/tauri.conf.json`; CLAUDE.md |
+| Errors XOR files | `compile_preview`'s contract: validation errors or preview files, never both — graph problems are data (`Ok` with `errors`), `Err` is reserved for infrastructure failure (bad root, unparseable JSON, unreadable file). | `src-tauri/src/compile.rs`; `src/compile/api.ts` |
+| Event pipeline | The one-way flow: Rust emits → Tauri `emit` (`barn://event`) → Zustand store → both views react. React Flow and PixiJS never import each other. | CLAUDE.md; Plan §2 |
+| FS boundary | All filesystem access goes through Rust commands; the webview never touches paths directly — it only passes back paths it got from Rust or the native dialog. | CLAUDE.md; `src-tauri/src/project.rs` |
+| Graph persistence | Store mutations mark the graph `dirty`, a 700ms debounce serializes it and invokes `write_graph` (atomic). Save state: `idle` / `dirty` / `saving` / `saved` / `error` (`SaveState`). | `src/store/graph.ts` |
+| Hooks (Claude Code) | `PostToolUse` / `UserPromptSubmit` / `Stop` entries Cowtext writes into a user project's `.claude/settings.json`; each `curl -s -m 1 -X POST`s hook JSON to the hooks server. `\|\| true` guarantees hooks never block Claude Code when the app is closed. | Plan §7; Phase 4 |
+| Hooks server | axum HTTP server in `src-tauri/src/hooks_server.rs`, bound to `127.0.0.1:4923`, single `POST /event` (lenient parse, always 200 empty). Normalizes hook JSON (`hook_event_name`, `tool_name`, `tool_input.file_path`, `session_id`) → `BarnEvent` → `app.emit("barn://event")`. Bind failure logs and the app still starts. | Plan §7; `src-tauri/src/hooks_server.rs` |
+| `hooks_preview` / `hooks_write` | The trust-boundary command pair: preview merges the plan-§7 hooks block into `.claude/settings.json` preserving unrelated keys (invalid JSON never clobbered; already-installed file round-trips byte-verbatim → `unchanged: true`); write happens only with the exact previewed content, atomically. UI: `HooksModal` (full diff, Cancel holds focus, no auto-write). | `src-tauri/src/hooks.rs`; `src/inspector/HooksModal.tsx` |
+| invoke | `invoke("command_name", { args })` from `@tauri-apps/api/core` — the frontend's only way to call Rust. Args are camelCase in JS, snake_case in Rust; Tauri converts. | `src/store/project.ts` |
+| IPC | The two-process split: frontend (`src/`, webview) ↔ backend (`src-tauri/src/`, Rust) over Tauri's inter-process channel — `invoke` inbound, `emit` outbound. | CLAUDE.md |
+| Port 1420 | Vite dev port, pinned with `strictPort: true` in *both* `vite.config.ts` and `tauri.conf.json` — if occupied, `tauri dev` fails rather than drifting. Change both together. | CLAUDE.md; `vite.config.ts` |
+| Port 4923 | Localhost port of the hooks server (`127.0.0.1:4923`). Port-conflict handling (pick a free port, inject into the hook command) is FEATURES 6.6. | Plan §7 |
+| Path guard | `resolve_within_root`: every webview-supplied relative path is resolved lexically against the project root — absolute paths, `..`, drive prefixes, and UNC paths are rejected before touching the filesystem. | `src-tauri/src/project.rs` |
+| resolveNodeId | Events-store helper mapping a `BarnEvent.filePath` to a graph node: `\`→`/` normalize, root-prefix strip, case-insensitive `filePath` match. Shared by EventLog, the canvas pulse (`lastLiveTs` / `LIVE_PULSE_MS`), and the barn's `resolveProp`. | `src/store/events.ts`; `src/scene/mapper.ts` |
+| Runner trait | Test seam in the assemble module: production `ClaudeRunner` resolves `claude` via `where` (cached in `OnceLock`, `.exe` preferred over `.cmd`, `CREATE_NO_WINDOW`), pipes the prompt over stdin to `claude -p --output-format json`, parses the `result` field; tests inject fake runners. | `src-tauri/src/assemble.rs` |
+| scan_project | Rust command that recursively scans a folder for `.md` files, skipping hidden dirs and `SKIP_DIRS` (`.git`, `node_modules`, `target`, `dist`, …); returns `ProjectScan { root, files }` with sizes and mtimes. | `src-tauri/src/project.rs` |
+| Store (Zustand) | The single state source both views subscribe to. Three stores today: `useProjectStore` (open folder + `.md` scan), `useGraphStore` (nodes, edges, selection, persistence, transient assemble status), and `useEventsStore` (`BarnEvent` ring buffer MAX 200, `demoMode`, `pushEvent`; wired once via idempotent `initEventListener`). | `src/store/`; Plan §3 |
+| Trust boundary | Writing hooks into a user project's `.claude/settings.json`. Always shown as a confirmation diff — never silent. | CLAUDE.md; FEATURES 6.1 |
+| Unified diff / LCS | The hand-rolled line diff behind the diff preview — no diff library: standard DP LCS over line arrays, ops grouped into unified-style hunks with 3 context lines; pathological sizes (`m*n > 1e6`) fall back to one whole-file hunk. | `src/compile/diff.ts` |
+| `windows_subsystem = "windows"` | Attribute in `main.rs` that suppresses the console window in release builds; use `npm run tauri dev` to see `println!` and panics. | `src-tauri/src/main.rs`; CLAUDE.md |
+| Write allowlist | `compile_write` accepts only compile-output shapes — exactly `CLAUDE.md`, any path ending in `AGENTS.md`, or one component under `.cursor/rules/` with `.mdc` — and only content carrying the GENERATED header; the whole batch is validated before any write. It must never become a general write primitive. | `src-tauri/src/compile.rs` (`is_allowed_output`) |
+
+## Frontend tech
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| @fontsource (×3) | Self-hosted font packages: `@fontsource/ibm-plex-sans`, `@fontsource/jetbrains-mono`, `@fontsource/silkscreen`. Bundled — no CDN font links, ever (offline rendering + survives CSP tightening). | `package.json`; DESIGN_SPEC |
+| @tauri-apps/api 2 | JS bindings to the Tauri core (`invoke`, events). | `package.json` |
+| @tauri-apps/cli 2 | Dev CLI behind `npm run tauri dev` / `tauri build`. | `package.json` (dev) |
+| @tauri-apps/plugin-dialog 2 | Native dialogs; used for the "Open project folder" directory picker. | `package.json`; `src/store/project.ts` |
+| @tauri-apps/plugin-opener 2 | Opens paths/URLs with the OS default handler (scaffold default). | `package.json` |
+| CodeMirror 6 | Raw markdown editor for the inspector panel. Installed as `@codemirror/state` / `view` / `language` / `commands` / `lang-markdown` + `@lezer/highlight`; the inspector UI itself is in-progress Phase 1 work. | `package.json`; FEATURES 3.1 |
+| dagre / elk *(planned, P6)* | Auto-layout engine for the "tidy" button. Choice not yet made. | FEATURES 2.11 |
+| howler.js 2.2 | Barn/tool SFX runtime (plan §2 stack): one-shot voices, loops, per-voice volume for ducking. Confined to `src/scene/sfx.ts` by rule — no other module imports it. | `package.json`; `src/scene/sfx.ts` |
+| lucide-react | Stroke icon set (24 grid, 1.5px at 16px) for all app chrome. Role glyphs are in-repo SVG regardless. Approved by Marty 2026-08-15. | `package.json`; DESIGN_SPEC |
+| PixiJS 8 | WebGL 2D renderer for the barn scene (`Application` async init, `Container`/`Graphics` — placeholder graphics are programmatic, no binary assets). Explicitly no Three.js, no real 3D — 16-bit isometric 2:1 tiles (32×16, 12×12 grid) are a 2D problem (`src/scene/iso.ts`). | Plan §2, §8; `src/scene/` |
+| React 19.1 | UI framework. Plan §2 said React 18; the scaffold installed 19.1 and it was kept — check ecosystem integration notes against 19 before trusting plan-era guidance. | `package.json`; CLAUDE.md |
+| React Flow (@xyflow/react) 12 | Node-graph canvas. Custom node/edge components live in `src/canvas/` (`MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`); view types in `src/canvas/types.ts` map from the store's domain model — React Flow never owns the state. | `package.json`; `src/canvas/` |
+| Tailwind CSS 3.4 | Utility-first styling, themed from the design tokens; with `postcss` + `autoprefixer`. | `package.json`; `tailwind.config.js` |
+| TypeScript ~5.8 | `strict: true`, no `any`; `noUnusedLocals` / `noUnusedParameters` are on, so unused variables break the build. `tsc` is the only frontend check today. | `tsconfig.json`; CLAUDE.md |
+| Vite 7 | Dev server (`:1420`, strictPort) and bundler. `src-tauri/**` is excluded from its watcher — Rust rebuilds via cargo, not HMR. | `vite.config.ts` |
+| Vitest *(planned, P4)* | Store unit tests + one end-to-end smoke test. | FEATURES 9.6 |
+| Web AudioContext + autoplay policy | The browser audio engine howler rides on. Autoplay policy keeps the context suspended until the first user gesture; Howler would *queue* plays until unlock and burst them all at once, so sfx drops cues while `ctx.state !== "running"` (pre-gesture cue drop) — never-queue applies to the locked context too. | `src/scene/sfx.ts` (`ctxRunning`) |
+| Zustand 5 | State store library — one store, two views (React Flow canvas + Pixi scene) subscribe. | `package.json`; Plan §2 |
+
+## Rust tech
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| axum 0.8 | HTTP framework running the hooks server on `127.0.0.1:4923`. | `Cargo.toml`; `src-tauri/src/hooks_server.rs` |
+| cargo clippy | Lint gate: `cargo clippy -- -D warnings` must pass (warnings are errors). | CLAUDE.md |
+| cowtext_lib | The crate's lib name (`crate-type = ["staticlib", "cdylib", "rlib"]`); suffixed `_lib` to avoid a bin-name clash on Windows. `main.rs` is a thin shim calling `cowtext_lib::run()`. | `src-tauri/Cargo.toml`, `main.rs` |
+| notify *(planned, P2)* | FS-watch crate for external-change detection (reload or conflict banner when dirty). | Plan §2; FEATURES 3.5 |
+| serde / serde_json | Serialization; `#[serde(rename_all = "camelCase")]` on command return types gives JS its casing. | `Cargo.toml`; `project.rs` |
+| tauri 2 | The app shell: tiny binary, native FS, in-process localhost server, plugin system. `tauri::Builder` chain in `lib.rs::run()` registers plugins + the `invoke_handler`. | `Cargo.toml`; `src-tauri/src/lib.rs` |
+| tauri-build | Build-dependency that generates the Tauri glue at compile time. | `Cargo.toml`; `build.rs` |
+| tauri-plugin-dialog / -opener 2 | Rust halves of the dialog and opener plugins, registered in the builder chain. | `Cargo.toml`; `lib.rs` |
+| tokio 1 | Async runtime for the hooks server and the `claude -p` child-process queue (`tauri::async_runtime` rides on it). | `Cargo.toml`; `assemble.rs`, `hooks_server.rs` |
+
+## Design terms
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| "Blue is you, amber is the cow" | The one rule that decides the rest: scarf blue (`--accent` #4C9BE8) marks everything the *user* initiates; hay amber (`--amber` #E8A33D) marks everything the *agent* does on its own. Two accents, never mixed on one control. | DESIGN_SPEC |
+| Border-first elevation | In a 95%-dark app shadows are nearly invisible — surface step + border do the work. If it doesn't overlap something, it gets no shadow. Five levels: `elev-0` (flush) → `elev-4` (modal, palette). | DESIGN_SPEC |
+| Compact density | Default density: 28px rows/controls (Comfortable = 34px) — the window lives next to a terminal all day. Top bar 44px, inspector 392px, node card 244px fixed. | DESIGN_SPEC |
+| Design tokens | Semantic CSS variables (`--surface-1`, not `gray-900`) for every colour, radius, elevation, and motion value. Values source of truth: `src/styles/tokens.css` (the old docs/design copies are archived in `docs/_archive/superseded/`); decisions in DESIGN_SPEC. | `src/styles/tokens.css`; docs/design/DESIGN_SPEC.md |
+| Focus ring | `0 0 0 2px var(--surface-1), 0 0 0 4px var(--accent)` — inner ring punches a gap so it reads on any background. `:focus-visible` only; never removed. | DESIGN_SPEC |
+| Integer zoom ladder | Barn zoom snaps to whole-number scales (1→2→3→4) — fractional scaling shimmers pixel art, so the ladder keeps the 16-bit sprites crisp at every step. | `src/scene/BarnScene.tsx` |
+| Live-read pulse | Amber node state while the agent reads it: pulsing 2px amber ring (1600ms), amber stripe replacing the role stripe, blinking amber square. Reduced-motion drops the animation, keeps the static amber markers. | DESIGN_SPEC |
+| Moving vs static amber | Static amber = warning; **moving** amber = live agent activity. | DESIGN_SPEC |
+| Node states | Rest / Hover / Selected (2px accent ring) / Live-reading (amber) / Assembling (accent progress) / Assembled (success flash, 600ms) / Stale-error (badge; red stripe on error). | DESIGN_SPEC |
+| Pixel march | The loading indicator: a 4-step amber pixel march (8px squares, staggered blink) with a Silkscreen caption ("the cow is reading"). Never a spinner. | DESIGN_SPEC |
+| Radius ramp | 2/3/4/6/8px — one step sharper than web-normal; pill only for toggle tracks and status dots; nothing rounder than 8px. | DESIGN_SPEC |
+| Role colours | Redundant coding: the 8×8 glyph is the primary identifier; lightness staggered so the seven-role set survives deuteranopia and greyscale. Roles own hue — edges are neutral by rule. | DESIGN_SPEC; `tokens.css` |
+| Role glyphs | Seven hand-authored 8×8 pixel glyphs, `shape-rendering: crispEdges`, recreated in-repo (`src/canvas/RoleGlyphs.tsx`, pixel maps → SVG) — no icon dependency. The only non-stroke iconography in the app. Design-project originals in `Cowtext Spec.dc.html`. | DESIGN_SPEC; `src/canvas/RoleGlyphs.tsx` |
+| Rules of the line | The allowed/banned list for pixel charm: allowed in role glyphs, full-page empty states, the pixel march, the LIVE tag/HUD, sharp handles; banned as UI fonts, panel textures, chrome mascots, wood/hay fills, bevels. | DESIGN_SPEC |
+| Silkscreen rule | The pixel font is the barn's voice, with exactly three sanctioned uses: LIVE/READING tags, the barn HUD, the logo. Never for UI text. | DESIGN_SPEC |
+| Surface ramp | `--surface-canvas` → `--surface-0…3` + `--surface-inset` (recessed wells: editor, diff). Warm dark greys pulled toward hay; borders are the primary elevation tool. | `tokens.css`; DESIGN_SPEC |
+| Typography stack | IBM Plex Sans for all UI; JetBrains Mono for anything the filesystem or the model produced (paths, tokens, diffs, chips); Silkscreen per its rule. Default size 13px. | DESIGN_SPEC |
+
+## File artifacts
+
+| Term | Definition | Where it lives |
+|---|---|---|
+| `.claude/settings.json` | The *user project's* Claude Code config, where Cowtext installs its hooks — always behind a confirmation diff (trust boundary). | Plan §7; user project |
+| `.cowtext/` | Per-project data directory inside the *user's* project, git-friendly (committed by default). Will also hold `presets/`, `history/`, `prompts/`. | Plan §3; FEATURES |
+| `.cowtext/graph.json` | The graph — source of truth for *structure* (nodes, edges, targets). Any schema change bumps `version` and adds a migration. Stable serialization (sorted keys, LF) planned for clean git diffs. | Plan §3, §4; CLAUDE.md |
+| `.cowtext-preset.json` | Single-file preset export/import format (structure + briefs, no content). | FEATURES 8.6 |
+| `.cursor/rules/*.mdc` | Cursor compile output: one rule file per node in (effective-pinned ∪ glob-conditional targets), named from the lowercased file stem (collisions get `-2`, `-3`…), frontmatter + header + node body. Stale `.mdc` from earlier compiles are not deleted (out of Phase 2 scope). Off by default in the target picker. | Plan §5; `src-tauri/src/compile.rs` (`emit_cursor`) |
+| `AGENTS.md` | Compile output of the `agents` adapter: same structure as `CLAUDE.md` but plain markdown links; plus one nested `{dir}/AGENTS.md` per clean folder glob (links prefixed one `../` per path segment) — an addition to the root bullets, not a move. | Plan §5; `src-tauri/src/compile.rs` |
+| `alwaysApply` | Cursor frontmatter flag emitted for effective-pinned nodes — the rule is always in context. Pinned wins over globs: a node that is both pinned and a glob target gets `alwaysApply: true` and no `globs:` line. | Plan §5; `src-tauri/src/compile.rs` |
+| `CLAUDE.md` (generated) | Compile output of the `claude` adapter in a user project: "## Always read" lists effective-pinned nodes in total order as `@<filePath>` imports; "## Read when relevant" turns references/conditionals into "When working on X / When touching \`glob\`, read @Y" bullets. | Plan §5; `src-tauri/src/compile.rs` (`emit_root`) |
+| `CLAUDE.md` (this repo) | Cowtext's own project instructions for Claude Code sessions — hard rules, commands, architecture, status line updated every session. Not generated. | repo root |
+| `context/*.md` | The Memory Node files themselves — content source of truth, default location (configurable). The claude adapter pins them as `@context/*.md`. | Plan §3; user project |
+| Frontmatter (`.mdc`) | The YAML block Cursor requires as the first bytes of a rule file: `description:` (node title) plus `alwaysApply: true` or `globs:` (comma-joined glob conditions). Values go through `yaml_scalar` — plain when safe, double-quoted with escapes when they would break YAML. | `src-tauri/src/compile.rs` (`yaml_scalar`) |
+| GENERATED header | First line of every compiled file: `<!-- GENERATED BY COWTEXT — edit the graph or context/*.md, not this file -->` (`GENERATED_HEADER`; `.mdc` carries it right after the frontmatter, so `has_header` scans the first 10 lines). Its absence on an existing file is what marks it handwritten; `compile_write` refuses content without it. Tamper detection (body hash) planned. | Plan §5; FEATURES 4.4, 4.8; `src-tauri/src/compile.rs` |
+| `HANDOFF.md` | Output of the Handoff button — session summary a next agent/chat can pick up. | Plan §9 P6 |
+| `COWTEXT_VIBECODE_PLAN.md` | The full authoritative product spec (kept outside this repo, Marty-side). §2 stack, §4 data model, §5 adapters, §8 scene, §9 phases. | outside the repo; CLAUDE.md |
+| `PHASE34_BARN_CONTRACT.md` / `PHASE56_CONTRACT.md` | The frozen fleet contracts (command signatures, wire shapes, store shapes, lane ownership grids) both builds ran against; archived now that their phases are accepted. | `docs/_archive/contracts/` |
+| `docs/design/BARN_PROTOTYPE.md` | Integration doc for the barn prototype: mount API (`<BarnScene />`, `autoDemo`, `connectEvents` seam), store-read rules, demo mode. | `docs/design/` |
+| `src/styles/tokens.css` + `tailwind.config.js` (root) | The live token values and the Tailwind theme extension built on them; DESIGN_SPEC records the decisions. The original docs/design drafts are archived. | repo root; `src/styles/` |

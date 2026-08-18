@@ -1,7 +1,7 @@
 # Cowtext — Feature Backlog
 
 Full feature list with phase assignments. Derived from `COWTEXT_VIBECODE_PLAN.md`
-(`D:\Moo.exe\_Documents\Cowtext\`) plus proposed additions.
+(kept outside the repo) plus proposed additions.
 
 **Legend**
 - `SPEC` — committed in the plan (§ reference given)

@@ -62,9 +62,9 @@ fn unknown_event_name_becomes_other() {
 fn file_path_comes_from_tool_input_with_path_fallback() {
     let e = norm(json!({
         "hook_event_name": "PostToolUse", "tool_name": "Read",
-        "tool_input": { "file_path": "D:\\proj\\context\\rules.md" }
+        "tool_input": { "file_path": "C:\\proj\\context\\rules.md" }
     }));
-    assert_eq!(e.file_path.as_deref(), Some("D:\\proj\\context\\rules.md"));
+    assert_eq!(e.file_path.as_deref(), Some("C:\\proj\\context\\rules.md"));
 
     // Grep/Glob send `path` instead of `file_path`.
     let e = norm(json!({

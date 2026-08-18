@@ -7,7 +7,7 @@ dist/
 
 # --- Tauri / Rust ---
 src-tauri/target/
-src-tauri/gen/schemas/
+src-tauri/gen/
 
 # --- Env & secrets ---
 .env
@@ -16,6 +16,8 @@ src-tauri/gen/schemas/
 
 # --- Claude Code (local overrides only; shared .claude/settings.json stays in git) ---
 .claude/settings.local.json
+.claude/agent-memory-local/
+.claude/scripts/*.local.ps1
 
 # --- Editors ---
 .vscode/*
@@ -32,3 +34,7 @@ Thumbs.db
 coverage/
 __pycache__/
 
+# cowtext runtime
+.cowtext/
+*.sqlite
+*.sqlite-*

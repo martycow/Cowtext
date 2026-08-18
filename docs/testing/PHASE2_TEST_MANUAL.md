@@ -14,7 +14,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 
 1. **Free port 1420.** `strictPort` is on — if anything sits on 1420, `tauri dev` fails instead
    of picking another port.
-2. **Start the app:** from `D:\Moo.exe\Cowtext` run:
+2. **Start the app:** from the repo root run:
 
    ```powershell
    npm run tauri dev
@@ -26,12 +26,12 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
    deletes files):
 
    ```powershell
-   mkdir D:\_cowtest\src\net
-   Set-Content D:\_cowtest\notes.md "# Notes`n`nSome handwritten notes."
+   mkdir C:\_cowtest\src\net
+   Set-Content C:\_cowtest\notes.md "# Notes`n`nSome handwritten notes."
    ```
 
-   *Expected:* folder `D:\_cowtest` with one file `notes.md` and an empty `src\net` dir.
-4. In Cowtext press **Open folder** (top-right) and pick `D:\_cowtest`.
+   *Expected:* folder `C:\_cowtest` with one file `notes.md` and an empty `src\net` dir.
+4. In Cowtext press **Open folder** (top-right) and pick `C:\_cowtest`.
    *Expected:* pixel-march loading ("the cow is reading"), then the workspace: left file rail
    shows `1 markdown file` with `notes.md`, empty canvas, inspector on the right says
    "Select a node to edit its properties…". A **Compile** button appears in the top bar
@@ -72,7 +72,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 ### B2. Open Compile and pick targets
 
 16. Press **Compile** in the top bar (now enabled).
-    *Expected:* a modal opens — header **Compile** with the mono root path `→ D:\_cowtest`
+    *Expected:* a modal opens — header **Compile** with the mono root path `→ C:\_cowtest`
     on the right and a ✕ button; below it a **targets** row with three checkbox chips
     `claude` / `agents` / `cursor`. A brief amber pixel march reads
     **"the cow is compiling"** — never a spinner — then the file list appears.
@@ -120,10 +120,10 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 24. Press **Close**, then verify on disk:
 
     ```powershell
-    Get-Content D:\_cowtest\CLAUDE.md -TotalCount 1
-    Get-Content D:\_cowtest\AGENTS.md -TotalCount 1
-    Get-Content D:\_cowtest\src\net\AGENTS.md -TotalCount 1
-    Get-Content D:\_cowtest\.cursor\rules\networking.mdc -TotalCount 5
+    Get-Content C:\_cowtest\CLAUDE.md -TotalCount 1
+    Get-Content C:\_cowtest\AGENTS.md -TotalCount 1
+    Get-Content C:\_cowtest\src\net\AGENTS.md -TotalCount 1
+    Get-Content C:\_cowtest\.cursor\rules\networking.mdc -TotalCount 5
     ```
 
     *Expected:* the first three each start with the exact GENERATED header line.
@@ -161,7 +161,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 29. WITHOUT closing the app, delete a node's file from disk:
 
     ```powershell
-    Remove-Item D:\_cowtest\context\style-guide.md
+    Remove-Item C:\_cowtest\context\style-guide.md
     ```
 
 30. Press **Compile**. *Expected:* error list with a **missing file** badge:
@@ -189,7 +189,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 35. Note `AGENTS.md`'s current LastWriteTime:
 
     ```powershell
-    (Get-Item D:\_cowtest\AGENTS.md).LastWriteTime
+    (Get-Item C:\_cowtest\AGENTS.md).LastWriteTime
     ```
 
 36. Press **Approve & write**. *Expected:* done screen lists the approved files only —
@@ -202,7 +202,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 38. Overwrite `CLAUDE.md` by hand, removing the header:
 
     ```powershell
-    Set-Content D:\_cowtest\CLAUDE.md "# My handwritten CLAUDE.md`n`nDo not lose me."
+    Set-Content C:\_cowtest\CLAUDE.md "# My handwritten CLAUDE.md`n`nDo not lose me."
     ```
 
 39. Press **Compile**. *Expected:* the `CLAUDE.md` row is **UNCHECKED by default** and
@@ -225,7 +225,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
     with checked files. Snapshot the tree:
 
     ```powershell
-    Get-ChildItem D:\_cowtest -Recurse -File | Select Name, LastWriteTime
+    Get-ChildItem C:\_cowtest -Recurse -File | Select Name, LastWriteTime
     ```
 
 44. Press **Cancel** (also try: Escape key; clicking the dark scrim outside the panel;
@@ -249,7 +249,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 48. **Connect:** draw one new edge, pick **sequence**. *Expected:* solid edge with an
     arrowhead; edge selectable; Delete edge works from the inspector.
 49. **Restart-restore:** close the Cowtext window, `npm run tauri dev` again, Open folder
-    → `D:\_cowtest`. *Expected:* all nodes at their exact positions, all edges with their
+    → `C:\_cowtest`. *Expected:* all nodes at their exact positions, all edges with their
     kinds and the conditional's condition intact, pinned states preserved, target-chip
     selection in the Compile modal remembered (compileTargets persist in graph.json).
 50. **Inspector edit:** select a node, edit the Title (canvas card updates live), switch to
@@ -263,7 +263,7 @@ if reality differs, that is a bug (or this manual is stale; either way, note it)
 51. Close the app and delete the scratch project:
 
     ```powershell
-    Remove-Item -Recurse -Force D:\_cowtest
+    Remove-Item -Recurse -Force C:\_cowtest
     ```
 
 ## Sign-off
