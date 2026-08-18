@@ -13,6 +13,7 @@
 #[cfg(test)]
 mod tests;
 
+use crate::watcher::note_self_write;
 use serde::Serialize;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -223,7 +224,12 @@ pub(crate) fn resolve_within_root(root: &Path, rel: &str) -> Result<PathBuf, Str
 }
 
 /// Write `content` atomically: temp file in the same directory, then rename.
-/// Creates missing parent directories. LF content is passed through verbatim.
+/// Creates missing parent directories. LF content is passed through
+/// verbatim. Registers `path` in the watcher's self-write registry
+/// ([`note_self_write`], WO01 Block C §T4) on success — this is the single
+/// call site every writer in the codebase goes through, so `fs://change`
+/// events for our own writes come out tagged `selfWrite: true` without
+/// every caller having to remember to tag itself.
 pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let parent = path
         .parent()
@@ -242,6 +248,7 @@ pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
         fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    note_self_write(path);
     Ok(())
 }
 

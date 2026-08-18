@@ -195,6 +195,7 @@ fn flush_rechecks_generation_on_every_entry_not_once_for_the_whole_batch() {
         &mut pending,
         0, // this debounce task's captured generation
         current_generation,
+        |_| false,
         |change| emitted.push(change.rel_path),
     );
 
@@ -219,14 +220,131 @@ fn flush_with_emits_every_entry_when_generation_stays_current() {
         &mut pending,
         7,
         || Some(7),
+        |_| false,
         |change| {
             // Remove always carries None/None regardless of what's on disk.
             assert_eq!(change.modified_ms, None);
             assert_eq!(change.size_bytes, None);
+            assert!(!change.self_write);
             emitted.push(change.rel_path);
         },
     );
 
     emitted.sort();
     assert_eq!(emitted, vec!["a.md".to_string(), "b.md".to_string()]);
+}
+
+// --- Self-write registry (WO01 Block C §T4) --------------------------------
+
+#[test]
+fn flush_with_tags_self_write_true_when_registry_reports_it() {
+    let mut pending: HashMap<String, (FsChangeKind, Instant)> = HashMap::new();
+    merge_pending(&mut pending, "a.md".into(), FsChangeKind::Remove);
+
+    let mut tagged = None;
+    flush_with(
+        Path::new("C:\\proj"),
+        &mut pending,
+        1,
+        || Some(1),
+        |_path| true, // registry says: yes, this was our own write
+        |change| tagged = Some(change.self_write),
+    );
+
+    assert_eq!(tagged, Some(true));
+}
+
+#[test]
+fn flush_with_tags_self_write_false_for_untouched_registry() {
+    let mut pending: HashMap<String, (FsChangeKind, Instant)> = HashMap::new();
+    merge_pending(&mut pending, "a.md".into(), FsChangeKind::Remove);
+
+    let mut tagged = None;
+    flush_with(
+        Path::new("C:\\proj"),
+        &mut pending,
+        1,
+        || Some(1),
+        |_path| false, // registry has no entry — a genuine external edit
+        |change| tagged = Some(change.self_write),
+    );
+
+    assert_eq!(tagged, Some(false));
+}
+
+#[test]
+fn note_and_take_self_write_round_trip_within_ttl() {
+    let path = PathBuf::from(format!("C:\\proj\\note-round-trip-{}.md", std::process::id()));
+    note_self_write(&path);
+    // Written just now — well within the TTL — and the registry lookup
+    // resolves it exactly by that same absolute path.
+    assert!(take_self_write(&path));
+}
+
+#[test]
+fn take_self_write_is_false_for_a_path_never_registered() {
+    // An external edit to a path Cowtext never wrote must never be tagged.
+    let path = PathBuf::from(format!(
+        "C:\\proj\\external-only-{}.md",
+        std::process::id()
+    ));
+    assert!(!take_self_write(&path));
+}
+
+#[test]
+fn expired_self_write_entry_is_not_tagged() {
+    let path = PathBuf::from(format!("C:\\proj\\expired-{}.md", std::process::id()));
+    {
+        let mut reg = self_write_registry().lock().unwrap();
+        // Recorded well past SELF_WRITE_TTL_MS (2500ms) ago — simulated via
+        // Instant subtraction rather than an actual multi-second sleep.
+        reg.insert(path.clone(), Instant::now() - Duration::from_millis(3000));
+    }
+    assert!(!take_self_write(&path));
+}
+
+#[test]
+fn take_self_write_consumes_entry_so_a_later_external_edit_is_not_suppressed() {
+    let path = PathBuf::from(format!("C:\\proj\\consume-{}.md", std::process::id()));
+    note_self_write(&path);
+
+    // First flush after our own write: tagged self-write, and consumed.
+    assert!(take_self_write(&path));
+    // A second, later flush for the same path — e.g. a real external edit
+    // that landed right after — must NOT still read as self-write just
+    // because an old entry happens to still be sitting in the map.
+    assert!(!take_self_write(&path));
+}
+
+#[test]
+fn prune_expired_removes_stale_entries_but_keeps_fresh_ones() {
+    let mut reg: HashMap<PathBuf, Instant> = HashMap::new();
+    let now = Instant::now();
+    reg.insert(PathBuf::from("C:\\proj\\stale.md"), now - Duration::from_millis(3000));
+    reg.insert(PathBuf::from("C:\\proj\\fresh.md"), now);
+
+    prune_expired(&mut reg, now);
+
+    assert_eq!(reg.len(), 1);
+    assert!(reg.contains_key(&PathBuf::from("C:\\proj\\fresh.md")));
+}
+
+#[test]
+fn note_self_write_prunes_other_expired_entries_on_insert_so_the_registry_never_leaks() {
+    let stale_path = PathBuf::from(format!("C:\\proj\\leak-check-stale-{}.md", std::process::id()));
+    {
+        let mut reg = self_write_registry().lock().unwrap();
+        reg.insert(stale_path.clone(), Instant::now() - Duration::from_millis(3000));
+    }
+
+    // A completely unrelated write elsewhere still triggers the prune.
+    let other_path = PathBuf::from(format!("C:\\proj\\leak-check-other-{}.md", std::process::id()));
+    note_self_write(&other_path);
+
+    let reg = self_write_registry().lock().unwrap();
+    assert!(
+        !reg.contains_key(&stale_path),
+        "expired entry must be pruned on every insert, not just on check"
+    );
+    assert!(reg.contains_key(&other_path));
 }

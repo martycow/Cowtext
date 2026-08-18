@@ -19,6 +19,7 @@ import {
   type MemoryNode,
 } from "../store/graph";
 import { useProjectStore } from "../store/project";
+import { useReviewStore } from "../store/review";
 import { useSettingsStore } from "../store/settings";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
 import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
@@ -1228,6 +1229,11 @@ function MarkdownTab({ node, root }: { node: MemoryNode; root: string }) {
     invoke("write_md_file", { root, relPath: node.filePath, content: doc })
       .then(() => {
         setSavedDoc(doc);
+        // The review baseline moves with an explicit in-app save — this
+        // content is now "known good", not a pending external edit (Block
+        // C §T4). Known limit: an open Markdown tab does not itself
+        // hot-reload on a later Accept; reselecting the node re-reads.
+        useReviewStore.getState().noteSelfSave(node.filePath, doc);
         void rescan();
       })
       .catch((e: unknown) => setSaveError(String(e)));
@@ -1239,6 +1245,7 @@ function MarkdownTab({ node, root }: { node: MemoryNode; root: string }) {
       .then(() => {
         setDoc(stub);
         setSavedDoc(stub);
+        useReviewStore.getState().noteSelfSave(node.filePath, stub);
         setState({ kind: "ready", generation: Date.now() });
         void rescan();
       })

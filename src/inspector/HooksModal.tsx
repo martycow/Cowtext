@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { useProjectStore } from "../store/project";
-import { diffLines, type DiffHunk } from "../compile/diff";
+import { diffLines, type DiffHunk } from "../ui/diff";
 
 /** Mirrors src-tauri hooks::HooksPreview (contract §1.2). */
 interface HooksPreview {

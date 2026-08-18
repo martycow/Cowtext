@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useGraphStore, type AssembleStatus } from "./graph";
 import { useProjectStore, type FsChange } from "./project";
+import { useReviewStore } from "./review";
 import { onTaskFileChange } from "./tasks";
 
 // ── Wire shape — mirrors src-tauri BarnEvent 1:1 (contract §2) ────────
@@ -190,6 +191,9 @@ export function initEventListener(): Promise<() => void> {
         // Task board auto-refresh (TASKBOARD_BATCH §7): convention task
         // files reload debounced; every other path is a no-op inside.
         onTaskFileChange(ev.payload.relPath);
+        // Disk-change review queue (WO01 Block C §T4): a managed file
+        // Cowtext didn't just write itself gets enqueued for review.
+        useReviewStore.getState().onFsChange(ev.payload);
       }),
     );
     return () => {

@@ -11,9 +11,13 @@
 //! stale watcher for project A from painting nodes in project B during a
 //! project switch.
 //!
-//! No self-write suppression here (Block C prerequisite, not built): a
-//! Cowtext-initiated write also emits `fs://change`. Harmless for the
-//! Activity lens the node genuinely changed.
+//! Self-write suppression (WO01 Block C §T4): a Cowtext-initiated write
+//! still emits `fs://change` — the Activity lens wants that, the node
+//! genuinely changed — but the flush tags it `selfWrite: true` via
+//! [`note_self_write`]/[`take_self_write`], a process-global registry that
+//! [`crate::project::write_atomic`] populates on every write. That is how
+//! the frontend review queue (`src/store/review.ts`) tells "Cowtext saved
+//! this" from "something external edited this managed file" apart.
 
 #[cfg(test)]
 mod tests;
@@ -21,7 +25,7 @@ mod tests;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use notify::event::{ModifyKind, RenameMode};
@@ -62,6 +66,11 @@ pub struct FsChange {
     /// null on remove or metadata failure; NEVER skipped.
     pub size_bytes: Option<u64>,
     pub kind: FsChangeKind,
+    /// True when this path was written by Cowtext itself (via
+    /// [`crate::project::write_atomic`]) within the self-write TTL — see
+    /// [`take_self_write`]. The event is still emitted either way; this
+    /// only tags it so `src/store/review.ts` can skip enqueuing it.
+    pub self_write: bool,
 }
 
 /// One project's active watcher: the notify handle (dropping it stops the
@@ -198,6 +207,64 @@ fn is_current_generation(current: Option<u64>, mine: u64) -> bool {
     current == Some(mine)
 }
 
+/// How long a registered self-write remains eligible to tag a matching
+/// `FsChange` as `selfWrite: true` (contract WO01 Block C §T4). Wider than
+/// [`DEBOUNCE_MS`] and [`MAX_PENDING_AGE_MS`] so a write followed by its own
+/// debounce flush is always caught even under scheduling jitter; narrow
+/// enough that a genuine external edit a few seconds later is never
+/// mistakenly suppressed.
+const SELF_WRITE_TTL_MS: u64 = 2500;
+
+/// Process-global self-write registry: paths Cowtext itself just wrote, so
+/// the matching debounce flush can tag the emitted `FsChange` instead of
+/// letting it read as an external edit. `OnceLock` because
+/// `Mutex::new(HashMap::new())` can't be a `static` initializer —
+/// `HashMap::new()` isn't `const` (it seeds `RandomState` at runtime).
+static SELF_WRITE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Instant>>> = OnceLock::new();
+
+fn self_write_registry() -> &'static Mutex<HashMap<PathBuf, Instant>> {
+    SELF_WRITE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Drop every entry older than [`SELF_WRITE_TTL_MS`] relative to `now`.
+/// Factored out with an explicit `now` so expiry/pruning is unit-testable
+/// without a real 2.5s sleep — tests build stale entries via
+/// `Instant::now() - Duration::from_millis(...)`.
+fn prune_expired(reg: &mut HashMap<PathBuf, Instant>, now: Instant) {
+    let ttl = Duration::from_millis(SELF_WRITE_TTL_MS);
+    reg.retain(|_, recorded_at| now.saturating_duration_since(*recorded_at) <= ttl);
+}
+
+/// Record that Cowtext itself just wrote `path`. Called from
+/// [`crate::project::write_atomic`] on every successful write, from every
+/// module — that single call site is what makes this a complete registry
+/// rather than something each writer has to remember to call. Prunes
+/// expired entries first (on every insert, per contract) so the registry
+/// never grows unboundedly across a long session. Never panics on a
+/// poisoned lock: losing a self-write tag just means one review-queue
+/// entry that shouldn't be there, not a crash.
+pub(crate) fn note_self_write(path: &Path) {
+    let Ok(mut reg) = self_write_registry().lock() else {
+        return;
+    };
+    prune_expired(&mut reg, Instant::now());
+    reg.insert(path.to_path_buf(), Instant::now());
+}
+
+/// Consult-and-consume: true if `path` was self-written within
+/// [`SELF_WRITE_TTL_MS`]. Always prunes expired entries first (per
+/// contract: prune on every check too), so a stale entry for `path` itself
+/// is dropped rather than matched. A hit is then removed outright — not
+/// just read — so a *later* genuine external edit to the same path is
+/// never wrongly suppressed by an old self-write still sitting in the map.
+fn take_self_write(path: &Path) -> bool {
+    let Ok(mut reg) = self_write_registry().lock() else {
+        return false;
+    };
+    prune_expired(&mut reg, Instant::now());
+    reg.remove(path).is_some()
+}
+
 fn merge_pending(
     pending: &mut HashMap<String, (FsChangeKind, Instant)>,
     rel_path: String,
@@ -283,22 +350,25 @@ fn flush(
         pending,
         generation,
         || current_generation(app),
+        take_self_write,
         |change| {
             let _ = app.emit(FS_CHANGE_EVENT, &change);
         },
     );
 }
 
-/// Core of [`flush`], generic over how the current generation is read and
-/// how a change is emitted — factored out so the per-entry re-check (the
-/// fix documented on [`flush`]) is unit-testable without a real
-/// `AppHandle`: a test closure can change its answer between calls to
-/// simulate `restart()` racing an in-flight batch.
+/// Core of [`flush`], generic over how the current generation is read, how
+/// a self-write is consulted, and how a change is emitted — factored out
+/// so the per-entry re-check (the fix documented on [`flush`]) and the
+/// self-write tagging are both unit-testable without a real `AppHandle`: a
+/// test closure can change its answer between calls to simulate
+/// `restart()` racing an in-flight batch, or a fake registry.
 fn flush_with(
     root: &Path,
     pending: &mut HashMap<String, (FsChangeKind, Instant)>,
     generation: u64,
     mut current_generation: impl FnMut() -> Option<u64>,
+    mut take_self_write: impl FnMut(&Path) -> bool,
     mut emit: impl FnMut(FsChange),
 ) {
     if pending.is_empty() {
@@ -309,10 +379,14 @@ fn flush_with(
         if !is_current_generation(current_generation(), generation) {
             continue;
         }
+        let abs_path = root.join(&rel_path);
+        // Consult before the metadata read below so a self-write is
+        // consumed exactly once per flushed change, regardless of kind.
+        let self_write = take_self_write(&abs_path);
         let (modified_ms, size_bytes) = if kind == FsChangeKind::Remove {
             (None, None)
         } else {
-            match fs::metadata(root.join(&rel_path)) {
+            match fs::metadata(&abs_path) {
                 Ok(meta) => (
                     meta.modified()
                         .ok()
@@ -328,6 +402,7 @@ fn flush_with(
             modified_ms,
             size_bytes,
             kind,
+            self_write,
         });
     }
 }

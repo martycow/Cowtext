@@ -17,7 +17,7 @@ import {
 } from "../store/tokens";
 import { compilePreview, compileWrite } from "./api";
 import { play as sfxPlay } from "../scene/sfx";
-import { diffLines, type DiffHunk } from "./diff";
+import { diffLines, type DiffHunk } from "../ui/diff";
 import type { CompilePreview, PreviewFile, ValidationError } from "./types";
 
 type Phase = "loading" | "errors" | "preview" | "writing" | "done" | "failed";

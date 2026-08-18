@@ -8,6 +8,7 @@ import { renameNodeFile as fsRenameNodeFile } from "../fs/api";
 import { useProjectStore } from "./project";
 import { useSettingsStore } from "./settings";
 import { agentRenameListeners, useAgentsStore } from "./agents";
+import { useReviewStore } from "./review";
 
 // ── Data model (plan §4) ──────────────────────────────────────────────
 
@@ -391,6 +392,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           edges: graph.edges,
           compileTargets: graph.compileTargets,
         });
+        // Review baseline (Block C §T4): every managed file's current disk
+        // content becomes "what a future external edit diffs against".
+        void useReviewStore.getState().initSnapshots(root, graph.nodes.map((n) => n.filePath));
       }
       set({ loaded: true, saveState: raw === null ? "idle" : "saved" });
     } catch (e) {
@@ -443,11 +447,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     pushHistory("create");
     try {
       // Stub the file so the node is real on disk from the first second.
+      const stub = `# ${title}\n\n`;
       await invoke("write_md_file", {
         root: s.root,
         relPath: filePath,
-        content: `# ${title}\n\n`,
+        content: stub,
       });
+      // We just wrote it — the content is already known, no need to round
+      // -trip through disk for the review baseline (Block C §T4).
+      useReviewStore.getState().noteSelfSave(filePath, stub);
       void useProjectStore.getState().rescan();
     } catch {
       // Node still enters the graph; the missing-file badge will say so.
@@ -485,6 +493,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       selectedEdgeIds: [],
     }));
     scheduleSave();
+    // Existing file, unknown content — read it for the review baseline
+    // (Block C §T4). Best-effort: initSnapshots tolerates a missing file.
+    if (s.root !== null) void useReviewStore.getState().initSnapshots(s.root, [relPath]);
   },
 
   updateNode: (id, patch) => {

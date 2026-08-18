@@ -15,12 +15,15 @@ interface ProjectScan {
   files: MdFile[];
 }
 
-/** Wire shape for the `fs://change` event (watcher.rs, WO01 Block A §4.1). */
+/** Wire shape for the `fs://change` event (watcher.rs, WO01 Block A §4.1;
+ *  `selfWrite` added Block C §T4 — true when Cowtext itself wrote this path
+ *  within the self-write TTL, see `note_self_write`/`take_self_write`). */
 export interface FsChange {
   relPath: string;
   modifiedMs: number | null;
   sizeBytes: number | null;
   kind: "modify" | "create" | "remove";
+  selfWrite: boolean;
 }
 
 interface ProjectState {

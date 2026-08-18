@@ -24,6 +24,7 @@ import type { MdFile } from "./store/project";
 import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
 import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
+import { useReviewStore } from "./store/review";
 import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
@@ -35,6 +36,7 @@ const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
 const TasksBoard = lazy(() => import("./tasks/TasksBoard").then(m => ({ default: m.TasksBoard })));
+const ReviewModal = lazy(() => import("./review/ReviewModal").then(m => ({ default: m.ReviewModal })));
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { flushMetaSave, useAgentsStore } from "./store/agents";
 import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
@@ -957,6 +959,57 @@ function isEditableTarget(el: Element | null): boolean {
   return el.closest(".cm-editor") !== null;
 }
 
+/** Disk-change review strip (WO01 Block C §T4) — amber-surface because this
+ *  is the agent/warning channel (something outside Cowtext touched a
+ *  managed file), never the blue user-action accent. Dismiss all is armed
+ *  in two clicks: nothing destructive happens from a single misclick. */
+function ReviewBanner() {
+  const queueLen = useReviewStore((s) => s.queue.length);
+  const reviewNext = useReviewStore((s) => s.reviewNext);
+  const dismissAll = useReviewStore((s) => s.dismissAll);
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (queueLen === 0) setArmed(false);
+  }, [queueLen]);
+
+  if (queueLen === 0) return null;
+
+  return (
+    <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
+      <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" />
+      <span className="truncate font-mono text-xs text-amber-text">
+        {queueLen} file{queueLen === 1 ? "" : "s"} changed on disk
+      </span>
+      <div className="flex-1" />
+      <button
+        onClick={() => reviewNext()}
+        className="flex h-control-sm items-center rounded border border-amber-border bg-surface-1 px-2 text-xs font-medium text-amber-text transition-colors duration-fast hover:bg-surface-2"
+      >
+        Review next
+      </button>
+      {armed ? (
+        <button
+          onClick={() => {
+            dismissAll();
+            setArmed(false);
+          }}
+          className="flex h-control-sm items-center rounded border border-danger bg-danger-surface px-2 text-xs font-medium text-danger-text transition-colors duration-fast hover:bg-danger hover:text-content-inverse"
+        >
+          Confirm dismiss all?
+        </button>
+      ) : (
+        <button
+          onClick={() => setArmed(true)}
+          className="flex h-control-sm items-center rounded border border-border bg-surface-1 px-2 text-xs text-content-secondary transition-colors duration-fast hover:border-border-strong"
+        >
+          Dismiss all
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Workspace({ root, view }: { root: string; view: View }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
@@ -1055,6 +1108,7 @@ function Workspace({ root, view }: { root: string; view: View }) {
 export default function App() {
   const { root, scanning, error } = useProjectStore();
   const loadGraph = useGraphStore((s) => s.loadGraph);
+  const reviewing = useReviewStore((s) => s.reviewing !== null);
   const [compileOpen, setCompileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
@@ -1123,9 +1177,15 @@ export default function App() {
         )
       ) : (
         <>
+          <ReviewBanner />
           <Workspace root={root} view={view} />
           <EventLog root={root} />
         </>
+      )}
+      {reviewing && root !== null && (
+        <Suspense fallback={null}>
+          <ReviewModal root={root} onClose={() => useReviewStore.getState().closeReview()} />
+        </Suspense>
       )}
       {compileOpen && root !== null && (
         <Suspense fallback={null}>

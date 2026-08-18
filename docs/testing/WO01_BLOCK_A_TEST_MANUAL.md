@@ -10,7 +10,8 @@ nodes built in section A. Written against the code as of 2026-08-18
 expected result — if reality differs, that is a bug (or this manual is stale; either way, note
 it).
 
-**Time budget:** ~15 min full pass, plus the 2-minute regression at the end.
+**Time budget:** ~15 min full pass (Blocks A/B), plus the 2-minute regression at the end, plus
+~15 min for Block C (Disk-change review).
 
 ---
 
@@ -294,12 +295,161 @@ Compile on that project now fails validation with a "missing file" error; don't 
     one; the fill-width/color split (width = token ratio always, color = either threshold)
     is worth double-checking here since it's an easy spot for a future regression.
 
-## Cleanup
+## Block C — Disk-change review
 
-36. Close the app and delete all three scratch projects:
+Extends WO01 Block C / T4 (`docs/INPUT_PROMPT.md`): the self-write-tagged watcher
+(`src-tauri/src/watcher.rs` `note_self_write`/`take_self_write`, `src-tauri/src/project.rs`
+`write_atomic`) feeding `src/store/review.ts`'s review queue, the `ReviewBanner` strip in
+`src/App.tsx`, and the side-by-side `src/review/ReviewModal.tsx`. Written against the code as
+of 2026-08-18. Uses a fresh throwaway project — `C:\_cowlens`/`C:\_cowsmall`/`C:\_cowbudget`
+from earlier sections are left alone.
+
+36. Close any open modal from section B. Make a throwaway project:
 
     ```powershell
-    Remove-Item -Recurse -Force C:\_cowlens, C:\_cowsmall, C:\_cowbudget
+    mkdir C:\_cowreview
+    Set-Content C:\_cowreview\one.md "# One`n`nFirst review-test node."
+    Set-Content C:\_cowreview\two.md "# Two`n`nSecond review-test node."
+    ```
+
+    Press **Open folder** and pick `C:\_cowreview`. *Expected:* the file rail reads
+    **`2 markdown files`**, canvas is empty.
+37. Adopt both files (**+ adopt** on each rail row). *Expected:* two node cards, `one` and
+    `two`, no edges needed for this section.
+
+### C1. Cowtext's own Save never banners (self-write suppression)
+
+38. Select the `one` node, open the inspector's **Markdown** tab, append a line, press
+    **Save** (or Ctrl+S). *Expected:* saves normally — and at no point does the amber
+    ReviewBanner strip appear above the workspace. This is `write_atomic` registering the
+    write in the self-write registry before the watcher's own `fs://change` event for that
+    same write is flushed (§T4); the write is real and the node's content updates, it just
+    never becomes a review-queue entry.
+
+### C2. External edit banners within ≤1 s; Close does not lose the entry
+
+39. From **outside** the app, edit `one.md`:
+
+    ```powershell
+    Add-Content C:\_cowreview\one.md "`nAn external line, added by hand."
+    ```
+
+40. **Do nothing in the app.** *Expected, within ≤ 1 s:* a 31 px amber strip appears above
+    the workspace reading exactly **`1 file changed on disk`**, with an amber dot and two
+    buttons, **Review next** and **Dismiss all**.
+41. Click **Review next**. *Expected:* the review modal opens (`role="dialog"`,
+    `aria-label="Review disk change"`); the header reads `one.md` with an amber **modified**
+    badge; the body briefly reads "Reading disk content…" then shows two side-by-side panes
+    titled **last known content** (left) and **on disk now** (right). The line "An external
+    line, added by hand." appears amber-tinted only in the right pane, appended at the
+    bottom; the rest of both panes reads identically as plain context lines.
+42. Press **Escape** (or click the footer's **Close** button). *Expected:* the modal closes,
+    but the ReviewBanner strip is **still** showing `1 file changed on disk` — Close only
+    drops the review pointer (`closeReview`), it does not dequeue the entry.
+43. Click **Review next** again. *Expected:* the modal reopens showing the exact same
+    `one.md` diff as step 41 — proof the entry survived the Close.
+44. Click **Accept**. *Expected:* the modal closes and the ReviewBanner strip disappears
+    (queue now empty). Wait a few seconds — it does not reappear on its own.
+
+### C3. Revert restores the old bytes; its own write does not re-banner
+
+45. From outside the app, edit `two.md`:
+
+    ```powershell
+    Add-Content C:\_cowreview\two.md "`nA second unwanted external line."
+    ```
+
+46. *Expected, within ≤ 1 s:* the banner reappears reading `1 file changed on disk`.
+47. Click **Review next**. *Expected:* the modal shows `two.md`, **modified** badge, the new
+    line tinted on the right pane only.
+48. Record the current disk content for comparison:
+
+    ```powershell
+    Get-Content C:\_cowreview\two.md
+    ```
+
+    *Expected:* three lines — `# Two`, blank, `Second review-test node.`, `A second unwanted
+    external line.`
+49. Click **Revert**. *Expected:* the modal closes, the banner disappears. Re-run the same
+    `Get-Content C:\_cowreview\two.md` command. *Expected:* back to exactly the original two
+    content lines (`# Two`, blank, `Second review-test node.`) — the unwanted line is gone.
+    Wait a few seconds. *Expected:* the banner does **not** reappear — Revert's own write is
+    self-write-suppressed, it never re-enqueues itself.
+
+### C4. Dismiss all — two-click arm, never touches disk
+
+50. Populate a 2-entry queue at once:
+
+    ```powershell
+    Add-Content C:\_cowreview\one.md "`nEdit A"
+    Add-Content C:\_cowreview\two.md "`nEdit B"
+    ```
+
+51. *Expected, within ≤ 1 s:* the banner reads exactly **`2 files changed on disk`**.
+52. Click **Dismiss all** once. *Expected:* the button's own label swaps in place to
+    **`Confirm dismiss all?`** (danger-red border/text) — nothing has been dismissed yet, the
+    banner still reads `2 files changed on disk`.
+53. Click **Confirm dismiss all?**. *Expected:* the banner disappears entirely. Verify disk
+    was never touched:
+
+    ```powershell
+    Get-Content C:\_cowreview\one.md; Get-Content C:\_cowreview\two.md
+    ```
+
+    *Expected:* both files still carry `Edit A` / `Edit B` — `dismissAll` only clears the
+    in-memory queue, it never writes.
+
+### C5. Open-tab limitation on Accept (documented, not a bug)
+
+54. Select the `one` node and open the inspector's **Markdown** tab. Leave it open and
+    visible for the rest of this section.
+55. From outside the app:
+
+    ```powershell
+    Add-Content C:\_cowreview\one.md "`nAnother external change."
+    ```
+
+56. Wait for the banner, click **Review next**, then **Accept**.
+57. **Without clicking away**, look at the still-open Markdown tab for `one`. *Expected known
+    limit:* the editor content has **not** changed — "Another external change." is absent
+    from the visible editor even though disk and the snapshot both now include it.
+58. Select the `two` node, then reselect `one`. *Expected:* the Markdown tab now re-reads
+    from disk and shows "Another external change." — confirms the gap is scoped to an
+    already-open tab not hot-reloading, not a permanent desync.
+
+### C6. Known gap — Skip does not reliably advance and can drop/duplicate queue entries
+
+59. Populate a 2-entry queue again:
+
+    ```powershell
+    Add-Content C:\_cowreview\one.md "`nSkip test A"
+    Add-Content C:\_cowreview\two.md "`nSkip test B"
+    ```
+
+60. Wait for the banner (`2 files changed on disk`), click **Review next**. *Expected:* the
+    modal opens on one of the two files — note its `relPath` in the header, call it **File
+    X** (the other queued file is **File Y**); the header also shows `2 to review` next to
+    the kind badge.
+61. Click **Skip**. *Expected per the button's own stated intent ("come back to this one
+    later"), it should now show File Y.* *Actual, as built:* the header still reads **File
+    X** — the first Skip press is a no-op on the visible entry. Root cause:
+    `skipCurrent` in `src/store/review.ts` builds `rotated = [...queue, reviewing]` and then
+    drops `rotated[0]`; since `reviewing` already **is** `queue[0]` at this point,
+    `rotated[0]` is still the same File X object, so nothing advances.
+62. Click **Skip** a second time. *Expected:* now advances to File Y. *Actual, as built:*
+    it does advance, but the queue has silently corrupted in the process — File Y's entry
+    was dropped from `queue` while it was being shown, so it is no longer anywhere in the
+    pending list; a third **Skip** or a **Review next** after closing shows File X again,
+    now duplicated. **Record this as a known fail — do not chase it further here**, see the
+    fleet defect report (`src/store/review.ts::skipCurrent`). Recover by clicking
+    **Accept**/**Revert** on whatever is showing until the banner clears, or **Dismiss all**.
+
+## Cleanup
+
+63. Close the app and delete all four scratch projects:
+
+    ```powershell
+    Remove-Item -Recurse -Force C:\_cowlens, C:\_cowsmall, C:\_cowbudget, C:\_cowreview
     ```
 
 ## Sign-off
@@ -311,5 +461,6 @@ Compile on that project now fails validation with a "missing file" error; don't 
 | C Validation | | |
 | D Regression | | |
 | Block B Token budget | | |
+| Block C Disk-change review | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________
