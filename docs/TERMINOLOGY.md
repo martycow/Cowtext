@@ -52,6 +52,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 |---|---|---|
 | `barn://event` | `BarnEvent { kind, filePath?, sessionId, ts }` | hooks_server → emit → `useEventsStore.pushEvent` → canvas pulse + barn animation |
 | `assemble://status` | `AssembleProgress { nodeId, mode, status, error }` | assemble.rs → emit → `useGraphStore.setAssembleStatus` |
+| `fs://change` | `FsChange { relPath, modifiedMs, sizeBytes, kind }` | watcher.rs → emit → `useProjectStore.applyFsChange` → lens updates |
 
 One-way pipeline: Rust emits → Tauri `emit` → Zustand store → both views react.
 React Flow and PixiJS never import each other.
@@ -94,6 +95,10 @@ React Flow and PixiJS never import each other.
 | Ports | 1420 = Vite dev (strictPort, pinned in two files); 4923 = hooks server |
 | "Blue is you, amber is the cow" | Scarf blue = user-initiated; hay amber = agent activity; never mixed on one control |
 | Capabilities | Tauri deny-by-default; new plugin permissions go in `src-tauri/capabilities/default.json` |
+| Lens | Canvas view mode: `none` (off), `activity` (node brightness by read recency, 60 min window), `weight` (node brightness by file size), `live` (binary pulse on recent write, 60s window) |
+| LensMode | Canvas lens setting: `'none' \| 'activity' \| 'weight' \| 'live'`, persisted in app settings, last field in AppSettings interface, version stays 1 |
+| Watcher | notify-based file system monitor (src-tauri/src/watcher.rs): watches project for `.md` file changes, emits `fs://change` events via Tauri, hand-rolled 300ms debounce with starvation guards |
+| fs://change event | Real-time file system change: `{ relPath, modifiedMs, sizeBytes, kind: create\|modify\|remove }`, emitted by watcher.rs, drives Activity/Weight/Live lens brightness updates and real-time node-list refresh |
 
 Cross-references like "FEATURES n.n" resolve to the Feature inventory section of
 `docs/tasks/BACKLOG.md` (formerly `docs/FEATURES.md`, archived).

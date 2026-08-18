@@ -15,6 +15,14 @@ interface ProjectScan {
   files: MdFile[];
 }
 
+/** Wire shape for the `fs://change` event (watcher.rs, WO01 Block A §4.1). */
+export interface FsChange {
+  relPath: string;
+  modifiedMs: number | null;
+  sizeBytes: number | null;
+  kind: "modify" | "create" | "remove";
+}
+
 interface ProjectState {
   root: string | null;
   files: MdFile[];
@@ -32,6 +40,8 @@ interface ProjectState {
   rescan: () => Promise<void>;
   /** Re-reads hooks_status for the current root; no-op when root is null. */
   refreshHooksStatus: () => Promise<void>;
+  /** Applies one `fs://change` event in place — never rescans (§5.2). */
+  applyFsChange: (c: FsChange) => void;
 }
 
 async function scan(root: string): Promise<ProjectScan> {
@@ -89,5 +99,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (get().root !== root) return; // stale: a different project opened meanwhile
       set({ hooksInstalled: null, hooksReadable: true });
     }
+  },
+
+  applyFsChange: (c) => {
+    const { root, files } = get();
+    if (root === null) return;
+
+    if (c.kind === "remove") {
+      const idx = files.findIndex((f) => f.relPath === c.relPath);
+      if (idx === -1) return; // same array identity — no re-render
+      const next = files.slice();
+      next.splice(idx, 1);
+      set({ files: next });
+      return;
+    }
+
+    const idx = files.findIndex((f) => f.relPath === c.relPath);
+    if (idx !== -1) {
+      // modify on known path, or create degrading to modify.
+      const prev = files[idx];
+      const updated: MdFile = {
+        ...prev,
+        modifiedMs: c.modifiedMs ?? Date.now(),
+        sizeBytes: c.sizeBytes ?? prev.sizeBytes,
+      };
+      const next = files.slice();
+      next[idx] = updated;
+      set({ files: next });
+      return;
+    }
+
+    // create, or modify on an unknown path — insert sorted by relPath.
+    const inserted: MdFile = {
+      relPath: c.relPath,
+      sizeBytes: c.sizeBytes ?? 0,
+      modifiedMs: c.modifiedMs ?? Date.now(),
+    };
+    const next = files.slice();
+    let pos = next.findIndex((f) => f.relPath > c.relPath);
+    if (pos === -1) pos = next.length;
+    next.splice(pos, 0, inserted);
+    set({ files: next });
   },
 }));

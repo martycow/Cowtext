@@ -8,6 +8,7 @@ mod hooks_server;
 mod preset;
 mod project;
 mod settings;
+mod watcher;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -24,6 +25,7 @@ pub fn run() {
             app.manage(handoff::HandoffRunner(Arc::new(
                 assemble::ClaudeRunner::default(),
             )));
+            app.manage(watcher::WatcherState::default());
             settings::init(app.handle());
             hooks_server::start(app.handle().clone());
             Ok(())

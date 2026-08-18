@@ -51,9 +51,24 @@ pub struct ProjectScan {
 }
 
 /// Scan `root` recursively for `.md` files. Hidden directories and the
-/// usual build/dependency directories are skipped.
+/// usual build/dependency directories are skipped. Thin `#[tauri::command]`
+/// wrapper: does the scan via [`scan_root`], then — on success only —
+/// restarts the file watcher for `root` (WO01 Block A §4.2). `AppHandle`
+/// and `State` are injected by Tauri; the JS call site is unchanged.
 #[tauri::command]
-pub fn scan_project(root: String) -> Result<ProjectScan, String> {
+pub fn scan_project(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::watcher::WatcherState>,
+    root: String,
+) -> Result<ProjectScan, String> {
+    let scan = scan_root(root.clone())?;
+    crate::watcher::restart(&app, &state, &root);
+    Ok(scan)
+}
+
+/// Does the actual recursive `.md` scan. Split out of `scan_project` so
+/// tests (and any future non-command caller) don't need a Tauri `AppHandle`.
+pub(crate) fn scan_root(root: String) -> Result<ProjectScan, String> {
     let root_path = PathBuf::from(&root);
     if !root_path.is_dir() {
         return Err(format!("Not a directory: {root}"));
@@ -139,6 +154,48 @@ fn collect_agent_md(root: &Path, agents_dir: &Path, out: &mut Vec<MdFile>) {
                 .map(|d| d.as_millis() as u64),
         });
     }
+}
+
+/// Single source of truth for "is this `.md` path relevant to the project
+/// scan / the watcher" (WO01 Block A §4.3). Must stay in lockstep with
+/// [`walk`]'s own skip rules — the parity test in `project/tests.rs` holds
+/// them together. `path` is expected to be `root`-relative or under `root`;
+/// paths outside `root` are never relevant.
+pub(crate) fn is_scannable_md(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    let Some(name) = rel.file_name() else {
+        return false;
+    };
+    if !name.to_string_lossy().to_lowercase().ends_with(".md") {
+        return false;
+    }
+
+    // Directory components strictly between root and the file name.
+    let dirs: Vec<String> = rel
+        .parent()
+        .into_iter()
+        .flat_map(|p| p.components())
+        .filter_map(|c| match c {
+            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+
+    // Root-only, non-recursive special case: `.claude/agents/*.md` mirrors
+    // `collect_agent_md`. Anything deeper (`.claude/agents/sub/x.md`) is
+    // NOT covered — falls through to the dot-dir rejection below.
+    if dirs.len() == 2 && dirs[0] == ".claude" && dirs[1] == "agents" {
+        return true;
+    }
+
+    for d in &dirs {
+        if d.starts_with('.') || SKIP_DIRS.contains(&d.as_str()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Resolve `rel` against `root`, rejecting anything that could escape it.

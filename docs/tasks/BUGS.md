@@ -29,6 +29,7 @@ Note: `cargo test` reporting 0 tests for the `main.rs` binary and doc-tests is e
 
 All phases 0–6 were accepted 2026-08-18, so every fixed-bug section rolled off:
 
+- **WO01 Block A adversarial audit (2026-08-18)** — 2 findings, both FIXED in the fix round before re-gate (cargo test 169/169): 1 MAJOR (Windows notify rename halves: `map_event_kind` now maps `Modify(Name(From))` → Remove and `Modify(Name(To))` → Create ahead of the catch-all — no more ghost entries with false-fresh mtime under the Activity lens) and 1 MINOR (watcher `flush` TOCTOU: generation re-checked per pending entry via `flush_with`, so a project switch mid-batch stops emission at the flip point). +4 regression tests in `src-tauri/src/watcher/tests.rs`.
 - **Phase 5+6 adversarial audit (2026-08-17)** — 24 confirmed findings, all fixed: 5 majors (demo-stop stale-event replay, demo accumulation persistence, assemble_done stale chime, preset-apply empty-graph guard, settings flush-on-quit) + 17 minors (TOCTOU never-clobber via `File::create_new`, integer zoom ladder, pre-gesture cue drop, `.cmd` resolution, and more). Detail: TASKS.md history + `c241b86`.
 - **Phase 3+4 adversarial audit (2026-08-16)** — 6 confirmed defects, all fixed, incl. the critical ClaudeRunner argv→stdin spawn fix verified against real `claude -p`. Detail: TASKS.md history + `4f01275`.
 - **Phase 2 audit (2026-08-16)** — 4 fixes (glob-dir aliasing, escaping-glob preview crash, unescaped YAML frontmatter, post-compile rescan unmount). Detail: TASKS.md history + `635ebaf`.

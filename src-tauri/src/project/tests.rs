@@ -19,7 +19,7 @@ fn finds_md_skips_hidden_and_dep_dirs() {
     touch(&dir.join(".git/junk.md"), "skipped");
     touch(&dir.join("node_modules/pkg/readme.md"), "skipped");
 
-    let scan = scan_project(dir.to_string_lossy().into_owned()).unwrap();
+    let scan = scan_root(dir.to_string_lossy().into_owned()).unwrap();
     let paths: Vec<&str> = scan.files.iter().map(|f| f.rel_path.as_str()).collect();
     assert_eq!(paths, ["README.md", "docs/deep/notes.md", "docs/plan.MD"]);
     assert!(scan.files.iter().all(|f| f.size_bytes > 0));
@@ -29,7 +29,7 @@ fn finds_md_skips_hidden_and_dep_dirs() {
 
 #[test]
 fn rejects_non_directory() {
-    assert!(scan_project("Z:/definitely/not/a/dir".into()).is_err());
+    assert!(scan_root("Z:/definitely/not/a/dir".into()).is_err());
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn scan_includes_claude_agents_but_excludes_the_rest_of_claude() {
     touch(&dir.join(".claude/skills/design-tokens/SKILL.md"), "# skill");
     touch(&dir.join(".claude/skills/design-tokens/notes.md"), "# skill notes");
 
-    let scan = scan_project(dir.to_string_lossy().into_owned()).unwrap();
+    let scan = scan_root(dir.to_string_lossy().into_owned()).unwrap();
     let paths: Vec<&str> = scan.files.iter().map(|f| f.rel_path.as_str()).collect();
     assert_eq!(
         paths,
@@ -60,7 +60,7 @@ fn scan_tolerates_claude_with_no_agents_dir() {
     let _ = fs::remove_dir_all(&dir);
     touch(&dir.join(".claude/settings.json"), "{}");
 
-    let scan = scan_project(dir.to_string_lossy().into_owned()).unwrap();
+    let scan = scan_root(dir.to_string_lossy().into_owned()).unwrap();
     assert!(scan.files.is_empty());
 
     let _ = fs::remove_dir_all(&dir);
@@ -253,5 +253,56 @@ fn rename_into_new_subdirectory_creates_it() {
     .unwrap();
     assert_eq!(new_path, "nested/deeper/loose.md");
     assert!(dir.join("nested/deeper/loose.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Parity test (WO01 Block A §4.3): `walk()` and `is_scannable_md` must
+/// agree, or the watcher and the scanner would disagree about which files
+/// exist. Every `rel_path` `walk()` returns must satisfy `is_scannable_md`,
+/// and a fixture list of paths `walk()` would never emit must all be
+/// rejected by `is_scannable_md` too.
+#[test]
+fn is_scannable_md_agrees_with_walk() {
+    let dir = temp_project("scannable-parity");
+
+    touch(&dir.join("README.md"), "# hi");
+    touch(&dir.join("docs/deep/notes.md"), "# nested");
+    touch(&dir.join(".claude/agents/tech-lead.md"), "---\nname: tech-lead\n---\n");
+    touch(&dir.join(".claude/agents/tech-ui.MD"), "case-insensitive");
+    touch(&dir.join(".git/junk.md"), "skipped");
+    touch(&dir.join("node_modules/pkg/readme.md"), "skipped");
+    touch(&dir.join(".claude/settings.md"), "skipped");
+    touch(&dir.join(".claude/skills/s/SKILL.md"), "skipped");
+    touch(&dir.join("target/x.md"), "skipped");
+    touch(&dir.join(".hidden/x.md"), "skipped");
+    touch(&dir.join(".claude/agents/sub/x.md"), "skipped, non-recursive");
+
+    let mut files = Vec::new();
+    walk(&dir, &dir, &mut files).unwrap();
+    assert!(!files.is_empty());
+    for f in &files {
+        assert!(
+            is_scannable_md(&dir, &dir.join(&f.rel_path)),
+            "walk() returned {} but is_scannable_md rejected it",
+            f.rel_path
+        );
+    }
+
+    let negative_fixtures = [
+        ".git/x.md",
+        "node_modules/a/b.md",
+        ".claude/settings.md",
+        ".claude/skills/s/SKILL.md",
+        "target/x.md",
+        ".hidden/x.md",
+        ".claude/agents/sub/x.md",
+    ];
+    for rel in negative_fixtures {
+        assert!(
+            !is_scannable_md(&dir, &dir.join(rel)),
+            "{rel} should not be scannable"
+        );
+    }
+
     let _ = fs::remove_dir_all(&dir);
 }

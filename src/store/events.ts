@@ -6,6 +6,7 @@
 import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useGraphStore, type AssembleStatus } from "./graph";
+import { useProjectStore, type FsChange } from "./project";
 
 // ── Wire shape — mirrors src-tauri BarnEvent 1:1 (contract §2) ────────
 
@@ -126,6 +127,22 @@ export function lastLiveTs(nodeId: string, events: BarnEvent[]): number | null {
   return null;
 }
 
+/** One-minute memory window for the Live lens (distinct from the 3.2s card pulse). */
+export const LENS_LIVE_WINDOW_MS = 60_000;
+
+/** Same scan as lastLiveTs, one-minute memory — for the Live lens only. */
+export function lensLiveTs(nodeId: string, events: BarnEvent[]): number | null {
+  const cutoff = Date.now() - LENS_LIVE_WINDOW_MS;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i];
+    if (e.ts < cutoff) break;
+    if (!LIVE_KINDS.includes(e.kind)) continue;
+    if (e.filePath === undefined) continue;
+    if (resolveNodeId(e.filePath) === nodeId) return e.ts;
+  }
+  return null;
+}
+
 // ── Tauri wiring — idempotent (StrictMode double-mounts effects) ──────
 
 const ASSEMBLE_STATUSES: readonly AssembleStatus[] = [
@@ -164,6 +181,11 @@ export function initEventListener(): Promise<() => void> {
         useGraphStore
           .getState()
           .setAssembleStatus(nodeId, known, error ?? undefined);
+      }),
+    );
+    unlistens.push(
+      await listen<FsChange>("fs://change", (ev) => {
+        useProjectStore.getState().applyFsChange(ev.payload);
       }),
     );
     return () => {
