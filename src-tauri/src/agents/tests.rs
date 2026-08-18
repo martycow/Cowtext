@@ -447,3 +447,64 @@ fn agent_convert_rejects_non_markdown_and_missing_source() {
     assert!(agent_convert(root, "missing.md".to_string(), "X".to_string()).is_err());
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ---- Producer guards (TASKBOARD_BATCH_CONTRACT.md §4) ----------------------
+
+#[test]
+fn agent_create_producer_is_still_allowed() {
+    let dir = temp_project("producer-create");
+    let root = dir.to_string_lossy().into_owned();
+    let doc = agent_create(root, "Producer".to_string()).unwrap();
+    assert_eq!(doc.file_name, "producer.md");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_rename_rejects_producer_as_source() {
+    let dir = temp_project("producer-rename-src");
+    let root = dir.to_string_lossy().into_owned();
+    agent_create(root.clone(), "Producer".to_string()).unwrap();
+
+    let err = agent_rename(root, "producer.md".to_string(), "Renamed".to_string()).unwrap_err();
+    assert_eq!(err, "Reserved agent: producer");
+    assert!(agents_dir(&dir).join("producer.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_rename_rejects_producer_as_destination() {
+    let dir = temp_project("producer-rename-dest");
+    let root = dir.to_string_lossy().into_owned();
+    agent_create(root.clone(), "Some Other Agent".to_string()).unwrap();
+
+    let err = agent_rename(root, "some-other-agent.md".to_string(), "Producer".to_string())
+        .unwrap_err();
+    assert_eq!(err, "Reserved agent: producer");
+    assert!(agents_dir(&dir).join("some-other-agent.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_delete_rejects_producer() {
+    let dir = temp_project("producer-delete");
+    let root = dir.to_string_lossy().into_owned();
+    agent_create(root.clone(), "Producer".to_string()).unwrap();
+
+    let err = agent_delete(root, "producer.md".to_string()).unwrap_err();
+    assert_eq!(err, "Reserved agent: producer");
+    assert!(agents_dir(&dir).join("producer.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_convert_rejects_producer_destination() {
+    let dir = temp_project("producer-convert");
+    let root = dir.to_string_lossy().into_owned();
+    fs::write(dir.join("legacy.md"), "Some legacy persona notes").unwrap();
+
+    let err = agent_convert(root, "legacy.md".to_string(), "Producer".to_string()).unwrap_err();
+    assert_eq!(err, "Reserved agent: producer");
+    assert!(dir.join("legacy.md").is_file());
+    assert!(!agents_dir(&dir).join("producer.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}

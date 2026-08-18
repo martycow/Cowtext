@@ -32,6 +32,7 @@ import { buildLayout, COW_HOME_TILE } from "./sceneGraph";
 import { Cow, type IdleStage } from "./cow";
 import { CalfHerd } from "./calf";
 import { handleEvent, resolveProp } from "./mapper";
+import { HoverController } from "./hover";
 import { reducedMotion } from "./motion";
 import { tileToScreen } from "./iso";
 import * as sfx from "./sfx";
@@ -121,6 +122,12 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       const layout = buildLayout();
       const camera = new Container();
       camera.addChild(layout.world);
+      // Barn hover bubbles (Task-Board §9) — added after layout.world so the
+      // bubble always renders above ground/props/particles, no matter which
+      // object it's attached to this frame.
+      const hover = new HoverController();
+      camera.addChild(hover.view);
+      cleanups.push(() => hover.destroy());
       app.stage.addChild(camera);
       camera.scale.set(INITIAL_ZOOM);
       const centerCamera = (): void => {
@@ -248,17 +255,28 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         canvas.setPointerCapture(ev.pointerId);
       };
       const onMove = (ev: PointerEvent): void => {
-        if (!dragging) return;
-        userMoved = true;
-        // whole-pixel commits — sub-pixel camera positions shimmer 16-bit art
-        camera.position.x = Math.round(camera.position.x + (ev.clientX - lastX));
-        camera.position.y = Math.round(camera.position.y + (ev.clientY - lastY));
-        lastX = ev.clientX;
-        lastY = ev.clientY;
+        if (dragging) {
+          userMoved = true;
+          // whole-pixel commits — sub-pixel camera positions shimmer 16-bit art
+          camera.position.x = Math.round(camera.position.x + (ev.clientX - lastX));
+          camera.position.y = Math.round(camera.position.y + (ev.clientY - lastY));
+          lastX = ev.clientX;
+          lastY = ev.clientY;
+          hover.setPointer(null); // suppress bubbles while panning
+          return;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const px = ev.clientX - rect.left;
+        const py = ev.clientY - rect.top;
+        hover.setPointer({
+          x: (px - camera.position.x) / camera.scale.x,
+          y: (py - camera.position.y) / camera.scale.y,
+        });
       };
       const onUp = (): void => {
         dragging = false;
       };
+      const onLeave = (): void => hover.setPointer(null);
       const onWheel = (ev: WheelEvent): void => {
         ev.preventDefault();
         userMoved = true;
@@ -280,12 +298,14 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       canvas.addEventListener("pointermove", onMove);
       canvas.addEventListener("pointerup", onUp);
       canvas.addEventListener("pointercancel", onUp);
+      canvas.addEventListener("pointerleave", onLeave);
       canvas.addEventListener("wheel", onWheel, { passive: false });
       cleanups.push(() => {
         canvas.removeEventListener("pointerdown", onDown);
         canvas.removeEventListener("pointermove", onMove);
         canvas.removeEventListener("pointerup", onUp);
         canvas.removeEventListener("pointercancel", onUp);
+        canvas.removeEventListener("pointerleave", onLeave);
         canvas.removeEventListener("wheel", onWheel);
       });
       // re-center on host resize — only until the user has panned/zoomed
@@ -323,6 +343,8 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         cow.update(ticker.deltaMS);
         layout.tick(ticker.deltaMS, reduced);
         herd.tick(ticker.deltaMS, reduced);
+        hover.sync({ cow, layout });
+        hover.tick(ticker.deltaMS);
         sfx.tickAmbient(now - lastEventTs);
         // all idle-loop holds are ≥120 ms, so 12 fps loses nothing
         const wantThrottle = idleMs > IDLE_FPS_AFTER_MS;

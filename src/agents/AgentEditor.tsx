@@ -19,6 +19,9 @@ import type { AgentDoc, FmFields } from "./types";
 import { revealPath } from "../fs/api";
 import { CodeMirrorEditor } from "../inspector/CodeMirrorEditor";
 import { AgentAvatar } from "./AgentAvatar";
+import { useGraphStore } from "../store/graph";
+import { useProjectStore } from "../store/project";
+import { agentContextTokens } from "../store/tokens";
 
 const MODEL_PRESETS = ["sonnet", "opus", "haiku", "inherit"] as const;
 
@@ -240,6 +243,10 @@ export function AgentEditor({
   const updateDraft = useAgentsStore((s) => s.updateDraft);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const renameSelected = useAgentsStore((s) => s.renameSelected);
+  const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
+  const files = useProjectStore((s) => s.files);
+  const contextTokens = agentContextTokens(doc, nodes, edges, files);
 
   const displayName = doc.fields.name !== null && doc.fields.name !== "" ? doc.fields.name : doc.fileName;
   const m = metaOrDefault(meta, doc.fileName);
@@ -346,6 +353,12 @@ export function AgentEditor({
             Reveal file
           </button>
           <span className="font-mono text-2xs text-content-muted">{doc.fileName}</span>
+          <span
+            title="estimate, chars/4 · window ~200k"
+            className="font-mono text-2xs text-content-muted"
+          >
+            ≈{contextTokens.toLocaleString()} tok context
+          </span>
         </div>
       </div>
       {revealError !== null && (

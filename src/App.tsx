@@ -1,17 +1,23 @@
-import { useEffect, useRef, useState, Suspense, lazy } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Copy,
   FileOutput,
   FileText,
   FolderOpen,
+  Folder,
+  ListTodo,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
   Plus,
   RefreshCw,
+  Redo2,
   Send,
   Settings,
+  Undo2,
   X,
 } from "lucide-react";
 import { useProjectStore } from "./store/project";
@@ -19,6 +25,7 @@ import type { MdFile } from "./store/project";
 import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
 import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
+import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
 // Lazy-loaded for code splitting
@@ -28,6 +35,7 @@ const BarnScene = lazy(() => import("./scene/BarnScene").then(m => ({ default: m
 const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
+const TasksModal = lazy(() => import("./tasks/TasksModal").then(m => ({ default: m.TasksModal })));
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { flushMetaSave, useAgentsStore } from "./store/agents";
 import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
@@ -140,11 +148,58 @@ function SaveIndicator() {
   );
 }
 
+/** ≈N tok pinned (contract §8) — chars/4 estimate over pinned nodes, labeled
+ *  as an estimate since real token accounting needs Work Order Block F. */
+function PinnedTokenChip() {
+  const nodes = useGraphStore((s) => s.nodes);
+  const files = useProjectStore((s) => s.files);
+  const tokens = pinnedContextTokens(nodes, files);
+  return (
+    <span
+      title="estimate, chars/4 · window ~200k"
+      className="flex-none rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-2xs text-content-muted"
+    >
+      ≈{tokens.toLocaleString()} tok pinned
+    </span>
+  );
+}
+
+/** Undo/redo icon buttons (contract §5) — disabled state mirrors the graph
+ *  store's canUndo/canRedo; Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z are wired at the
+ *  Workspace level so they work regardless of which panel has focus. */
+function UndoRedoButtons() {
+  const canUndo = useGraphStore((s) => s.canUndo);
+  const canRedo = useGraphStore((s) => s.canRedo);
+  const undo = useGraphStore((s) => s.undo);
+  const redo = useGraphStore((s) => s.redo);
+  return (
+    <div className="flex flex-none items-center gap-1">
+      <button
+        onClick={undo}
+        disabled={!canUndo}
+        title="Undo (Ctrl+Z)"
+        className="grid h-control w-control place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+      >
+        <Undo2 size={14} strokeWidth={1.5} />
+      </button>
+      <button
+        onClick={redo}
+        disabled={!canRedo}
+        title="Redo (Ctrl+Y)"
+        className="grid h-control w-control place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+      >
+        <Redo2 size={14} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
 function TopBar({
   onCompile,
   onSettings,
   onPresets,
   onHandoff,
+  onTasks,
   view,
   onViewChange,
 }: {
@@ -152,6 +207,7 @@ function TopBar({
   onSettings: () => void;
   onPresets: () => void;
   onHandoff: () => void;
+  onTasks: () => void;
   view: View;
   onViewChange: (v: View) => void;
 }) {
@@ -176,7 +232,9 @@ function TopBar({
       <div className="flex-1" />
       {root !== null && <ViewToggle view={view} onChange={onViewChange} />}
       <div className="flex-1" />
+      {root !== null && <PinnedTokenChip />}
       {root !== null && <SaveIndicator />}
+      {root !== null && <UndoRedoButtons />}
       {root !== null && (
         <button
           onClick={onCompile}
@@ -186,6 +244,16 @@ function TopBar({
         >
           <FileOutput size={14} strokeWidth={1.5} />
           Compile
+        </button>
+      )}
+      {root !== null && (
+        <button
+          onClick={onTasks}
+          title="Browse TASKS / SPRINT / BACKLOG / ROADMAP"
+          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <ListTodo size={14} strokeWidth={1.5} />
+          Tasks
         </button>
       )}
       {root !== null && (
@@ -616,6 +684,108 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
   );
 }
 
+// ── File-rail directory tree (contract §6) ─────────────────────────────
+// Pure presentation over the flat `contextFiles` list: root files first,
+// then directories alphabetically, each level nested in its own <ul> so
+// indentation is just that <ul>'s padding-left — FileRow is never touched,
+// it still only ever receives a flat MdFile.
+
+interface DirEntry {
+  kind: "dir";
+  name: string;
+  path: string;
+  children: TreeEntry[];
+}
+interface FileEntry {
+  kind: "file";
+  file: MdFile;
+}
+type TreeEntry = DirEntry | FileEntry;
+
+function entrySortName(e: TreeEntry): string {
+  return e.kind === "file" ? (e.file.relPath.split("/").pop() ?? e.file.relPath) : e.name;
+}
+
+function sortEntries(children: TreeEntry[]): void {
+  children.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "file" ? -1 : 1;
+    return entrySortName(a).localeCompare(entrySortName(b));
+  });
+  for (const c of children) {
+    if (c.kind === "dir") sortEntries(c.children);
+  }
+}
+
+/** Root files first, then directories alphabetically — recursively, at
+ *  every level (contract §6). */
+function buildFileTree(files: MdFile[]): TreeEntry[] {
+  const root: DirEntry = { kind: "dir", name: "", path: "", children: [] };
+  const dirIndex = new Map<string, DirEntry>([["", root]]);
+  for (const f of files) {
+    const parts = f.relPath.split("/");
+    parts.pop(); // basename — stays on f.relPath, only the directory chain matters here
+    let cur = root;
+    let curPath = "";
+    for (const part of parts) {
+      curPath = curPath === "" ? part : `${curPath}/${part}`;
+      let next = dirIndex.get(curPath);
+      if (next === undefined) {
+        next = { kind: "dir", name: part, path: curPath, children: [] };
+        dirIndex.set(curPath, next);
+        cur.children.push(next);
+      }
+      cur = next;
+    }
+    cur.children.push({ kind: "file", file: f });
+  }
+  sortEntries(root.children);
+  return root.children;
+}
+
+function DirRow({
+  entry,
+  root,
+  collapsedDirs,
+  onToggle,
+}: {
+  entry: DirEntry;
+  root: string;
+  collapsedDirs: Set<string>;
+  onToggle: (path: string) => void;
+}) {
+  const isCollapsed = collapsedDirs.has(entry.path);
+  return (
+    <li className="flex flex-col">
+      <div
+        onClick={() => onToggle(entry.path)}
+        title={entry.path}
+        className="flex h-row cursor-default items-center gap-1.5 px-3 hover:bg-[var(--surface-hover)]"
+      >
+        {isCollapsed ? (
+          <ChevronRight size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+        ) : (
+          <ChevronDown size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+        )}
+        <Folder size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary">
+          {entry.name}
+        </span>
+      </div>
+      {!isCollapsed && (
+        <ul style={{ paddingLeft: 12 }}>
+          {entry.children.map((c) =>
+            c.kind === "file" ? (
+              <FileRow key={c.file.relPath} file={c.file} root={root} />
+            ) : (
+              <DirRow key={c.path} entry={c} root={root} collapsedDirs={collapsedDirs} onToggle={onToggle} />
+            ),
+          )}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 /** Left rail — width and collapsed flag both come from the settings store
  *  (contract §7.3) so they survive a restart; the drag handle lives beside
  *  this component in Workspace. */
@@ -624,6 +794,16 @@ function FileRail({ root }: { root: string }) {
   // Agent files scan too (project.rs opts into .claude/agents/) but they
   // render in the AGENTS section below, not among context files.
   const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
+  const tree = useMemo(() => buildFileTree(contextFiles), [contextFiles]);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
+  const toggleDir = (path: string) => {
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
   const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
   const collapsed = useSettingsStore((s) => s.leftPanelCollapsed);
   const setCollapsed = useSettingsStore((s) => s.setLeftPanelCollapsed);
@@ -731,9 +911,13 @@ function FileRail({ root }: { root: string }) {
           </div>
         ) : (
           <ul className="py-1">
-            {contextFiles.map((f) => (
-              <FileRow key={f.relPath} file={f} root={root} />
-            ))}
+            {tree.map((e) =>
+              e.kind === "file" ? (
+                <FileRow key={e.file.relPath} file={e.file} root={root} />
+              ) : (
+                <DirRow key={e.path} entry={e} root={root} collapsedDirs={collapsedDirs} onToggle={toggleDir} />
+              ),
+            )}
           </ul>
         )}
         <AgentsRailSection root={root} />
@@ -741,6 +925,17 @@ function FileRail({ root }: { root: string }) {
       </div>
     </div>
   );
+}
+
+/** Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (contract §5) — skipped while focus is in
+ *  an input/textarea/contenteditable/CodeMirror so typing "z" never fights
+ *  a text field. */
+function isEditableTarget(el: Element | null): boolean {
+  if (el === null) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") return true;
+  if (el.hasAttribute("contenteditable")) return true;
+  return el.closest(".cm-editor") !== null;
 }
 
 function Workspace({ root, view }: { root: string; view: View }) {
@@ -751,6 +946,22 @@ function Workspace({ root, view }: { root: string; view: View }) {
   const setLeftPanelWidth = useSettingsStore((s) => s.setLeftPanelWidth);
   const rightPanelWidth = useSettingsStore((s) => s.rightPanelWidth);
   const setRightPanelWidth = useSettingsStore((s) => s.setRightPanelWidth);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      const isUndo = key === "z" && !e.shiftKey;
+      const isRedo = key === "y" || (key === "z" && e.shiftKey);
+      if (!isUndo && !isRedo) return;
+      if (isEditableTarget(document.activeElement)) return;
+      e.preventDefault();
+      if (isUndo) useGraphStore.getState().undo();
+      else useGraphStore.getState().redo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -821,6 +1032,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
   const [view, setView] = useState<View>("canvas");
 
   // A new project always opens on the canvas.
@@ -865,6 +1077,7 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
+        onTasks={() => setTasksOpen(true)}
         view={view}
         onViewChange={setView}
       />
@@ -907,6 +1120,11 @@ export default function App() {
       {handoffOpen && root !== null && (
         <Suspense fallback={null}>
           <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
+        </Suspense>
+      )}
+      {tasksOpen && root !== null && (
+        <Suspense fallback={null}>
+          <TasksModal root={root} onClose={() => setTasksOpen(false)} />
         </Suspense>
       )}
     </div>

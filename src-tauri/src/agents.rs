@@ -92,6 +92,15 @@ fn validate_md_component(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The reserved default-agent file (TASKBOARD_BATCH_CONTRACT.md §4) — same
+/// protection class as `CLAUDE.md`. `agent_create("Producer")` is the only
+/// sanctioned way to materialize it; rename/delete/convert never touch it.
+const PRODUCER_FILE_NAME: &str = "producer.md";
+
+fn is_producer_file(name: &str) -> bool {
+    name.trim().to_ascii_lowercase() == PRODUCER_FILE_NAME
+}
+
 fn agents_dir(root: &Path) -> PathBuf {
     root.join(".claude").join("agents")
 }
@@ -294,9 +303,15 @@ pub fn agent_save(
 pub fn agent_rename(root: String, file_name: String, new_name: String) -> Result<String, String> {
     validate_md_component(&file_name)?;
     validate_component(&new_name)?;
+    if is_producer_file(&file_name) {
+        return Err("Reserved agent: producer".to_string());
+    }
     let root_path = checked_root(&root)?;
     let slug = crate::preset::slugify(&new_name)?;
     let new_file_name = format!("{slug}.md");
+    if is_producer_file(&new_file_name) {
+        return Err("Reserved agent: producer".to_string());
+    }
     let src = resolve_within_root(&root_path, &format!(".claude/agents/{file_name}"))?;
     let dest = resolve_within_root(&root_path, &format!(".claude/agents/{new_file_name}"))?;
 
@@ -311,6 +326,9 @@ pub fn agent_rename(root: String, file_name: String, new_name: String) -> Result
 #[tauri::command]
 pub fn agent_delete(root: String, file_name: String) -> Result<(), String> {
     validate_md_component(&file_name)?;
+    if is_producer_file(&file_name) {
+        return Err("Reserved agent: producer".to_string());
+    }
     let root_path = checked_root(&root)?;
     let path = resolve_within_root(&root_path, &format!(".claude/agents/{file_name}"))?;
     if !path.is_file() {
@@ -414,6 +432,9 @@ pub fn agent_convert(root: String, rel_path: String, new_name: String) -> Result
 
     let slug = crate::preset::slugify(&new_name)?;
     let file_name = format!("{slug}.md");
+    if is_producer_file(&file_name) {
+        return Err("Reserved agent: producer".to_string());
+    }
     let dir = agents_dir(&root_path);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(&file_name);

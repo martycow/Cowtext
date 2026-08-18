@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useGraphStore, type AssembleStatus } from "./graph";
 import { useProjectStore, type FsChange } from "./project";
+import { onTaskFileChange } from "./tasks";
 
 // ── Wire shape — mirrors src-tauri BarnEvent 1:1 (contract §2) ────────
 
@@ -186,6 +187,9 @@ export function initEventListener(): Promise<() => void> {
     unlistens.push(
       await listen<FsChange>("fs://change", (ev) => {
         useProjectStore.getState().applyFsChange(ev.payload);
+        // Task board auto-refresh (TASKBOARD_BATCH §7): convention task
+        // files reload debounced; every other path is a no-op inside.
+        onTaskFileChange(ev.payload.relPath);
       }),
     );
     return () => {

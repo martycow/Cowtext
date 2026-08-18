@@ -28,6 +28,11 @@ import {
 export const DEV_DESK_TILE: Tile = { tx: 9, ty: 9 };
 export const SIDE_DESK_TILE: Tile = { tx: 6, ty: 9 };
 export const COW_HOME_TILE: Tile = { tx: 8, ty: 8 };
+/** Calves appear here before hopping to their spot (Task-Board §9 hover:
+ *  the barn door hit region). Mirrors calf.ts's private DOOR_TILE — calf.ts
+ *  is out of the hover lane's file zone, so this is a manually-synced
+ *  duplicate; keep both in step if the spawn point ever moves. */
+export const BARN_DOOR_TILE: Tile = { tx: 0, ty: 10 };
 
 /** Deterministic auto-layout slots for nodes without scenePos: two rows along
  *  the north walls, then a middle row — stable order, no RNG. */
@@ -69,6 +74,8 @@ export interface PropEntry {
   nodeId: string;
   filePath: string;
   role: NodeRole;
+  /** Node display name — hover-bubble label metadata (Task-Board §9). */
+  title: string;
   tile: Tile;
   view: Container;
   /** Millis of flash remaining (read-open bounce); driven by tick(). */
@@ -85,6 +92,11 @@ export interface BarnLayout {
   world: Container;
   /** Sorted object layer (props + cow). */
   objects: Container;
+  /** Static furniture views — exposed so hover hit-testing (Task-Board §9)
+   *  can exclude them when classifying the leftover children of `objects`
+   *  as calves; not part of the sortable prop map. */
+  devDeskView: Container;
+  sideDeskView: Container;
   props: Map<string, PropEntry>;
   rebuildProps: (nodes: readonly MemoryNode[]) => void;
   /** Trigger the ≤1.5s open/bounce animation on a node's prop. */
@@ -283,6 +295,8 @@ export function buildLayout(): BarnLayout {
   const layout: BarnLayout = {
     world,
     objects,
+    devDeskView: devDesk,
+    sideDeskView: sideDesk,
     props,
     center: tileToScreen((GRID_W - 1) / 2, (GRID_H - 1) / 2),
 
@@ -316,6 +330,7 @@ export function buildLayout(): BarnLayout {
           nodeId: node.id,
           filePath: node.filePath,
           role: node.role,
+          title: node.title,
           tile,
           view: pv.view,
           flashMs: 0,

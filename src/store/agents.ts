@@ -42,6 +42,13 @@ export interface AgentMeta {
 
 export const DEFAULT_META: AgentMeta = { nickname: "", priority: 3, influence: 50, avatarSeed: "" };
 
+/** Reserved default agent (TASKBOARD_BATCH §4): always shown first in the
+ *  rail (virtual until materialized via createAgent("Producer")); Rust
+ *  rejects rename/delete/convert on this file. Tasks with agent === null
+ *  belong to Producer. */
+export const PRODUCER_FILE = "producer.md";
+export const PRODUCER_DUTIES = "Coordinates the project; owns unassigned tasks.";
+
 /** Draft = the editable mirror of one doc. `rawContent` is used iff `raw`. */
 export interface DocDraft {
   fields: FmFields;

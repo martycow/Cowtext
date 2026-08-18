@@ -261,6 +261,13 @@ interface GraphState {
   /** Wholesale selection sync — React Flow reports the full selection. */
   setSelection: (nodeIds: string[], edgeIds: string[]) => void;
 
+  /** Undo/redo over graph structure (contract TASKBOARD_BATCH §5).
+   *  File operations are never undone. */
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+
   /** Compile-target picker (Compile modal); persisted like any graph edit. */
   setCompileTargets: (targets: CompileTarget[]) => void;
 
@@ -275,6 +282,46 @@ interface GraphState {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+// ── Undo/redo (contract TASKBOARD_BATCH §5) ───────────────────────────
+// Bounded snapshot history of the durable graph shape. FILE operations
+// (rename/convert/stub creation) are NOT undone — graph structure only; a
+// restored node whose file moved simply shows the missing-file badge.
+// updateNode coalesces per-keystroke bursts into one snapshot per key.
+
+interface HistorySnapshot {
+  nodes: MemoryNode[];
+  edges: MemoryEdge[];
+  compileTargets: CompileTarget[];
+}
+
+const HISTORY_CAP = 100;
+let undoStack: HistorySnapshot[] = [];
+let redoStack: HistorySnapshot[] = [];
+let lastPushKey = "";
+let lastPushTs = 0;
+
+function pushHistory(key: string): void {
+  const now = Date.now();
+  if (key === lastPushKey && now - lastPushTs < 800) {
+    lastPushTs = now;
+    return;
+  }
+  lastPushKey = key;
+  lastPushTs = now;
+  const s = useGraphStore.getState();
+  undoStack.push({ nodes: s.nodes, edges: s.edges, compileTargets: s.compileTargets });
+  if (undoStack.length > HISTORY_CAP) undoStack.shift();
+  redoStack = [];
+  useGraphStore.setState({ canUndo: true, canRedo: false });
+}
+
+function resetHistory(): void {
+  undoStack = [];
+  redoStack = [];
+  lastPushKey = "";
+  useGraphStore.setState({ canUndo: false, canRedo: false });
+}
 
 function scheduleSave(): void {
   useGraphStore.setState({ saveState: "dirty" });
@@ -302,6 +349,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   loadError: null,
   assembleStatus: {},
   assembleErrors: {},
+  canUndo: false,
+  canRedo: false,
 
   setAssembleStatus: (nodeId, status, error) => {
     set((st) => {
@@ -317,6 +366,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   loadGraph: async (root) => {
     clearTimeout(saveTimer);
+    resetHistory();
     set({
       root,
       loaded: false,
@@ -390,6 +440,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       pinned: false,
       position,
     };
+    pushHistory("create");
     try {
       // Stub the file so the node is real on disk from the first second.
       await invoke("write_md_file", {
@@ -412,6 +463,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   adoptFile: (relPath, title) => {
     const s = get();
     if (s.nodes.some((n) => n.filePath === relPath)) return;
+    pushHistory("adopt");
     const fileName = relPath.split("/").pop() ?? relPath;
     const derived = fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
     const i = s.nodes.length;
@@ -436,6 +488,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   updateNode: (id, patch) => {
+    pushHistory(`upd:${id}`);
     set((st) => ({
       nodes: st.nodes.map((n) => (n.id === id ? { ...n, ...patch, id } : n)),
     }));
@@ -443,6 +496,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   moveNode: (id, position) => {
+    pushHistory(`move:${id}`);
     set((st) => ({
       nodes: st.nodes.map((n) => (n.id === id ? { ...n, position } : n)),
     }));
@@ -450,6 +504,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   deleteNodes: (ids) => {
+    pushHistory("del-nodes");
     const gone = new Set(ids);
     set((st) => {
       const nextStatus = { ...st.assembleStatus };
@@ -475,6 +530,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   confirmConnection: (kind, condition) => {
+    pushHistory("edge-add");
     const { pending, edges } = get();
     if (pending === null) return;
     const duplicate = edges.some(
@@ -500,6 +556,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   cancelConnection: () => set({ pending: null }),
 
   updateEdge: (id, patch) => {
+    pushHistory(`edge:${id}`);
     set((st) => ({
       edges: st.edges.map((e) => (e.id === id ? { ...e, ...patch, id } : e)),
     }));
@@ -507,6 +564,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   deleteEdges: (ids) => {
+    pushHistory("del-edges");
     const gone = new Set(ids);
     set((st) => ({
       edges: st.edges.filter((e) => !gone.has(e.id)),
@@ -524,7 +582,49 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   setCompileTargets: (targets) => {
+    pushHistory("targets");
     set({ compileTargets: targets });
+    scheduleSave();
+  },
+
+  undo: () => {
+    const snap = undoStack.pop();
+    if (snap === undefined) return;
+    const s = get();
+    redoStack.push({ nodes: s.nodes, edges: s.edges, compileTargets: s.compileTargets });
+    lastPushKey = ""; // break coalescing across an undo boundary
+    const nodeIds = new Set(snap.nodes.map((n) => n.id));
+    const edgeIds = new Set(snap.edges.map((e) => e.id));
+    set({
+      nodes: snap.nodes,
+      edges: snap.edges,
+      compileTargets: snap.compileTargets,
+      selectedNodeIds: s.selectedNodeIds.filter((i) => nodeIds.has(i)),
+      selectedEdgeIds: s.selectedEdgeIds.filter((i) => edgeIds.has(i)),
+      canUndo: undoStack.length > 0,
+      canRedo: true,
+    });
+    scheduleSave();
+  },
+
+  redo: () => {
+    const snap = redoStack.pop();
+    if (snap === undefined) return;
+    const s = get();
+    undoStack.push({ nodes: s.nodes, edges: s.edges, compileTargets: s.compileTargets });
+    if (undoStack.length > HISTORY_CAP) undoStack.shift();
+    lastPushKey = "";
+    const nodeIds = new Set(snap.nodes.map((n) => n.id));
+    const edgeIds = new Set(snap.edges.map((e) => e.id));
+    set({
+      nodes: snap.nodes,
+      edges: snap.edges,
+      compileTargets: snap.compileTargets,
+      selectedNodeIds: s.selectedNodeIds.filter((i) => nodeIds.has(i)),
+      selectedEdgeIds: s.selectedEdgeIds.filter((i) => edgeIds.has(i)),
+      canUndo: true,
+      canRedo: redoStack.length > 0,
+    });
     scheduleSave();
   },
 

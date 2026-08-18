@@ -8,6 +8,7 @@ mod hooks_server;
 mod preset;
 mod project;
 mod settings;
+mod tasks;
 mod watcher;
 
 use std::sync::Arc;
@@ -68,7 +69,11 @@ pub fn run() {
             preset::preset_export,
             preset::preset_apply,
             handoff::handoff_generate,
-            handoff::handoff_write
+            handoff::handoff_write,
+            tasks::tasks_scan,
+            tasks::task_toggle,
+            tasks::task_append,
+            tasks::task_move
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

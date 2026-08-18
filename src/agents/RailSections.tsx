@@ -7,13 +7,16 @@
 
 import { useState } from "react";
 import { FolderOpen, Plus, Trash2, Workflow } from "lucide-react";
-import { useAgentsStore, metaOrDefault, seedFor, type Selection } from "../store/agents";
+import { PRODUCER_FILE, useAgentsStore, metaOrDefault, seedFor, type Selection } from "../store/agents";
 import { useGraphStore } from "../store/graph";
+import { useProjectStore } from "../store/project";
+import { agentContextTokens } from "../store/tokens";
 import { revealPath } from "../fs/api";
 import { AgentAvatar } from "./AgentAvatar";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
+import type { AgentDoc } from "./types";
 
 function SectionHeader({
   label,
@@ -111,15 +114,29 @@ export function AgentsRailSection({ root }: { root: string }) {
   const select = useAgentsStore((s) => s.select);
   const createAgent = useAgentsStore((s) => s.createAgent);
   const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const setSelection = useGraphStore((s) => s.setSelection);
   const adoptFile = useGraphStore((s) => s.adoptFile);
+  const files = useProjectStore((s) => s.files);
   const [creating, setCreating] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
 
   const nodeFor = (fileName: string) =>
     nodes.find((n) => n.filePath === `.claude/agents/${fileName}`);
+
+  // Producer always renders first (contract §4) — a real doc when
+  // .claude/agents/producer.md exists, else a virtual row that materializes
+  // it on click.
+  const producerDoc = agents.find((a) => a.fileName === PRODUCER_FILE);
+  const restAgents = agents.filter((a) => a.fileName !== PRODUCER_FILE);
+  const orderedAgents: AgentDoc[] = producerDoc !== undefined ? [producerDoc, ...restAgents] : restAgents;
+
+  const rowTitle = (doc: AgentDoc): string => {
+    const tokens = agentContextTokens(doc, nodes, edges, files);
+    return `.claude/agents/${doc.fileName} — ≈${tokens.toLocaleString()} tok context`;
+  };
 
   const pick = (fileName: string) => {
     const sel: Selection = { kind: "agent", key: fileName };
@@ -182,10 +199,27 @@ export function AgentsRailSection({ root }: { root: string }) {
         />
       )}
       <ul className="py-1">
+        {producerDoc === undefined && (
+          <li>
+            <div
+              onClick={() => void createAgent("Producer")}
+              title="Producer — default agent, click to create"
+              className="flex h-row cursor-default items-center gap-2 px-3 text-content-muted hover:bg-[var(--surface-hover)]"
+            >
+              <span className="flex-none" style={{ color: "var(--role-agent)" }}>
+                <AgentAvatar seed="producer" size={11} />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs italic">Producer</span>
+              <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-disabled">
+                click to create
+              </span>
+            </div>
+          </li>
+        )}
         {agents.length === 0 && !creating && (
           <li className="px-3 py-1 text-2xs text-content-muted">No agents in .claude/agents/</li>
         )}
-        {agents.map((a) => {
+        {orderedAgents.map((a) => {
           const node = nodeFor(a.fileName);
           const isSelected =
             (node !== undefined && selectedNodeIds.includes(node.id)) ||
@@ -201,7 +235,7 @@ export function AgentsRailSection({ root }: { root: string }) {
                     ? "bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
                     : "hover:bg-[var(--surface-hover)]"
                 }`}
-                title={`.claude/agents/${a.fileName}`}
+                title={rowTitle(a)}
               >
                 <span className="flex-none" style={{ color: "var(--role-agent)" }}>
                   <AgentAvatar seed={seedFor(meta, a.fileName)} size={11} />
