@@ -22,13 +22,12 @@ import { AgentAvatar } from "./AgentAvatar";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
-
-const MODEL_PRESETS = ["sonnet", "opus", "haiku", "inherit"] as const;
+import { companyFor, MODEL_CATALOG } from "./modelCatalog";
 
 const SAVE_BTN =
   "h-control-sm flex-none rounded bg-accent px-3 text-xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled";
 
-function FieldLabel({ children }: { children: string }) {
+export function FieldLabel({ children }: { children: string }) {
   return (
     <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
       {children}
@@ -36,7 +35,7 @@ function FieldLabel({ children }: { children: string }) {
   );
 }
 
-function Stepper({
+export function Stepper({
   value,
   min,
   max,
@@ -76,7 +75,7 @@ function Stepper({
   );
 }
 
-function ChipEditor({
+export function ChipEditor({
   items,
   disabled,
   placeholder,
@@ -135,7 +134,13 @@ function ChipEditor({
   );
 }
 
-function ModelSelect({
+/** Two-step model picker (contract R6) — company first, then that company's
+ *  version list; "Other" swaps the version select for a free-text input.
+ *  Company is INFERRED from the stored value every time this remounts (the
+ *  caller keys it on the doc identity, same idiom as the CodeMirror
+ *  `docKey`), so a value picked outside the catalog (hand-edited frontmatter)
+ *  still lands on the right step instead of silently resetting. */
+export function ModelPicker({
   value,
   disabled,
   onChange,
@@ -144,24 +149,31 @@ function ModelSelect({
   disabled: boolean;
   onChange: (v: string) => void;
 }) {
-  const isCustom = value !== null && value !== "" && !(MODEL_PRESETS as readonly string[]).includes(value);
-  const selectValue = isCustom ? "custom" : (value ?? "sonnet");
+  const [company, setCompany] = useState(() => companyFor(value));
+  const companyDef = MODEL_CATALOG.find((c) => c.company === company) ?? MODEL_CATALOG[0];
+  const isOther = company === "Other";
+
+  const pickCompany = (next: string) => {
+    setCompany(next);
+    const def = MODEL_CATALOG.find((c) => c.company === next);
+    if (def !== undefined && def.models.length > 0) onChange(def.models[0]);
+  };
+
   return (
     <div className="flex items-center gap-2">
       <select
-        value={selectValue}
+        value={company}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value === "custom" ? (value ?? "") : e.target.value)}
+        onChange={(e) => pickCompany(e.target.value)}
         className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
       >
-        {MODEL_PRESETS.map((k) => (
-          <option key={k} value={k}>
-            {k}
+        {MODEL_CATALOG.map((c) => (
+          <option key={c.company} value={c.company}>
+            {c.company}
           </option>
         ))}
-        <option value="custom">custom</option>
       </select>
-      {isCustom && (
+      {isOther ? (
         <input
           value={value ?? ""}
           disabled={disabled}
@@ -169,6 +181,19 @@ function ModelSelect({
           placeholder="model id"
           className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
         />
+      ) : (
+        <select
+          value={value ?? companyDef.models[0]}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+        >
+          {companyDef.models.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
       )}
     </div>
   );
@@ -399,16 +424,18 @@ export function AgentEditor({
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <div className="col-span-2">
               <FieldLabel>Description</FieldLabel>
-              <input
+              <textarea
                 value={draft.fields.description ?? ""}
                 onChange={(e) => patchFields({ description: e.target.value })}
                 disabled={disabled}
-                className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+                rows={2}
+                className="min-h-[40px] max-h-[30vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content focus:border-accent disabled:text-content-disabled"
               />
             </div>
             <div>
               <FieldLabel>Model</FieldLabel>
-              <ModelSelect
+              <ModelPicker
+                key={doc.fileName}
                 value={draft.fields.model}
                 disabled={disabled}
                 onChange={(v) => patchFields({ model: v })}

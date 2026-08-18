@@ -1,20 +1,27 @@
-//! Task-file convention (TASKBOARD_BATCH_CONTRACT.md §1-4): a tolerant,
-//! read-mostly markdown task parser over four well-known files —
+//! Task-file convention (TASKBOARD_BATCH_CONTRACT.md §1-4, Rev 2 §R2-R3): a
+//! tolerant, read-mostly markdown task parser over four well-known files —
 //! `TASKS.md`, `SPRINT.md`, `BACKLOG.md`, `ROADMAP.md` — searched in this
 //! directory order: project root, `docs/`, `docs/tasks/` (first hit per
 //! name wins).
 //!
 //! A "task" is either a markdown pipe-table row (header-driven column
-//! mapping) or a checklist line (`- [ ] text` / `- [x] text`). The parser
-//! never errors on weird markdown — lines that don't match either shape
-//! are simply not tasks. All writes are line-based surgery through
-//! [`project::write_atomic`], confined to the four convention files.
+//! mapping) or a checklist line (`- [ ] text` / `- [x] text` / `- [>] text`
+//! / `- [?] text`). The parser never errors on weird markdown — lines that
+//! don't match either shape are simply not tasks. All writes are line-based
+//! surgery through [`project::write_atomic`], confined to the four
+//! convention files.
+//!
+//! Rev 2 adds a normalized status bucket (`"new"` | `"in-production"` |
+//! `"in-testing"` | `"done"`) shared by both checklist markers and table
+//! status cells, two scan-only fields (`section`, `when`), and the
+//! [`task_update`] command that regenerates a line canonically from a full
+//! editable field set.
 
 #[cfg(test)]
 mod tests;
 
 use crate::project::{checked_root, resolve_within_root, write_atomic};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -48,7 +55,15 @@ pub struct TaskItem {
     pub phase: Option<String>,
     pub agent: Option<String>,
     pub done: bool,
+    /// Normalized status bucket: `"new"` | `"in-production"` |
+    /// `"in-testing"` | `"done"` (contract §R2).
     pub status: Option<String>,
+    /// Scan-only: text of the nearest preceding `##`+ heading in the same
+    /// file, `None` if there isn't one before this task.
+    pub section: Option<String>,
+    /// Scan-only: first ISO date / `Q1`..`Q4` / `Phase <n>` token found
+    /// anywhere in the raw line, `None` if there isn't one.
+    pub when: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -64,6 +79,25 @@ pub struct TaskFileInfo {
 pub struct TasksScan {
     pub files: Vec<TaskFileInfo>,
     pub tasks: Vec<TaskItem>,
+}
+
+/// The full editable field set for [`task_update`] (contract §R3). All
+/// fields are `Option`; both an explicit JSON `null` and an absent key
+/// deserialize to `None`, and `None` means "clear this field" for every
+/// field except `name` (an update that would leave the name empty errors
+/// instead). `status`/`done` together decide the checklist marker /
+/// normalized status bucket — see [`derive_status_bucket`].
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPatch {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub priority: Option<String>,
+    pub phase: Option<String>,
+    pub agent: Option<String>,
+    pub status: Option<String>,
+    pub done: Option<bool>,
 }
 
 // ---------------------------------------------------------------------
@@ -104,6 +138,188 @@ fn convention_stem(rel_path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------
+// Status bucket helpers (contract §R2/§R3)
+// ---------------------------------------------------------------------
+
+/// Normalizes arbitrary status text (a table cell, or a `task_update`
+/// patch value) to one of the four canonical buckets. Dashes are treated
+/// as spaces so the canonical kebab-case bucket strings ("in-production")
+/// round-trip through this same function. Unrecognized/empty text falls
+/// back to `"new"`.
+fn bucket_for_status_input(raw: &str) -> &'static str {
+    let normalized = raw.trim().to_ascii_lowercase().replace('-', " ");
+    let normalized: String = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    match normalized.as_str() {
+        "new" | "todo" => "new",
+        "in progress" | "in production" | "wip" | "doing" => "in-production",
+        "testing" | "in testing" | "review" => "in-testing",
+        "done" | "closed" => "done",
+        _ => "new",
+    }
+}
+
+/// Checklist marker char for a normalized bucket.
+fn marker_for_bucket(bucket: &str) -> char {
+    match bucket {
+        "done" => 'x',
+        "in-production" => '>',
+        "in-testing" => '?',
+        _ => ' ',
+    }
+}
+
+/// `task_update` bucket derivation: an explicit `status` wins (normalized
+/// through [`bucket_for_status_input`]); otherwise an explicit `done: true`
+/// means `"done"`; otherwise (both absent/cleared) the default is `"new"`.
+fn derive_status_bucket(status: Option<&str>, done: Option<bool>) -> &'static str {
+    if let Some(s) = status {
+        return bucket_for_status_input(s);
+    }
+    if done == Some(true) {
+        "done"
+    } else {
+        "new"
+    }
+}
+
+// ---------------------------------------------------------------------
+// Heading / section tracking
+// ---------------------------------------------------------------------
+
+/// `(level, text)` for an ATX heading line (`#`.. `######`), trailing `#`s
+/// and surrounding whitespace stripped from `text`. `None` for non-heading
+/// lines, including `#withoutspace` (not a valid ATX heading).
+fn heading_level_and_text(line: &str) -> Option<(usize, String)> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('#') {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|&c| c == '#').count();
+    let rest = &trimmed[level..];
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let text = rest.trim().trim_end_matches('#').trim().to_string();
+    Some((level, text))
+}
+
+/// Scans `lines[..before_line_no - 1]` (i.e. every line strictly before
+/// the 1-based `before_line_no`) for the last `##`+ heading, contract
+/// §R2/§R3's `section` field.
+fn nearest_section(lines: &[&str], before_line_no: usize) -> Option<String> {
+    let end = before_line_no.saturating_sub(1).min(lines.len());
+    let mut section: Option<String> = None;
+    for line in &lines[..end] {
+        if let Some((level, text)) = heading_level_and_text(line) {
+            if level >= 2 {
+                section = if text.is_empty() { None } else { Some(text) };
+            }
+        }
+    }
+    section
+}
+
+// ---------------------------------------------------------------------
+// `when` extraction (contract §R2/§R3)
+// ---------------------------------------------------------------------
+
+/// First `\d{4}-\d{2}-\d{2}` substring, byte-offset + matched text.
+fn find_iso_date(line: &str) -> Option<(usize, String)> {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    if n < 10 {
+        return None;
+    }
+    for i in 0..=(n - 10) {
+        let s = &bytes[i..i + 10];
+        let digit = |b: u8| b.is_ascii_digit();
+        if digit(s[0])
+            && digit(s[1])
+            && digit(s[2])
+            && digit(s[3])
+            && s[4] == b'-'
+            && digit(s[5])
+            && digit(s[6])
+            && s[7] == b'-'
+            && digit(s[8])
+            && digit(s[9])
+        {
+            return Some((i, line[i..i + 10].to_string()));
+        }
+    }
+    None
+}
+
+/// First `Q1`..`Q4` token (word-boundary guarded so `Q1` inside a longer
+/// identifier doesn't match), byte-offset + matched text.
+fn find_quarter(line: &str) -> Option<(usize, String)> {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    for i in 0..n {
+        if bytes[i] == b'Q' && i + 1 < n && (b'1'..=b'4').contains(&bytes[i + 1]) {
+            let before_ok = i == 0 || !(bytes[i - 1] as char).is_alphanumeric();
+            let after_idx = i + 2;
+            let after_ok = after_idx >= n || !(bytes[after_idx] as char).is_alphanumeric();
+            if before_ok && after_ok {
+                return Some((i, line[i..i + 2].to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// First `Phase <n>` token (case-insensitive on the word "phase", digits
+/// required after at least one space), byte-offset + matched text in the
+/// original casing. Lowercasing is ASCII-only so byte offsets stay valid
+/// against `line`.
+fn find_phase(line: &str) -> Option<(usize, String)> {
+    let lower = line.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let pat = b"phase";
+    let n = bytes.len();
+    let m = pat.len();
+    if n < m {
+        return None;
+    }
+    for i in 0..=(n - m) {
+        if &bytes[i..i + m] != pat {
+            continue;
+        }
+        let before_ok = i == 0 || !(bytes[i - 1] as char).is_alphanumeric();
+        if !before_ok {
+            continue;
+        }
+        let mut j = i + m;
+        let ws_start = j;
+        while j < n && bytes[j] == b' ' {
+            j += 1;
+        }
+        if j == ws_start {
+            continue;
+        }
+        let digit_start = j;
+        while j < n && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digit_start {
+            continue;
+        }
+        return Some((i, line[i..j].to_string()));
+    }
+    None
+}
+
+/// The earliest-starting match among an ISO date, a `Q1..Q4` token, or a
+/// `Phase <n>` token anywhere in the raw line.
+fn extract_when(line: &str) -> Option<String> {
+    [find_iso_date(line), find_quarter(line), find_phase(line)]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(idx, _)| *idx)
+        .map(|(_, text)| text)
+}
+
+// ---------------------------------------------------------------------
 // Table parsing
 // ---------------------------------------------------------------------
 
@@ -136,7 +352,7 @@ fn is_separator_row(line: &str) -> bool {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ColumnMap {
     name: Option<usize>,
     tags: Option<usize>,
@@ -189,9 +405,17 @@ fn split_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
-fn build_table_task(rel_path: &str, line_no: usize, cells: &[String], map: &ColumnMap) -> Option<TaskItem> {
+fn build_table_task(
+    rel_path: &str,
+    line_no: usize,
+    raw_line: &str,
+    cells: &[String],
+    map: &ColumnMap,
+    section: Option<String>,
+) -> Option<TaskItem> {
     let name = cell_at(cells, map.name)?;
     let tags = cell_at(cells, map.tags).map(|s| split_tags(&s)).unwrap_or_default();
+    let bucket = bucket_for_status_input(cell_at(cells, map.status).as_deref().unwrap_or(""));
     Some(TaskItem {
         id: format!("{rel_path}#{line_no}"),
         rel_path: rel_path.to_string(),
@@ -203,8 +427,10 @@ fn build_table_task(rel_path: &str, line_no: usize, cells: &[String], map: &Colu
         priority: cell_at(cells, map.priority),
         phase: cell_at(cells, map.phase),
         agent: cell_at(cells, map.agent),
-        done: false,
-        status: cell_at(cells, map.status),
+        done: bucket == "done",
+        status: Some(bucket.to_string()),
+        section,
+        when: extract_when(raw_line),
     })
 }
 
@@ -283,17 +509,31 @@ fn extract_tokens(text: &str) -> (Vec<String>, Option<String>, Option<String>) {
     (tags, agent, priority)
 }
 
-fn parse_checklist_line(rel_path: &str, line_no: usize, line: &str) -> Option<TaskItem> {
+/// Checklist marker char -> `(done, status bucket)`. `None` for any char
+/// other than the four recognized markers (contract §R2): `' '` = new,
+/// `'>'` = in-production, `'?'` = in-testing, `'x'`/`'X'` = done.
+fn marker_status(check_char: char) -> Option<(bool, &'static str)> {
+    match check_char {
+        'x' | 'X' => Some((true, "done")),
+        ' ' => Some((false, "new")),
+        '>' => Some((false, "in-production")),
+        '?' => Some((false, "in-testing")),
+        _ => None,
+    }
+}
+
+fn parse_checklist_line(
+    rel_path: &str,
+    line_no: usize,
+    line: &str,
+    section: Option<String>,
+) -> Option<TaskItem> {
     let trimmed = line.trim_start();
     let rest = trimmed.strip_prefix("- [")?;
     let mut chars = rest.chars();
     let check_char = chars.next()?;
     let after = chars.as_str().strip_prefix(']')?;
-    let done = match check_char {
-        'x' | 'X' => true,
-        ' ' => false,
-        _ => return None,
-    };
+    let (done, status_bucket) = marker_status(check_char)?;
     let text = after.trim();
     if text.is_empty() {
         return None;
@@ -312,7 +552,9 @@ fn parse_checklist_line(rel_path: &str, line_no: usize, line: &str) -> Option<Ta
         phase: None,
         agent,
         done,
-        status: None,
+        status: Some(status_bucket.to_string()),
+        section,
+        when: extract_when(line),
     })
 }
 
@@ -320,7 +562,8 @@ fn parse_checklist_line(rel_path: &str, line_no: usize, line: &str) -> Option<Ta
 // Combined scan
 // ---------------------------------------------------------------------
 
-/// Single left-to-right pass over `content`'s lines: a header row
+/// Single left-to-right pass over `content`'s lines: an ATX heading line
+/// updates the running "nearest `##`+ section" tracker; a header row
 /// immediately followed by a separator row (with a name-like column)
 /// starts a table that consumes subsequent pipe rows as data rows; every
 /// other line is tried as a checklist line. Never errors — non-matching
@@ -329,7 +572,15 @@ pub(crate) fn parse_tasks(rel_path: &str, content: &str) -> Vec<TaskItem> {
     let lines: Vec<&str> = content.split('\n').collect();
     let mut out = Vec::new();
     let mut i = 0;
+    let mut section: Option<String> = None;
     while i < lines.len() {
+        if let Some((level, text)) = heading_level_and_text(lines[i]) {
+            if level >= 2 {
+                section = if text.is_empty() { None } else { Some(text) };
+            }
+            i += 1;
+            continue;
+        }
         if let Some(header_cells) = pipe_cells(lines[i]) {
             if i + 1 < lines.len() && is_separator_row(lines[i + 1]) {
                 let map = map_columns(&header_cells);
@@ -342,7 +593,9 @@ pub(crate) fn parse_tasks(rel_path: &str, content: &str) -> Vec<TaskItem> {
                         if is_separator_row(lines[j]) {
                             break;
                         }
-                        if let Some(item) = build_table_task(rel_path, j + 1, &cells, &map) {
+                        if let Some(item) =
+                            build_table_task(rel_path, j + 1, lines[j], &cells, &map, section.clone())
+                        {
                             out.push(item);
                         }
                         j += 1;
@@ -352,7 +605,7 @@ pub(crate) fn parse_tasks(rel_path: &str, content: &str) -> Vec<TaskItem> {
                 }
             }
         }
-        if let Some(item) = parse_checklist_line(rel_path, i + 1, lines[i]) {
+        if let Some(item) = parse_checklist_line(rel_path, i + 1, lines[i], section.clone()) {
             out.push(item);
         }
         i += 1;
@@ -406,6 +659,149 @@ fn toggle_checklist_text(line: &str, done: bool) -> String {
         .enumerate()
         .map(|(i, c)| if i == idx { target } else { c })
         .collect()
+}
+
+/// Leading whitespace run of `line` (spaces/tabs), used to preserve indent
+/// when regenerating a checklist line.
+fn leading_whitespace(line: &str) -> String {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').collect()
+}
+
+/// Regenerates a checklist line canonically (contract §R3):
+/// `- [m] Name — description #tag… @agent P1`. Phase is not encoded here —
+/// it's a table-only field. `name` is assumed already validated non-empty.
+fn regenerate_checklist_line(indent: &str, name: &str, patch: &TaskPatch) -> String {
+    let bucket = derive_status_bucket(patch.status.as_deref(), patch.done);
+    let marker = marker_for_bucket(bucket);
+    let mut line = format!("{indent}- [{marker}] {name}");
+
+    if let Some(desc) = patch.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        line.push_str(" — ");
+        line.push_str(desc);
+    }
+    if let Some(tags) = &patch.tags {
+        for tag in tags {
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                line.push_str(" #");
+                line.push_str(tag);
+            }
+        }
+    }
+    if let Some(agent) = patch.agent.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        line.push_str(" @");
+        line.push_str(agent);
+    }
+    if let Some(priority) = patch.priority.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        line.push(' ');
+        line.push_str(priority);
+    }
+    line
+}
+
+/// Splits a table row into `(has_leading_pipe, has_trailing_pipe, raw
+/// cells)` where cells keep their original (untrimmed) text — the basis
+/// for a byte-exact reconstruction of unmapped cells. Mirrors
+/// [`pipe_cells`]'s prefix/suffix stripping so indices line up with a
+/// [`ColumnMap`] built from the same row's header.
+fn table_row_cells_raw(line: &str) -> Option<(bool, bool, Vec<String>)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return None;
+    }
+    let leading = trimmed.starts_with('|');
+    let mut body = trimmed;
+    if leading {
+        body = &body[1..];
+    }
+    let trailing = body.ends_with('|');
+    if trailing {
+        body = &body[..body.len() - 1];
+    }
+    let cells: Vec<String> = body.split('|').map(|c| c.to_string()).collect();
+    Some((leading, trailing, cells))
+}
+
+/// Locates the table (if any) whose data rows include the 0-based
+/// `row_idx`, returning its header's column map. Mirrors the table
+/// detection in [`parse_tasks`] exactly.
+fn table_at(lines: &[&str], row_idx: usize) -> Option<ColumnMap> {
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(header_cells) = pipe_cells(lines[i]) {
+            if i + 1 < lines.len() && is_separator_row(lines[i + 1]) {
+                let map = map_columns(&header_cells);
+                if map.name.is_some() {
+                    let mut j = i + 2;
+                    while j < lines.len() {
+                        if pipe_cells(lines[j]).is_none() {
+                            break;
+                        }
+                        if is_separator_row(lines[j]) {
+                            break;
+                        }
+                        if j == row_idx {
+                            return Some(map);
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Overwrites `cells[idx]` (when `idx` maps and is in range) with
+/// `" value "`, or a single space when `value` is `None`/empty (a cleared
+/// field).
+fn set_cell(cells: &mut [String], idx: Option<usize>, value: Option<&str>) {
+    let Some(idx) = idx else { return };
+    if idx >= cells.len() {
+        return;
+    }
+    let v = value.unwrap_or("").trim();
+    cells[idx] = if v.is_empty() { " ".to_string() } else { format!(" {v} ") };
+}
+
+/// Regenerates a table row: only header-mapped cells are replaced (contract
+/// §R3), unmapped cells and the row's leading/trailing pipe style are
+/// preserved byte-exact. `name` is assumed already validated non-empty.
+fn regenerate_table_row(lines: &[String], row_idx: usize, name: &str, patch: &TaskPatch) -> Result<String, String> {
+    let str_lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    let map = table_at(&str_lines, row_idx).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+    let (leading, trailing, mut cells) =
+        table_row_cells_raw(&lines[row_idx]).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+
+    let bucket = derive_status_bucket(patch.status.as_deref(), patch.done);
+    let tags_joined = patch.tags.as_ref().map(|tags| {
+        tags.iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+
+    set_cell(&mut cells, map.name, Some(name));
+    set_cell(&mut cells, map.description, patch.description.as_deref());
+    set_cell(&mut cells, map.tags, tags_joined.as_deref());
+    set_cell(&mut cells, map.priority, patch.priority.as_deref());
+    set_cell(&mut cells, map.phase, patch.phase.as_deref());
+    set_cell(&mut cells, map.agent, patch.agent.as_deref());
+    set_cell(&mut cells, map.status, Some(bucket));
+
+    let mut out = String::new();
+    if leading {
+        out.push('|');
+    }
+    out.push_str(&cells.join("|"));
+    if trailing {
+        out.push('|');
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------
@@ -473,7 +869,9 @@ pub fn task_toggle(root: String, rel_path: String, line: usize, done: bool) -> R
     lines[idx] = toggle_checklist_text(&lines[idx], done);
     write_atomic(&path, &lines.join("\n"))?;
 
-    parse_checklist_line(&rel_path, line, &lines[idx])
+    let borrowed: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    let section = nearest_section(&borrowed, line);
+    parse_checklist_line(&rel_path, line, &lines[idx], section)
         .ok_or_else(|| "Task moved on disk — rescan".to_string())
 }
 
@@ -491,7 +889,9 @@ pub fn task_append(root: String, rel_path: String, text: String) -> Result<TaskI
     let (content, line_no) = append_raw_line(&existing, &rel_path, &raw_line);
     write_atomic(&path, &content)?;
 
-    parse_checklist_line(&rel_path, line_no, &raw_line)
+    let updated_lines: Vec<&str> = content.split('\n').collect();
+    let section = nearest_section(&updated_lines, line_no);
+    parse_checklist_line(&rel_path, line_no, &raw_line, section)
         .ok_or_else(|| "Failed to parse appended task".to_string())
 }
 
@@ -564,6 +964,63 @@ pub fn task_move(
         });
     }
 
-    parse_checklist_line(&to_rel_path, new_line_no, &moved_line_text)
+    let to_lines: Vec<&str> = to_content.split('\n').collect();
+    let section = nearest_section(&to_lines, new_line_no);
+    parse_checklist_line(&to_rel_path, new_line_no, &moved_line_text, section)
         .ok_or_else(|| "Failed to parse moved task".to_string())
+}
+
+/// Updates a task in place from a full editable field set (contract §R3).
+/// Checklist lines are regenerated canonically
+/// (`- [m] Name — description #tag… @agent P1`, phase omitted — table-only
+/// field); table rows get per-cell replacement via the header's column
+/// map, unmapped cells preserved byte-exact. `patch.name` clearing to
+/// empty is an error; every other field treats `None` (JSON `null` or an
+/// absent key) as "clear". Stale-line guard identical to [`task_toggle`].
+/// Returns the updated item with `section`/`when` recomputed.
+#[tauri::command]
+pub fn task_update(root: String, rel_path: String, line: usize, patch: TaskPatch) -> Result<TaskItem, String> {
+    ensure_convention_path(&rel_path)?;
+    let root_path = checked_root(&root)?;
+    let path = resolve_within_root(&root_path, &rel_path)?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("{rel_path}: {e}"))?;
+
+    let current = parse_tasks(&rel_path, &content)
+        .into_iter()
+        .find(|t| t.line == line)
+        .ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+
+    let name = patch
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Task name cannot be empty".to_string())?;
+
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    let idx = line - 1;
+
+    let new_line = match current.source {
+        TaskSource::Checklist => {
+            let indent = leading_whitespace(&lines[idx]);
+            regenerate_checklist_line(&indent, name, &patch)
+        }
+        TaskSource::Table => regenerate_table_row(&lines, idx, name, &patch)?,
+    };
+    lines[idx] = new_line;
+    let new_content = lines.join("\n");
+    write_atomic(&path, &new_content)?;
+
+    match current.source {
+        TaskSource::Checklist => {
+            let updated_lines: Vec<&str> = new_content.split('\n').collect();
+            let section = nearest_section(&updated_lines, line);
+            parse_checklist_line(&rel_path, line, updated_lines[idx], section)
+                .ok_or_else(|| "Failed to parse updated task".to_string())
+        }
+        TaskSource::Table => parse_tasks(&rel_path, &new_content)
+            .into_iter()
+            .find(|t| t.line == line)
+            .ok_or_else(|| "Failed to parse updated task".to_string()),
+    }
 }

@@ -72,7 +72,7 @@ function makeHoverBubble(): { view: Container; setText: (s: string) => void } {
   return { view, setText };
 }
 
-type HoverKind = "cow" | "calf" | "prop" | "desk" | "door";
+type HoverKind = "cow" | "calf" | "prop" | "desk" | "door" | "decoTall" | "decoLow";
 
 interface HoverBox {
   left: number;
@@ -89,6 +89,9 @@ const BOX: Record<HoverKind, HoverBox> = {
   prop: { left: -16, right: 16, top: -32, bottom: 4 },
   desk: { left: -18, right: 18, top: -34, bottom: 4 },
   door: { left: -16, right: 16, top: -24, bottom: 8 },
+  // R10 static set-dressing — cheap-and-generous, same idiom as the rest.
+  decoTall: { left: -14, right: 14, top: -30, bottom: 4 },
+  decoLow: { left: -12, right: 12, top: -14, bottom: 4 },
 };
 
 interface HoverTarget {
@@ -162,6 +165,18 @@ export class HoverController {
         x: entry.view.position.x,
         y: entry.view.position.y,
         label: `${entry.title} — ${entry.role} node (${entry.filePath})`,
+      });
+    }
+
+    // R10 static set-dressing — own targets, excluded from the calf scan.
+    for (const d of layout.decos) {
+      known.add(d.view);
+      targets.push({
+        id: `deco:${d.id}`,
+        kind: d.tall ? "decoTall" : "decoLow",
+        x: d.view.position.x,
+        y: d.view.position.y,
+        label: d.label,
       });
     }
 

@@ -147,3 +147,98 @@ assets, pure Graphics/Text.
 Gates for every lane: `npx tsc --noEmit`, `npm run lint` (0 errors),
 `cargo clippy -- -D warnings`, `cargo test` (from src-tauri). No new deps.
 No commits — dispatcher commits after integration.
+
+
+---
+
+# Rev 2 — Marty's feedback round (2026-08-18, 11 items)
+
+## R1. Tasks is a center TAB, not a modal
+`View = "canvas" | "barn" | "tasks"` — ViewToggle grows a third segment
+(Canvas · Barn · Tasks); the tab fills the whole center area (rail and
+Inspector stay). TasksModal is retired; TasksBoard becomes the tab's body.
+(The Agents "window" already lives in the panels — no Agents tab this round.)
+
+## R2. Board semantics
+- The 4-column STATUS board shows ONLY TASKS.md items: columns
+  **New · In production · In testing · Done**, grouped into swimlanes by the
+  nearest preceding `##` heading in TASKS.md (no heading → "No sprint").
+- Checklist status markers (parser + writer): `[ ]` New · `[>]` In
+  production · `[?]` In testing · `[x]` Done. Table rows map their status
+  cell (new/todo→New; in progress|in production|wip|doing→In production;
+  testing|in testing|review→In testing; done|closed→Done; else New).
+- BACKLOG.md renders as a flat list; ROADMAP.md as a flat list with a time
+  chip — parser extracts `when`: first ISO date, `Q1..Q4`, or `Phase N`
+  token in the line.
+- Moving a card between STATUS columns = `task_update` with the new status
+  (same file); "Move to Backlog/Roadmap/Tasks" (файл) stays via `task_move`.
+
+## R3. New Rust surface (42 → 43) — `task_update`
+`task_update(root, relPath, line, patch)` where patch = full editable field
+set `{name, description, tags, priority, phase, agent, status, done}`
+(camelCase, nulls = clear). Checklist lines are REGENERATED canonically:
+`- [m] Name — description #tag… @agent P1` (phase not encoded in checklist
+lines — table-only field, UI disables it there). Table rows: per-cell
+replacement via the header column map; unmapped columns untouched. Stale
+line guard identical to task_toggle. TaskItem gains `section: string|null`
+and `when: string|null` (scan-only fields).
+
+## R4. Task selection → Inspector Properties
+`useTasksStore.selected: TaskItem | null` (+ select action; cleared on
+reload if the id vanishes). The Inspector, when a task is selected and no
+node/edge is, shows a TaskPanel: editable name/description (resizable
+textarea)/tags/priority/agent/status (+phase for table rows), a prominent
+SOURCE badge (`relPath#line`, mono, click = reveal), Delete-line? NO — no
+task deletion this round (move to Backlog instead). Saves via task_update.
+
+## R5. Unified creation dialogs (controls over text)
+- **New Task dialog** (from the tab header "+ New task"): fields file
+  (segmented TASKS/SPRINT/BACKLOG/ROADMAP), name, description, tags (chip
+  input), priority (P0–P3 segmented), agent (select incl. Producer), status
+  (segmented, TASKS only). Composes the checklist line → task_append.
+- **New Agent dialog** (replaces the rail inline input): name, nickname,
+  company→model two-step picker (R6), priority stepper, influence slider,
+  tools checklist (const list: Read, Grep, Glob, Edit, Write, Bash, WebFetch,
+  WebSearch, Agent, NotebookEdit), skills checklist (existing skills),
+  duties textarea (markdown, resizable). Creates via createAgent + saveDoc +
+  updateMeta.
+- **New Skill dialog**: name + description + body textarea.
+- Markdown stays editable everywhere it already was.
+
+## R6. Model picker — company then version
+`MODEL_CATALOG` const in `src/agents/modelCatalog.ts`:
+Anthropic (inherit, fable-5?, opus, sonnet, haiku — keep the plain aliases
+Claude Code accepts, plus full ids), OpenAI (gpt-5, gpt-5-mini, o3),
+Google (gemini-2.5-pro, gemini-2.5-flash), Other (free-text input).
+Stored as the plain `model:` string; picker infers company from the stored
+value on open.
+
+## R7–R9. Agent editor fixes
+- AgentNodePanel gains the standard AssembleSection (Assemble / Refine /
+  Summarize on the agent file).
+- Read order: REMOVED from AgentNodePanel (agents are not part of the
+  compiled read order; field remains in data, harmless).
+- Description textarea in AgentEditor: `resize-y` like Brief.
+
+## R10. Barn reskin (tech-barn)
+Wooden plank floor (art-direction dither rules), hay bales + small fun
+props (lantern, fence bits, feed trough), KEEP cabinets/desks/corkboard as
+info anchors; scene must read livelier without new binary assets — all
+programmatic Graphics in the Barnlight-29 palette. No behavior changes.
+
+## R11. Rail root node
+The hierarchy tree is rooted at the PROJECT ROOT row (project name, folder
+icon, collapsible, default expanded); all files/dirs nest under it.
+
+## Rev 2 lanes
+- L1 tech-general (Rust): parser `section`/`when` + status markers,
+  `task_update`, tests (zone: src-tauri/src/tasks.rs+tests, lib.rs).
+- L2 primary (stores): TaskStatus type + statusOf, store selected/update,
+  View type, api wrapper.
+- L3 tech-ui: Tasks tab + board rework + dialogs + TaskPanel-in-Inspector
+  wiring per frozen store API (zone: src/tasks/**, src/App.tsx,
+  src/agents/{AgentEditor,RailSections}.tsx, src/agents/modelCatalog.ts,
+  src/inspector/Inspector.tsx TaskPanel section only).
+- L4 tech-barn: scene reskin (zone: src/scene/**).
+L2/L3 overlap on Inspector.tsx: L2 does NOT touch it this round (TaskPanel
+is L3's; store API frozen here).

@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (42) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (43) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/compile.rs` | Three adapters (claude/agents/cursor), validation, topological order, write allowlist |
@@ -30,7 +30,7 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (42)
+## Invoke commands (43)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -39,7 +39,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
 | agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`, `agent_convert`
-· tasks: `tasks_scan`, `task_toggle`, `task_append`, `task_move` |
+· tasks: `tasks_scan`, `task_toggle`, `task_update`, `task_append`, `task_move` |
 | compile | `compile_preview`, `compile_write` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |

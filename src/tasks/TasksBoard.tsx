@@ -1,19 +1,30 @@
-// Reusable SCRUM-ish board over the four convention task files (contract
-// §7). Reads/writes exclusively through `useTasksStore` (lane L2's frozen
-// interface) — this file owns no invoke calls. `agentFilter` prop locks the
-// view for a future per-agent embed: when supplied, the agent picker in the
-// filter bar is hidden and the prop wins over the store's own filter.
+// Tasks tab body (TASKBOARD_BATCH_CONTRACT.md Rev 2, R1/R2) — mounted by
+// App.tsx's Workspace when `view === "tasks"`, filling the center area
+// beside the rail and Inspector (no modal shell anymore). Reads/writes
+// exclusively through `useTasksStore` (lane L2's frozen interface) — this
+// file owns no invoke calls.
+//
+// Main area: TASKS.md items ONLY, grouped into swimlanes by `section` (null
+// → "No sprint"), each broken into the four STATUS columns (New · In
+// production · In testing · Done) via `statusOf`. Side panel: BACKLOG and
+// ROADMAP as flat lists. Selecting a card/row drives both the tasks store's
+// `selected` (Inspector → TaskPanel) and clears the graph selection so the
+// panel is immediately visible.
 
-import { useState } from "react";
-import { MoveRight, Plus } from "lucide-react";
-import { useTasksStore } from "../store/tasks";
+import { useEffect, useState } from "react";
+import { MoreVertical, Plus } from "lucide-react";
+import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
 import type { TaskFileInfo, TaskItem } from "../tasks/api";
 import { PRODUCER_FILE, seedFor, type AgentMeta, useAgentsStore } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { useGraphStore } from "../store/graph";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
+import { NewTaskDialog } from "./NewTaskDialog";
+
+const STATUS_ORDER = TASK_STATUSES;
 
 /** The tasks store's own agentFilter sentinel for "Producer" (its comment:
  *  `null` = all agents; `"producer"` additionally matches `agent === null`)
@@ -37,6 +48,10 @@ function agentKeyMatches(taskAgent: string | null, fileName: string, displayName
   return norm === stem || (name !== "" && norm === name);
 }
 
+function fileFor(files: TaskFileInfo[], name: string): TaskFileInfo | undefined {
+  return files.find((f) => (f.relPath.split("/").pop() ?? "").toLowerCase() === name.toLowerCase());
+}
+
 function columnLabel(relPath: string): string {
   const base = relPath.split("/").pop() ?? relPath;
   return base.replace(/\.md$/i, "").toUpperCase();
@@ -52,6 +67,15 @@ function PriorityBadge({ priority }: { priority: string | null }) {
         ? "border-amber-border bg-amber-surface text-amber-text"
         : "border-border bg-surface-2 text-content-secondary";
   return <span className={`flex-none rounded-sm border px-1 font-mono text-micro ${cls}`}>{norm}</span>;
+}
+
+function WhenChip({ when }: { when: string | null }) {
+  if (when === null || when.trim() === "") return null;
+  return (
+    <span className="flex-none rounded-sm border border-amber-border bg-amber-surface px-1 font-mono text-micro text-amber-text">
+      {when}
+    </span>
+  );
 }
 
 function AgentChip({
@@ -83,66 +107,88 @@ function AgentChip({
   );
 }
 
-function TaskCard({
+function CardMenuButton({ items }: { items: MenuItem[] }) {
+  const menu = useContextMenu();
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          menu.openAt(e, items);
+        }}
+        title="Set status / move"
+        className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+      >
+        <MoreVertical size={12} strokeWidth={1.5} />
+      </button>
+      {menu.menu !== null && (
+        <ContextMenu x={menu.menu.x} y={menu.menu.y} items={menu.menu.items} onClose={menu.close} />
+      )}
+    </>
+  );
+}
+
+function StatusCard({
   task,
+  status,
+  selected,
   agents,
   meta,
   otherFiles,
-  onToggle,
+  onSelect,
+  onSetStatus,
   onMove,
 }: {
   task: TaskItem;
+  status: TaskStatus;
+  selected: boolean;
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
   otherFiles: { relPath: string; label: string }[];
-  onToggle: (done: boolean) => void;
+  onSelect: () => void;
+  onSetStatus: (status: TaskStatus) => void;
   onMove: (toRelPath: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const menu = useContextMenu();
-
-  const openMoveMenu = (e: React.MouseEvent) => {
-    const items: MenuItem[] = otherFiles.map((f) => ({
-      kind: "item",
-      id: f.relPath,
-      label: `Move to ${f.label}`,
-      onSelect: () => onMove(f.relPath),
-    }));
-    menu.openAt(e, items);
-  };
+  const menuItems: MenuItem[] = [
+    ...STATUS_ORDER.filter((s) => s !== status).map(
+      (s): MenuItem => ({
+        kind: "item",
+        id: `status-${s}`,
+        label: `Move to ${STATUS_LABELS[s]}`,
+        onSelect: () => onSetStatus(s),
+      }),
+    ),
+    { kind: "separator", id: "sep-1" },
+    ...otherFiles.map(
+      (f): MenuItem => ({
+        kind: "item",
+        id: `move-${f.relPath}`,
+        label: `Move to ${f.label}`,
+        onSelect: () => onMove(f.relPath),
+      }),
+    ),
+  ];
 
   return (
-    <div className="flex flex-col gap-1 rounded border border-border bg-surface-2 p-2">
-      <div className="flex items-start gap-1.5">
-        {task.source === "checklist" && (
-          <input
-            type="checkbox"
-            checked={task.done}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="mt-0.5 h-3 w-3 flex-none accent-[var(--accent)]"
-          />
-        )}
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
+    <div
+      onClick={onSelect}
+      className={`flex cursor-default flex-col gap-1 rounded border p-1.5 transition-colors duration-fast ${
+        selected
+          ? "border-accent-border bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
+          : "border-border bg-surface-2 hover:border-border-strong"
+      }`}
+    >
+      <div className="flex items-start gap-1">
+        <span
           title={task.name}
-          className={`min-w-0 flex-1 truncate text-left text-xs ${task.done ? "text-content-disabled line-through" : "text-content"}`}
+          className={`min-w-0 flex-1 truncate text-xs ${selected ? "text-accent-text" : "text-content"}`}
         >
           {task.name}
-        </button>
-        <button
-          type="button"
-          onClick={openMoveMenu}
-          title="Move to…"
-          className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
-        >
-          <MoveRight size={12} strokeWidth={1.5} />
-        </button>
+        </span>
+        <CardMenuButton items={menuItems} />
       </div>
-      {expanded && task.description !== "" && (
-        <p className="pl-[18px] text-2xs leading-snug text-content-secondary">{task.description}</p>
-      )}
-      <div className="flex flex-wrap items-center gap-1 pl-[18px]">
+      <div className="flex flex-wrap items-center gap-1">
         <PriorityBadge priority={task.priority} />
         {task.phase !== null && task.phase !== "" && <span className={CHIP}>{task.phase}</span>}
         {task.tags.map((t) => (
@@ -150,90 +196,189 @@ function TaskCard({
             #{t}
           </span>
         ))}
-        <div className="min-w-[8px] flex-1" />
+        <div className="min-w-[6px] flex-1" />
         <AgentChip agentRaw={task.agent} agents={agents} meta={meta} />
       </div>
-      {menu.menu !== null && (
-        <ContextMenu x={menu.menu.x} y={menu.menu.y} items={menu.menu.items} onClose={menu.close} />
-      )}
     </div>
   );
 }
 
-function Column({
-  file,
+function ColumnHeader({ status, count }: { status: TaskStatus; count: number }) {
+  return (
+    <div className="flex h-[26px] flex-none items-center gap-1.5 border-r border-border-subtle px-2 last:border-r-0">
+      <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
+        {STATUS_LABELS[status]}
+      </span>
+      <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-disabled">
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function Swimlane({
   label,
   tasks,
-  otherFiles,
+  statusOf,
   agents,
   meta,
+  otherFiles,
+  selectedId,
+  onSelect,
+  onSetStatus,
+  onMove,
 }: {
-  file: TaskFileInfo;
   label: string;
   tasks: TaskItem[];
-  otherFiles: { relPath: string; label: string }[];
+  statusOf: (item: TaskItem) => TaskStatus;
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
+  otherFiles: { relPath: string; label: string }[];
+  selectedId: string | null;
+  onSelect: (t: TaskItem) => void;
+  onSetStatus: (t: TaskItem, status: TaskStatus) => void;
+  onMove: (t: TaskItem, toRelPath: string) => void;
 }) {
-  const toggle = useTasksStore((s) => s.toggle);
-  const append = useTasksStore((s) => s.append);
-  const move = useTasksStore((s) => s.move);
-  const [draft, setDraft] = useState("");
-
-  const submit = () => {
-    const v = draft.trim();
-    if (v === "") return;
-    setDraft("");
-    void append(file.relPath, v);
-  };
-
   return (
-    <div className="flex w-[250px] flex-none flex-col rounded-lg border border-border-subtle bg-surface-1">
-      <div className="flex h-row flex-none items-center gap-1.5 border-b border-border-subtle px-2.5">
+    <div className="border-b border-border-subtle">
+      <div className="flex h-[22px] flex-none items-center gap-1.5 bg-surface-inset px-2.5">
+        <span className="font-mono text-2xs uppercase tracking-wider text-content-secondary">{label}</span>
+        <span className="font-mono text-micro text-content-disabled">({tasks.length})</span>
+      </div>
+      <div className="grid grid-cols-4">
+        {STATUS_ORDER.map((status) => (
+          <div key={status} className="flex flex-col gap-1.5 border-r border-border-subtle p-2 last:border-r-0">
+            {tasks
+              .filter((t) => statusOf(t) === status)
+              .map((t) => (
+                <StatusCard
+                  key={t.id}
+                  task={t}
+                  status={status}
+                  selected={t.id === selectedId}
+                  agents={agents}
+                  meta={meta}
+                  otherFiles={otherFiles}
+                  onSelect={() => onSelect(t)}
+                  onSetStatus={(s) => onSetStatus(t, s)}
+                  onMove={(to) => onMove(t, to)}
+                />
+              ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FlatRow({
+  task,
+  showWhen,
+  selected,
+  agents,
+  meta,
+  onSelect,
+  onToggle,
+}: {
+  task: TaskItem;
+  showWhen: boolean;
+  selected: boolean;
+  agents: AgentDoc[];
+  meta: Record<string, AgentMeta>;
+  onSelect: () => void;
+  onToggle: (done: boolean) => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={`flex cursor-default flex-col gap-1 rounded border p-1.5 transition-colors duration-fast ${
+        selected
+          ? "border-accent-border bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
+          : "border-border bg-surface-2 hover:border-border-strong"
+      }`}
+    >
+      <div className="flex items-start gap-1.5">
+        {task.source === "checklist" && (
+          <input
+            type="checkbox"
+            checked={task.done}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="mt-0.5 h-3 w-3 flex-none accent-[var(--accent)]"
+          />
+        )}
+        <span
+          title={task.name}
+          className={`min-w-0 flex-1 truncate text-xs ${
+            task.done ? "text-content-disabled line-through" : selected ? "text-accent-text" : "text-content"
+          }`}
+        >
+          {task.name}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1 pl-[18px]">
+        <PriorityBadge priority={task.priority} />
+        {showWhen && <WhenChip when={task.when} />}
+        {task.tags.map((t) => (
+          <span key={t} className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-muted">
+            #{t}
+          </span>
+        ))}
+        <div className="min-w-[6px] flex-1" />
+        <AgentChip agentRaw={task.agent} agents={agents} meta={meta} />
+      </div>
+    </div>
+  );
+}
+
+function FlatListPanel({
+  label,
+  file,
+  tasks,
+  showWhen,
+  agents,
+  meta,
+  selectedId,
+  onSelect,
+  onToggle,
+}: {
+  label: string;
+  file: TaskFileInfo | undefined;
+  tasks: TaskItem[];
+  showWhen: boolean;
+  agents: AgentDoc[];
+  meta: Record<string, AgentMeta>;
+  selectedId: string | null;
+  onSelect: (t: TaskItem) => void;
+  onToggle: (t: TaskItem, done: boolean) => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-[26px] flex-none items-center gap-1.5 border-b border-border-subtle bg-surface-1 px-2.5">
         <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">{label}</span>
         <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-disabled">
           {tasks.length}
         </span>
       </div>
-      {!file.exists && (
-        <p className="border-b border-border-subtle px-2.5 py-1.5 text-2xs leading-snug text-content-muted">
-          create on first task
-        </p>
-      )}
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
-        {tasks.length === 0 && file.exists && (
-          <p className="px-1 py-2 text-center text-2xs text-content-disabled">No tasks here.</p>
+        {file !== undefined && !file.exists && (
+          <p className="px-1 py-2 text-center text-2xs text-content-muted">create on first task</p>
+        )}
+        {tasks.length === 0 && (file === undefined || file.exists) && (
+          <p className="px-1 py-2 text-center text-2xs text-content-disabled">Nothing here.</p>
         )}
         {tasks.map((t) => (
-          <TaskCard
+          <FlatRow
             key={t.id}
             task={t}
+            showWhen={showWhen}
+            selected={t.id === selectedId}
             agents={agents}
             meta={meta}
-            otherFiles={otherFiles}
-            onToggle={(done) => void toggle(t, done)}
-            onMove={(to) => void move(t, to)}
+            onSelect={() => onSelect(t)}
+            onToggle={(done) => onToggle(t, done)}
           />
         ))}
-      </div>
-      <div className="flex flex-none items-center gap-1 border-t border-border-subtle px-1.5 py-1.5">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-          }}
-          placeholder="Add task…"
-          className="h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-1.5 text-2xs text-content placeholder:text-content-disabled focus:border-accent"
-        />
-        <button
-          type="button"
-          onClick={submit}
-          title="Add"
-          className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
-        >
-          <Plus size={12} strokeWidth={1.5} />
-        </button>
       </div>
     </div>
   );
@@ -245,15 +390,19 @@ function FilterBar({
   onChange,
   textFilter,
   onTextFilterChange,
+  onNewTask,
 }: {
   agents: AgentDoc[];
   value: string | null;
   onChange: (v: string | null) => void;
   textFilter: string;
   onTextFilterChange: (v: string) => void;
+  onNewTask: () => void;
 }) {
   return (
-    <div className="flex h-[38px] flex-none items-center gap-2 border-b border-border-subtle px-3">
+    <div className="flex h-topbar flex-none items-center gap-2 border-b border-border-subtle px-3">
+      <span className="flex-none text-sm font-semibold text-content">Tasks</span>
+      <div className="mx-1 h-4 w-px flex-none bg-border-subtle" />
       <select
         value={value ?? "<all>"}
         onChange={(e) => onChange(e.target.value === "<all>" ? null : e.target.value)}
@@ -275,29 +424,52 @@ function FilterBar({
         placeholder="Filter tasks…"
         className="h-control-sm min-w-0 max-w-[240px] flex-1 rounded border border-border bg-surface-2 px-2 text-xs text-content placeholder:text-content-disabled focus:border-accent"
       />
+      <div className="min-w-0 flex-1" />
+      <button
+        onClick={onNewTask}
+        className="flex h-control items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
+      >
+        <Plus size={14} strokeWidth={1.5} />
+        New task
+      </button>
     </div>
   );
 }
 
-/** Reusable four-column task board (contract §7). With `agentFilter`
- *  supplied, the picker is hidden and the prop is the sole filter — the
- *  shape a future per-agent embed will use; without it, the board drives
- *  the store's own `agentFilter`/`setAgentFilter`. */
-export function TasksBoard({ agentFilter: agentFilterProp }: { agentFilter?: string | null }) {
+/** Tasks tab body (contract Rev 2 R1/R2). Mounted with the project root so
+ *  it can load its own state on tab mount, per contract. With `agentFilter`
+ *  supplied, the picker is hidden and the prop is the sole filter — kept for
+ *  a future per-agent embed. */
+export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: string; agentFilter?: string | null }) {
+  const load = useTasksStore((s) => s.load);
   const files = useTasksStore((s) => s.files);
   const allTasks = useTasksStore((s) => s.tasks);
   const loading = useTasksStore((s) => s.loading);
   const error = useTasksStore((s) => s.error);
   const storeFilter = useTasksStore((s) => s.agentFilter);
   const setStoreFilter = useTasksStore((s) => s.setAgentFilter);
+  const selected = useTasksStore((s) => s.selected);
+  const select = useTasksStore((s) => s.select);
+  const setStatus = useTasksStore((s) => s.setStatus);
+  const toggle = useTasksStore((s) => s.toggle);
+  const move = useTasksStore((s) => s.move);
+  const setGraphSelection = useGraphStore((s) => s.setSelection);
   const agents = useAgentsStore((s) => s.agents);
   const meta = useAgentsStore((s) => s.meta);
   const [textFilter, setTextFilter] = useState("");
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+
+  // Board state loads on tab mount (contract R1) — every time this
+  // component mounts (view switched to "tasks") and whenever the project
+  // root changes underneath it.
+  useEffect(() => {
+    void load(root);
+  }, [root, load]);
 
   const locked = agentFilterProp !== undefined;
   const effectiveFilter = locked ? agentFilterProp : storeFilter;
 
-  const filtered = allTasks.filter((t: TaskItem) => {
+  const matches = (t: TaskItem): boolean => {
     if (effectiveFilter !== null && effectiveFilter !== undefined) {
       if (effectiveFilter === PRODUCER_FILTER) {
         const isProducer = t.agent === null || agentKeyMatches(t.agent, PRODUCER_FILE, "Producer");
@@ -313,7 +485,36 @@ export function TasksBoard({ agentFilter: agentFilterProp }: { agentFilter?: str
       if (!hay.includes(q)) return false;
     }
     return true;
-  });
+  };
+
+  const tasksFile = fileFor(files, "TASKS.md");
+  const backlogFile = fileFor(files, "BACKLOG.md");
+  const roadmapFile = fileFor(files, "ROADMAP.md");
+
+  const taskItems = allTasks.filter((t) => tasksFile !== undefined && t.relPath === tasksFile.relPath && matches(t));
+  const backlogItems = allTasks.filter((t) => backlogFile !== undefined && t.relPath === backlogFile.relPath && matches(t));
+  const roadmapItems = allTasks.filter((t) => roadmapFile !== undefined && t.relPath === roadmapFile.relPath && matches(t));
+
+  const bySection = new Map<string, TaskItem[]>();
+  const sectionOrder: string[] = [];
+  for (const t of [...taskItems].sort((a, b) => a.line - b.line)) {
+    const key = t.section ?? "No sprint";
+    if (!bySection.has(key)) {
+      bySection.set(key, []);
+      sectionOrder.push(key);
+    }
+    bySection.get(key)?.push(t);
+  }
+
+  const otherFilesFor = (relPath: string): { relPath: string; label: string }[] =>
+    files.filter((f) => f.relPath !== relPath).map((f) => ({ relPath: f.relPath, label: columnLabel(f.relPath) }));
+
+  const pick = (t: TaskItem) => {
+    select(t);
+    setGraphSelection([], []);
+  };
+
+  const selectedId = selected?.id ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -324,6 +525,7 @@ export function TasksBoard({ agentFilter: agentFilterProp }: { agentFilter?: str
           onChange={setStoreFilter}
           textFilter={textFilter}
           onTextFilterChange={setTextFilter}
+          onNewTask={() => setNewTaskOpen(true)}
         />
       )}
       {error !== null && (
@@ -334,25 +536,69 @@ export function TasksBoard({ agentFilter: agentFilterProp }: { agentFilter?: str
       {loading ? (
         <p className="px-4 py-6 text-center text-sm text-content-muted">loading…</p>
       ) : (
-        <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-3">
-          {files.map((f, i) => {
-            const colTasks = filtered.filter((t) => t.relPath === f.relPath);
-            const others = files
-              .filter((_, j) => j !== i)
-              .map((o) => ({ relPath: o.relPath, label: columnLabel(o.relPath) }));
-            return (
-              <Column
-                key={f.relPath}
-                file={f}
-                label={columnLabel(f.relPath)}
-                tasks={colTasks}
-                otherFiles={others}
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className="sticky top-0 z-[1] grid grid-cols-4 border-b border-border-subtle bg-surface-1">
+              {STATUS_ORDER.map((status) => (
+                <ColumnHeader
+                  key={status}
+                  status={status}
+                  count={taskItems.filter((t) => statusOf(t) === status).length}
+                />
+              ))}
+            </div>
+            {tasksFile !== undefined && !tasksFile.exists && (
+              <p className="px-3 py-6 text-center text-sm text-content-muted">
+                No TASKS.md yet — add a task to create it.
+              </p>
+            )}
+            {tasksFile !== undefined && tasksFile.exists && taskItems.length === 0 && (
+              <p className="px-3 py-6 text-center text-sm text-content-muted">No tasks match.</p>
+            )}
+            {sectionOrder.map((sec) => (
+              <Swimlane
+                key={sec}
+                label={sec}
+                tasks={bySection.get(sec) ?? []}
+                statusOf={statusOf}
                 agents={agents}
                 meta={meta}
+                otherFiles={tasksFile !== undefined ? otherFilesFor(tasksFile.relPath) : []}
+                selectedId={selectedId}
+                onSelect={pick}
+                onSetStatus={(t, s) => void setStatus(t, s)}
+                onMove={(t, to) => void move(t, to)}
               />
-            );
-          })}
+            ))}
+          </div>
+          <div className="flex w-[300px] flex-none flex-col overflow-hidden border-l border-border-subtle">
+            <FlatListPanel
+              label="BACKLOG"
+              file={backlogFile}
+              tasks={backlogItems}
+              showWhen={false}
+              agents={agents}
+              meta={meta}
+              selectedId={selectedId}
+              onSelect={pick}
+              onToggle={(t, done) => void toggle(t, done)}
+            />
+            <FlatListPanel
+              label="ROADMAP"
+              file={roadmapFile}
+              tasks={roadmapItems}
+              showWhen
+              agents={agents}
+              meta={meta}
+              selectedId={selectedId}
+              onSelect={pick}
+              onToggle={(t, done) => void toggle(t, done)}
+            />
+          </div>
         </div>
+      )}
+      {newTaskOpen && (
+        <NewTaskDialog root={root} files={files} agents={agents} onClose={() => setNewTaskOpen(false)} />
       )}
     </div>
   );

@@ -7,7 +7,6 @@ import {
   FileText,
   FolderOpen,
   Folder,
-  ListTodo,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -35,7 +34,7 @@ const BarnScene = lazy(() => import("./scene/BarnScene").then(m => ({ default: m
 const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
-const TasksModal = lazy(() => import("./tasks/TasksModal").then(m => ({ default: m.TasksModal })));
+const TasksBoard = lazy(() => import("./tasks/TasksBoard").then(m => ({ default: m.TasksBoard })));
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { flushMetaSave, useAgentsStore } from "./store/agents";
 import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
@@ -47,8 +46,9 @@ import { ContextMenu } from "./ui/ContextMenu";
 import { useContextMenu } from "./ui/useContextMenu";
 import type { MenuItem } from "./ui/menuTypes";
 
-/** The two faces of an open project: the graph editor and the barn monitor. */
-type View = "canvas" | "barn";
+/** The three faces of an open project: the graph editor, the barn monitor,
+ *  and the tasks board. */
+type View = "canvas" | "barn" | "tasks";
 
 /** Minimal loading fallback for lazy-loaded components (dark-themed, pixel-based). */
 function LoadingFallback() {
@@ -71,12 +71,18 @@ function LoadingFallback() {
 /** Canvas ⇄ Barn segmented control (DESIGN_SPEC: 2px padding frame on
  *  surface-2, active segment surface-3, compact 24px segments). One click,
  *  always visible while a project is open — no shortcut needed. */
+const VIEW_TITLES: Record<View, string> = {
+  canvas: "Edit the context graph",
+  barn: "Watch the agent in the barn",
+  tasks: "Browse TASKS / BACKLOG / ROADMAP",
+};
+
 function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
   const seg = (v: View, label: string) => (
     <button
       onClick={() => onChange(v)}
       aria-pressed={view === v}
-      title={v === "canvas" ? "Edit the context graph" : "Watch the agent in the barn"}
+      title={VIEW_TITLES[v]}
       className={`flex h-control-sm items-center rounded-sm px-3 text-sm transition-colors duration-fast ${
         view === v
           ? "bg-surface-3 font-medium text-content"
@@ -90,6 +96,7 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => voi
     <div className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
       {seg("canvas", "Canvas")}
       {seg("barn", "Barn")}
+      {seg("tasks", "Tasks")}
     </div>
   );
 }
@@ -199,7 +206,6 @@ function TopBar({
   onSettings,
   onPresets,
   onHandoff,
-  onTasks,
   view,
   onViewChange,
 }: {
@@ -207,7 +213,6 @@ function TopBar({
   onSettings: () => void;
   onPresets: () => void;
   onHandoff: () => void;
-  onTasks: () => void;
   view: View;
   onViewChange: (v: View) => void;
 }) {
@@ -244,16 +249,6 @@ function TopBar({
         >
           <FileOutput size={14} strokeWidth={1.5} />
           Compile
-        </button>
-      )}
-      {root !== null && (
-        <button
-          onClick={onTasks}
-          title="Browse TASKS / SPRINT / BACKLOG / ROADMAP"
-          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <ListTodo size={14} strokeWidth={1.5} />
-          Tasks
         </button>
       )}
       {root !== null && (
@@ -796,6 +791,9 @@ function FileRail({ root }: { root: string }) {
   const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
   const tree = useMemo(() => buildFileTree(contextFiles), [contextFiles]);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
+  // Rev 2 R11: the tree is rooted at the project itself — default expanded,
+  // one collapsible row wrapping everything below (files, Agents, Skills).
+  const [rootExpanded, setRootExpanded] = useState(true);
   const toggleDir = (path: string) => {
     setCollapsedDirs((prev) => {
       const next = new Set(prev);
@@ -905,23 +903,44 @@ function FileRail({ root }: { root: string }) {
       )}
       <div className="relative min-h-0 flex-1 overflow-y-auto">
         <ScanOverlay caption="rescanning" />
-        {contextFiles.length === 0 ? (
-          <div className="flex items-center justify-center px-3 py-6">
-            <span className="text-center text-sm text-content-muted">No markdown files here.</span>
-          </div>
-        ) : (
-          <ul className="py-1">
-            {tree.map((e) =>
-              e.kind === "file" ? (
-                <FileRow key={e.file.relPath} file={e.file} root={root} />
-              ) : (
-                <DirRow key={e.path} entry={e} root={root} collapsedDirs={collapsedDirs} onToggle={toggleDir} />
-              ),
+        <div className="flex flex-col">
+          <div
+            onClick={() => setRootExpanded((v) => !v)}
+            title={root}
+            className="flex h-row flex-none cursor-default items-center gap-1.5 px-3 hover:bg-[var(--surface-hover)]"
+          >
+            {rootExpanded ? (
+              <ChevronDown size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+            ) : (
+              <ChevronRight size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
             )}
-          </ul>
-        )}
-        <AgentsRailSection root={root} />
-        <SkillsRailSection root={root} />
+            <Folder size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+            <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-content">
+              {projectName(root)}
+            </span>
+          </div>
+          {rootExpanded && (
+            <div style={{ paddingLeft: 12 }}>
+              {contextFiles.length === 0 ? (
+                <div className="flex items-center justify-center px-3 py-6">
+                  <span className="text-center text-sm text-content-muted">No markdown files here.</span>
+                </div>
+              ) : (
+                <ul className="py-1">
+                  {tree.map((e) =>
+                    e.kind === "file" ? (
+                      <FileRow key={e.file.relPath} file={e.file} root={root} />
+                    ) : (
+                      <DirRow key={e.path} entry={e} root={root} collapsedDirs={collapsedDirs} onToggle={toggleDir} />
+                    ),
+                  )}
+                </ul>
+              )}
+              <AgentsRailSection root={root} />
+              <SkillsRailSection root={root} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -989,15 +1008,23 @@ function Workspace({ root, view }: { root: string; view: View }) {
           </div>
         ) : loaded ? (
           <>
-            {/* The canvas stays mounted (hidden) in Barn view so the React
-                Flow viewport survives toggling; the Pixi scene mounts on
-                demand and destroys itself cleanly on the way out. */}
+            {/* The canvas stays mounted (hidden) in Barn/Tasks view so the
+                React Flow viewport survives toggling; the Pixi scene and the
+                tasks board mount on demand and unmount cleanly on the way
+                out. */}
             <div className={view === "canvas" ? "h-full" : "hidden"}>
               <GraphCanvas />
             </div>
             {view === "barn" && (
               <Suspense fallback={<LoadingFallback />}>
                 <BarnScene />
+              </Suspense>
+            )}
+            {view === "tasks" && (
+              <Suspense fallback={<LoadingFallback />}>
+                <div className="flex h-full flex-col">
+                  <TasksBoard root={root} />
+                </div>
               </Suspense>
             )}
           </>
@@ -1007,7 +1034,7 @@ function Workspace({ root, view }: { root: string; view: View }) {
           </div>
         )}
       </main>
-      {loaded && loadError === null && view === "canvas" && (
+      {loaded && loadError === null && (view === "canvas" || view === "tasks") && (
         <>
           <ResizeHandle
             value={rightPanelWidth}
@@ -1032,7 +1059,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
-  const [tasksOpen, setTasksOpen] = useState(false);
   const [view, setView] = useState<View>("canvas");
 
   // A new project always opens on the canvas.
@@ -1077,7 +1103,6 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
-        onTasks={() => setTasksOpen(true)}
         view={view}
         onViewChange={setView}
       />
@@ -1120,11 +1145,6 @@ export default function App() {
       {handoffOpen && root !== null && (
         <Suspense fallback={null}>
           <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
-        </Suspense>
-      )}
-      {tasksOpen && root !== null && (
-        <Suspense fallback={null}>
-          <TasksModal root={root} onClose={() => setTasksOpen(false)} />
         </Suspense>
       )}
     </div>

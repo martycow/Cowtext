@@ -6,6 +6,18 @@ code as of 2026-08-18 (`src/tasks/*`, `src/store/{tasks,tokens,graph}.ts`, `src-
 
 **Time budget:** ~18 min.
 
+> **REVISED — Rev 2 (same day):** Tasks is now a center TAB (Canvas · Barn · Tasks), the
+> modal is gone. The board shows ONLY TASKS.md, swimlanes per `##` heading, 4 status
+> columns New / In production / In testing / Done (checklist markers `[ ]` `[>]` `[?]`
+> `[x]`); BACKLOG and ROADMAP render as flat side lists (ROADMAP with time chips).
+> Clicking a card opens an editable Task panel in the Inspector with a source badge
+> (`file#line`); status changes via the card's ⋯ menu. Creation flows are dialogs
+> (New Task / New Agent with company→model picker + sliders / New Skill). Agent nodes:
+> Assemble/Refine/Summarize added, Read order removed (info nodes only), Description
+> resizable. Rail tree is rooted at the project folder. Barn: wood-plank floor, hay
+> bales, lantern, trough, fence, barrel, mouse hole — all hoverable.
+> Steps below referring to the modal/4-file columns should be read accordingly.
+
 ## A. Preconditions (2 min)
 
 1. Throwaway project `C:\_tbtest` with a couple of context nodes on the graph.

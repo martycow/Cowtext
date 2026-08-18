@@ -20,6 +20,23 @@ export interface TaskItem {
   agent: string | null;
   done: boolean;
   status: string | null;
+  /** Nearest preceding ## heading in the file (sprint grouping); scan-only. */
+  section: string | null;
+  /** First time token in the line (ISO date / Q1-Q4 / Phase N); scan-only. */
+  when: string | null;
+}
+
+/** Editable field set for task_update — send only the keys to change;
+ *  null clears a field (name may never be cleared). */
+export interface TaskPatch {
+  name?: string | null;
+  description?: string | null;
+  tags?: string[] | null;
+  priority?: string | null;
+  phase?: string | null;
+  agent?: string | null;
+  status?: string | null;
+  done?: boolean | null;
 }
 
 export interface TaskFileInfo {
@@ -48,6 +65,15 @@ export function taskToggle(
 
 export function taskAppend(root: string, relPath: string, text: string): Promise<TaskItem> {
   return invoke<TaskItem>("task_append", { root, relPath, text });
+}
+
+export function taskUpdate(
+  root: string,
+  relPath: string,
+  line: number,
+  patch: TaskPatch,
+): Promise<TaskItem> {
+  return invoke<TaskItem>("task_update", { root, relPath, line, patch });
 }
 
 export function taskMove(

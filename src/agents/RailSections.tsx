@@ -17,6 +17,8 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import type { AgentDoc } from "./types";
+import { NewAgentDialog } from "../tasks/NewAgentDialog";
+import { NewSkillDialog } from "../tasks/NewSkillDialog";
 
 function SectionHeader({
   label,
@@ -39,42 +41,6 @@ function SectionHeader({
       >
         <Plus size={12} strokeWidth={1.5} />
       </button>
-    </div>
-  );
-}
-
-function CreateInput({
-  placeholder,
-  onSubmit,
-  onCancel,
-}: {
-  placeholder: string;
-  onSubmit: (name: string) => Promise<string | null>;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <div className="border-b border-border-subtle px-3 py-1.5">
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder={placeholder}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onCancel();
-          if (e.key === "Enter" && name.trim() !== "") {
-            void onSubmit(name.trim()).then((err) => {
-              if (err === null) onCancel();
-              else setError(err);
-            });
-          }
-        }}
-        className="h-control-sm w-full rounded border border-border bg-surface-2 px-2 text-xs text-content placeholder:text-content-disabled focus:border-accent"
-      />
-      {error !== null && (
-        <p className="mt-1 break-words font-mono text-2xs text-danger-text">{error}</p>
-      )}
     </div>
   );
 }
@@ -119,7 +85,7 @@ export function AgentsRailSection({ root }: { root: string }) {
   const setSelection = useGraphStore((s) => s.setSelection);
   const adoptFile = useGraphStore((s) => s.adoptFile);
   const files = useProjectStore((s) => s.files);
-  const [creating, setCreating] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
 
@@ -190,14 +156,8 @@ export function AgentsRailSection({ root }: { root: string }) {
 
   return (
     <div className="flex-none">
-      <SectionHeader label="Agents" count={agents.length} onCreate={() => setCreating(true)} />
-      {creating && (
-        <CreateInput
-          placeholder="new agent name…"
-          onSubmit={createAgent}
-          onCancel={() => setCreating(false)}
-        />
-      )}
+      <SectionHeader label="Agents" count={agents.length} onCreate={() => setDialogOpen(true)} />
+      {dialogOpen && <NewAgentDialog onClose={() => setDialogOpen(false)} />}
       <ul className="py-1">
         {producerDoc === undefined && (
           <li>
@@ -216,7 +176,7 @@ export function AgentsRailSection({ root }: { root: string }) {
             </div>
           </li>
         )}
-        {agents.length === 0 && !creating && (
+        {agents.length === 0 && (
           <li className="px-3 py-1 text-2xs text-content-muted">No agents in .claude/agents/</li>
         )}
         {orderedAgents.map((a) => {
@@ -287,10 +247,9 @@ export function SkillsRailSection({ root }: { root: string }) {
   const skills = useAgentsStore((s) => s.skills);
   const agentsSel = useAgentsStore((s) => s.selection);
   const select = useAgentsStore((s) => s.select);
-  const createSkill = useAgentsStore((s) => s.createSkill);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const setSelection = useGraphStore((s) => s.setSelection);
-  const [creating, setCreating] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
 
@@ -319,16 +278,10 @@ export function SkillsRailSection({ root }: { root: string }) {
 
   return (
     <div className="flex-none">
-      <SectionHeader label="Skills" count={skills.length} onCreate={() => setCreating(true)} />
-      {creating && (
-        <CreateInput
-          placeholder="new skill name…"
-          onSubmit={createSkill}
-          onCancel={() => setCreating(false)}
-        />
-      )}
+      <SectionHeader label="Skills" count={skills.length} onCreate={() => setDialogOpen(true)} />
+      {dialogOpen && <NewSkillDialog onClose={() => setDialogOpen(false)} />}
       <ul className="py-1">
-        {skills.length === 0 && !creating && (
+        {skills.length === 0 && (
           <li className="px-3 py-1 text-2xs text-content-muted">No skills in .claude/skills/</li>
         )}
         {skills.map((sk) => {

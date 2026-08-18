@@ -174,6 +174,126 @@ export function makeSideDesk(): Container {
   return c;
 }
 
+// ── R10 barn reskin: hay + set-dressing (static furniture, no PropView —
+// same plain-Container idiom as makeDevDesk/makeSideDesk; nothing here is
+// per-node so there is no "opened" frame). ──────────────────────────────
+
+/** Stacked block bales (2 high) with rope tie lines — the classic barn bale. */
+export function makeHayBaleStack(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(22));
+  const g = new Graphics();
+  isoBox(g, 0.6, 10, PALETTE.hayLight, PALETTE.hayDeep, PALETTE.hay);
+  const g2 = new Graphics();
+  g2.position.set(0, -10);
+  isoBox(g2, 0.5, 9, PALETTE.hayLight, PALETTE.hayDeep, PALETTE.hay);
+  const ties = new Graphics();
+  ties.rect(-6, -8, 12, 1).fill(PALETTE.woodShadow);
+  ties.rect(-6, -4, 12, 1).fill(PALETTE.woodShadow);
+  ties.rect(-5, -17, 10, 1).fill(PALETTE.woodShadow);
+  ties.rect(-5, -13, 10, 1).fill(PALETTE.woodShadow);
+  c.addChild(g, g2, ties);
+  return c;
+}
+
+/** A single bale lying on its side, straw wisps poking from both ends. */
+export function makeHayBaleLying(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(28));
+  const g = new Graphics();
+  isoBox(g, 0.85, 8, PALETTE.hayLight, PALETTE.hayDeep, PALETTE.hay);
+  g.rect(-10, -8, 2, 8).fill(PALETTE.woodShadow); // tie band
+  g.rect(6, -8, 2, 8).fill(PALETTE.woodShadow); // tie band
+  g.poly([-13, -6, -11, -8, -10, -4, -12, -3]).fill(PALETTE.hayLight).stroke(OUT);
+  g.poly([12, -6, 14, -8, 15, -4, 13, -3]).fill(PALETTE.hayLight).stroke(OUT);
+  c.addChild(g);
+  return c;
+}
+
+/** Loose hay pile — informal tufts, no crate underneath. */
+export function makeHayPile(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(20));
+  const g = new Graphics();
+  g.poly([-9, 0, -1, -8, 5, 0]).fill(PALETTE.hayDeep).stroke(OUT);
+  g.poly([-2, 0, 6, -10, 11, 0]).fill(PALETTE.hay).stroke(OUT);
+  g.poly([-11, 0, -4, -6, 0, 0]).fill(PALETTE.hay).stroke(OUT);
+  g.poly([2, -1, 7, -6, 10, -1]).fill(PALETTE.hayLight);
+  g.rect(-1, -11, 1, 3).fill(PALETTE.hayLight);
+  g.rect(7, -12, 1, 3).fill(PALETTE.hayLight);
+  c.addChild(g);
+  return c;
+}
+
+/** Lantern on a wood post — warm hay-toned glow, amber accent staying put
+ *  (never animated: J1-style flutter is reserved for the cow's scarf). */
+export function makeLanternPost(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(14));
+  const g = new Graphics();
+  g.rect(-2, -28, 4, 28).fill(PALETTE.woodMid).stroke(OUT);
+  g.rect(-2, -28, 2, 28).fill(PALETTE.woodLight);
+  g.rect(-5, -38, 10, 10).fill(PALETTE.slateDark).stroke(OUT);
+  g.rect(-3, -36, 6, 6).fill(PALETTE.hayLight);
+  g.rect(-3, -36, 3, 6).fill(PALETTE.hay);
+  g.poly([-6, -38, 0, -42, 6, -38]).fill(PALETTE.slate).stroke(OUT);
+  c.addChild(g);
+  return c;
+}
+
+/** Feed trough — low wood basin with hay showing over the rim. */
+export function makeFeedTrough(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(28));
+  const g = new Graphics();
+  isoBox(g, 0.8, 6, PALETTE.woodPale, PALETTE.woodShadow, PALETTE.woodMid);
+  g.poly([-9, -9, 0, -13, 9, -9, 0, -5]).fill(PALETTE.night);
+  g.poly([-7, -9, 0, -12, 7, -9, 0, -6]).fill(PALETTE.hay).stroke(OUT);
+  g.rect(-3, -11, 2, 2).fill(PALETTE.hayLight);
+  g.rect(2, -10, 2, 2).fill(PALETTE.hayLight);
+  c.addChild(g);
+  return c;
+}
+
+/** Two-post fence rail — flanks the barn door in pairs. */
+export function makeFenceSegment(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(24));
+  const g = new Graphics();
+  for (const px of [-10, 10]) {
+    g.rect(px - 1, -16, 3, 16).fill(PALETTE.woodMid).stroke(OUT);
+    g.rect(px - 1, -16, 1, 16).fill(PALETTE.woodLight);
+  }
+  g.rect(-10, -13, 21, 2).fill(PALETTE.woodPale).stroke(OUT);
+  g.rect(-10, -7, 21, 2).fill(PALETTE.woodPale).stroke(OUT);
+  c.addChild(g);
+  return c;
+}
+
+/** Wood barrel with slate metal bands. */
+export function makeBarrel(): Container {
+  const c = new Container();
+  c.addChild(makeShadow(16));
+  const g = new Graphics();
+  g.roundRect(-6, -20, 12, 20, 3).fill(PALETTE.woodMid).stroke(OUT);
+  g.roundRect(-6, -20, 6, 20, 3).fill(PALETTE.woodLight);
+  g.rect(-6, -17, 12, 2).fill(PALETTE.slateDark);
+  g.rect(-6, -6, 12, 2).fill(PALETTE.slateDark);
+  g.roundRect(-6, -22, 12, 4, 2).fill(PALETTE.woodPale).stroke(OUT);
+  c.addChild(g);
+  return c;
+}
+
+/** Tiny mouse hole at floor level — a dirt mound with a dark burrow arch. */
+export function makeMouseHole(): Container {
+  const c = new Container();
+  const g = new Graphics();
+  g.poly([-6, 0, 0, -3, 6, 0]).fill(PALETTE.woodShadow).stroke(OUT);
+  g.poly([-4, 0, -3, -4, 3, -4, 4, 0]).fill(PALETTE.night).stroke(OUT);
+  c.addChild(g);
+  return c;
+}
+
 export type CowPose = "stand" | "lying" | "asleep";
 
 export interface CowSprite {

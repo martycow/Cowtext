@@ -25,9 +25,11 @@ import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
 import { ROLE_DESCRIPTIONS } from "../canvas/roleMeta";
 import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
-import { useAgentsStore, type Selection as AgentsSelection } from "../store/agents";
-import { AgentEditor } from "../agents/AgentEditor";
+import { PRODUCER_FILE, useAgentsStore, type Selection as AgentsSelection } from "../store/agents";
+import type { AgentDoc } from "../agents/types";
+import { AgentEditor, ChipEditor } from "../agents/AgentEditor";
 import { SkillEditor } from "../agents/SkillEditor";
+import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
 import { ScanOverlay } from "../ui/ScanOverlay";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -723,8 +725,11 @@ function ConvertBanner({ node }: { node: MemoryNode }) {
 }
 
 /** Properties pane for a node backed by a real .claude/agents file: the full
- *  agent editor (identity, meta, tools, skills, duties) plus the graph-side
- *  facts (relations, read order, pinned, remove-from-graph). */
+ *  agent editor (identity, meta, tools, skills, duties), Assemble/Refine/
+ *  Summarize on the agent file (contract Rev 2 R7), plus the graph-side
+ *  facts (relations, pinned, remove-from-graph). No Read order here — agents
+ *  are not part of the compiled read order (contract Rev 2 R8); normal nodes
+ *  still carry the field in PropertiesTab. */
 function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
   const fileName = node.filePath.split("/").pop() ?? node.filePath;
   const doc = useAgentsStore((s) => s.agents.find((a) => a.fileName === fileName));
@@ -759,6 +764,9 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
         onRequestDelete={() => setArmed(true)}
         onSave={() => useAgentsStore.getState().saveDoc(sel)}
       />
+      <div className="px-3">
+        <AssembleSection node={node} root={root} />
+      </div>
       <div className="flex flex-col gap-3 border-t border-border-subtle p-3">
         {armed && (
           <DangerConfirm
@@ -786,19 +794,6 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
             </p>
           </div>
           <Toggle checked={node.pinned} onChange={(v) => updateNode(node.id, { pinned: v })} />
-        </div>
-        <div>
-          <FieldLabel>Read order</FieldLabel>
-          <input
-            type="number"
-            min={0}
-            value={node.readOrder}
-            onChange={(e) => {
-              const v = Number.parseInt(e.target.value, 10);
-              if (Number.isFinite(v)) updateNode(node.id, { readOrder: v });
-            }}
-            className="h-control w-[88px] rounded border border-border bg-surface-2 px-2 font-mono text-sm text-content focus:border-accent"
-          />
         </div>
         <div>
           <button
@@ -896,6 +891,224 @@ function StandaloneAgentsPanel({ root }: { root: string }) {
         onRequestDelete={() => setArmed(true)}
         onSave={() => useAgentsStore.getState().saveDoc(sel)}
       />
+    </div>
+  );
+}
+
+// ── Task panel (contract Rev 2, R4) ─────────────────────────────────────
+
+const STATUS_ORDER = TASK_STATUSES;
+const PRIORITY_OPTIONS = ["none", "P0", "P1", "P2", "P3"] as const;
+
+function Segmented<T extends string>({
+  value,
+  options,
+  labels,
+  onChange,
+}: {
+  value: T;
+  options: readonly T[];
+  labels?: Partial<Record<T, string>>;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
+      {options.map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          onClick={() => onChange(opt)}
+          className={`h-control-sm rounded-sm px-2 font-mono text-2xs transition-colors duration-fast ${
+            value === opt ? "bg-surface-3 font-medium text-content" : "text-content-muted hover:text-content-secondary"
+          }`}
+        >
+          {labels?.[opt] ?? opt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Agent field: a select over Producer + known agent files, falling back to
+ *  a free-text input when the task's raw `agent` string doesn't match any
+ *  known file/display name — never silently drops a hand-written value. */
+function TaskAgentField({
+  value,
+  agents,
+  onChange,
+}: {
+  value: string;
+  agents: AgentDoc[];
+  onChange: (v: string) => void;
+}) {
+  const known = agents.filter((a) => a.fileName !== PRODUCER_FILE);
+  const labelFor = (a: AgentDoc) => (a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName);
+  const knownLabels = known.map(labelFor);
+  const isKnown = value === "" || knownLabels.includes(value);
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        value={isKnown ? value : "custom"}
+        onChange={(e) => onChange(e.target.value === "custom" ? value : e.target.value)}
+        className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
+      >
+        <option value="">Producer</option>
+        {known.map((a) => (
+          <option key={a.fileName} value={labelFor(a)}>
+            {labelFor(a)}
+          </option>
+        ))}
+        <option value="custom">custom…</option>
+      </select>
+      {!isKnown && (
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="@agent"
+          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 font-mono text-xs text-content focus:border-accent"
+        />
+      )}
+    </div>
+  );
+}
+
+/** Properties pane for a selected task line (contract Rev 2 R4) — editable
+ *  mirror of the TaskItem, explicit Save via `task_update`. Rendered only
+ *  when no node/edge is selected (branch priority in the main export gives
+ *  the graph selection first claim; the store also clears `selected` on
+ *  reload if the underlying line vanished). No delete this round — move the
+ *  line to Backlog from the Tasks tab instead. */
+function TaskPanel({ root }: { root: string }) {
+  const item = useTasksStore((s) => s.selected);
+  const update = useTasksStore((s) => s.update);
+  const agents = useAgentsStore((s) => s.agents);
+
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [priority, setPriority] = useState<string | null>(null);
+  const [phase, setPhase] = useState("");
+  const [agent, setAgent] = useState("");
+  const [status, setStatus] = useState<TaskStatus>("new");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (item === null) return;
+    setName(item.name);
+    setDescription(item.description);
+    setTags(item.tags);
+    setPriority(item.priority);
+    setPhase(item.phase ?? "");
+    setAgent(item.agent ?? "");
+    setStatus(statusOf(item));
+    setSaveError(null);
+    setRevealError(null);
+    // Resync only when the selected task's identity changes — mid-edit
+    // keystrokes on the same item must never be clobbered by this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id]);
+
+  if (item === null) return null;
+
+  const save = () => {
+    setSaving(true);
+    setSaveError(null);
+    void update(item, {
+      name,
+      description,
+      tags,
+      priority,
+      phase: item.source === "table" ? phase : null,
+      agent: agent.trim() === "" ? null : agent.trim(),
+      status,
+    }).then((err) => {
+      setSaving(false);
+      if (err !== null) setSaveError(err);
+    });
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-surface-inset px-3 py-1.5">
+        <button
+          type="button"
+          onClick={() => {
+            setRevealError(null);
+            void revealPath(root, item.relPath).catch((e: unknown) => setRevealError(String(e)));
+          }}
+          title="Reveal in File Explorer"
+          className="rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-2xs text-content-secondary transition-colors duration-fast hover:border-border-strong hover:text-content"
+        >
+          {item.relPath}#{item.line}
+        </button>
+        <span className="text-2xs text-content-muted">task file</span>
+      </div>
+      {revealError !== null && (
+        <p className="flex-none border-b border-border-subtle bg-danger-surface px-3 py-1 font-mono text-2xs text-danger-text">
+          {revealError}
+        </p>
+      )}
+      <div className="flex flex-col gap-3 p-3">
+        <div>
+          <FieldLabel>Name</FieldLabel>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
+          />
+        </div>
+        <div>
+          <FieldLabel>Description</FieldLabel>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className="min-h-[54px] max-h-[40vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content focus:border-accent"
+          />
+        </div>
+        <div>
+          <FieldLabel>Tags</FieldLabel>
+          <ChipEditor items={tags} disabled={false} placeholder="tag…" onChange={setTags} />
+        </div>
+        <div>
+          <FieldLabel>Priority</FieldLabel>
+          <Segmented value={priority ?? "none"} options={PRIORITY_OPTIONS} onChange={(v) => setPriority(v === "none" ? null : v)} />
+        </div>
+        <div>
+          <FieldLabel>Agent</FieldLabel>
+          <TaskAgentField value={agent} agents={agents} onChange={setAgent} />
+        </div>
+        <div>
+          <FieldLabel>Status</FieldLabel>
+          <Segmented value={status} options={STATUS_ORDER} labels={STATUS_LABELS} onChange={setStatus} />
+        </div>
+        <div>
+          <FieldLabel>Phase</FieldLabel>
+          <input
+            value={phase}
+            disabled={item.source !== "table"}
+            onChange={(e) => setPhase(e.target.value)}
+            className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+          />
+          {item.source !== "table" && (
+            <p className="mt-1 text-xs text-content-muted">Checklist tasks don't carry a phase column.</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 border-t border-border-subtle pt-3">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="h-control flex-none rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled"
+          >
+            {saving ? "· · ·" : "Save"}
+          </button>
+          {saveError !== null && (
+            <p className="min-w-0 flex-1 break-words font-mono text-xs text-danger-text">{saveError}</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1252,6 +1465,7 @@ export function Inspector({ root }: { root: string }) {
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const tab = useInspectorTabStore((s) => s.tab);
   const agentsSel = useAgentsStore((s) => s.selection);
+  const taskItem = useTasksStore((s) => s.selected);
   const rightPanelWidth = useSettingsStore((s) => s.rightPanelWidth);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." Both reveal entry points in this panel
@@ -1327,6 +1541,8 @@ export function Inspector({ root }: { root: string }) {
           </button>
           <p className="text-xs text-content-muted">Files stay on disk.</p>
         </div>
+      ) : taskItem !== null ? (
+        <TaskPanel root={root} />
       ) : agentsSel !== null ? (
         <StandaloneAgentsPanel root={root} />
       ) : (

@@ -1,0 +1,241 @@
+// New Agent dialog (contract Rev 2, R5) — replaces the rail's inline
+// create-input. Creates the file via `createAgent`, patches the draft with
+// the chosen fields/duties and saves it, then writes priority/influence/
+// nickname to the sidecar via `updateMeta` (debounced autosave, same as the
+// rest of the agent editor).
+
+import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { useAgentsStore, type Selection } from "../store/agents";
+import { FieldLabel, ModelPicker, Stepper } from "../agents/AgentEditor";
+
+const ICON_BTN =
+  "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
+
+const SECONDARY_BTN =
+  "flex h-control flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2";
+
+const PRIMARY_BTN =
+  "flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled";
+
+const TOOL_OPTIONS = [
+  "Read",
+  "Grep",
+  "Glob",
+  "Edit",
+  "Write",
+  "Bash",
+  "WebFetch",
+  "WebSearch",
+  "Agent",
+  "NotebookEdit",
+] as const;
+
+export function NewAgentDialog({ onClose }: { onClose: () => void }) {
+  const createAgent = useAgentsStore((s) => s.createAgent);
+  const updateDraft = useAgentsStore((s) => s.updateDraft);
+  const saveDoc = useAgentsStore((s) => s.saveDoc);
+  const updateMeta = useAgentsStore((s) => s.updateMeta);
+  const skills = useAgentsStore((s) => s.skills);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  const [name, setName] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [model, setModel] = useState<string | null>("sonnet");
+  const [priority, setPriority] = useState(3);
+  const [influence, setInfluence] = useState(50);
+  const [tools, setTools] = useState<string[]>([]);
+  const [skillNames, setSkillNames] = useState<string[]>([]);
+  const [duties, setDuties] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const toggleTool = (t: string) => {
+    setTools((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  };
+
+  const toggleSkill = (name_: string) => {
+    setSkillNames((cur) => (cur.includes(name_) ? cur.filter((x) => x !== name_) : [...cur, name_]));
+  };
+
+  const canSubmit = name.trim() !== "" && !busy;
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    void (async () => {
+      const err = await createAgent(name.trim());
+      if (err !== null) throw new Error(err);
+      const sel = useAgentsStore.getState().selection;
+      if (sel === null || sel.kind !== "agent") return;
+      const fileName = sel.key;
+      const doc = useAgentsStore.getState().agents.find((a) => a.fileName === fileName);
+      if (doc !== undefined) {
+        const patchedSel: Selection = { kind: "agent", key: fileName };
+        updateDraft(patchedSel, {
+          fields: { ...doc.fields, model, tools, skills: skillNames },
+          body: duties,
+        });
+        const saveErr = await saveDoc(patchedSel);
+        if (saveErr !== null) throw new Error(saveErr);
+      }
+      updateMeta(fileName, { nickname, priority, influence });
+    })()
+      .then(onClose)
+      .catch((e: unknown) => {
+        setBusy(false);
+        setError(String(e));
+      });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-modal flex items-center justify-center bg-[var(--scrim)]"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="New agent"
+        tabIndex={-1}
+        className="flex max-h-[85vh] w-[640px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
+      >
+        <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
+          <span className="text-[15px] font-semibold">New agent</span>
+          <div className="min-w-0 flex-1" />
+          <button onClick={onClose} title="Close" className={ICON_BTN}>
+            <X size={14} strokeWidth={1.5} />
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          {error !== null && (
+            <div className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
+              {error}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <FieldLabel>Name</FieldLabel>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
+              />
+            </div>
+            <div>
+              <FieldLabel>Nickname</FieldLabel>
+              <input
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value.slice(0, 40))}
+                placeholder="optional"
+                className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent"
+              />
+            </div>
+          </div>
+          <div>
+            <FieldLabel>Model</FieldLabel>
+            <ModelPicker value={model} disabled={false} onChange={setModel} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <FieldLabel>Priority</FieldLabel>
+              <Stepper value={priority} min={1} max={5} disabled={false} onChange={setPriority} />
+            </div>
+            <div>
+              <FieldLabel>Influence</FieldLabel>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={influence}
+                  aria-label="Influence"
+                  onChange={(e) => setInfluence(Number(e.target.value))}
+                  className="h-[16px] w-[140px] cursor-pointer appearance-none bg-transparent [&::-webkit-slider-runnable-track]:h-[4px] [&::-webkit-slider-runnable-track]:rounded-sm [&::-webkit-slider-runnable-track]:bg-surface-inset [&::-webkit-slider-thumb]:mt-[-4px] [&::-webkit-slider-thumb]:h-[12px] [&::-webkit-slider-thumb]:w-[12px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-sm [&::-webkit-slider-thumb]:bg-accent"
+                />
+                <span className="w-[32px] text-right font-mono text-xs text-content-secondary">{influence}%</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <FieldLabel>Tools</FieldLabel>
+            <div className="grid grid-cols-3 gap-1 rounded border border-border-subtle bg-surface-inset p-1.5">
+              {TOOL_OPTIONS.map((t) => (
+                <label key={t} className="flex h-[22px] items-center gap-1.5 px-1">
+                  <input
+                    type="checkbox"
+                    checked={tools.includes(t)}
+                    onChange={() => toggleTool(t)}
+                    className="h-3 w-3 accent-[var(--accent)]"
+                  />
+                  <span className="truncate text-xs text-content">{t}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {skills.length > 0 && (
+            <div>
+              <FieldLabel>Skills</FieldLabel>
+              <ul className="flex flex-col gap-0.5 rounded border border-border-subtle bg-surface-inset p-1.5">
+                {skills.map((sk) => {
+                  const label = sk.fields.name !== null && sk.fields.name !== "" ? sk.fields.name : sk.dirName;
+                  return (
+                    <li key={sk.dirName} className="flex h-[22px] items-center gap-2 px-1">
+                      <input
+                        type="checkbox"
+                        checked={skillNames.includes(label)}
+                        onChange={() => toggleSkill(label)}
+                        className="h-3 w-3 accent-[var(--accent)]"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-xs text-content">{label}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          <div>
+            <FieldLabel>Duties</FieldLabel>
+            <textarea
+              value={duties}
+              onChange={(e) => setDuties(e.target.value)}
+              rows={6}
+              placeholder="Markdown body — what this agent does"
+              className="min-h-[100px] max-h-[40vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 font-mono text-xs leading-relaxed text-content placeholder:text-content-disabled focus:border-accent"
+            />
+          </div>
+        </div>
+
+        <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">
+          <span className="min-w-0 flex-1 truncate text-sm text-content-secondary">
+            Creates .claude/agents/&lt;name&gt;.md.
+          </span>
+          <button ref={cancelRef} onClick={onClose} disabled={busy} className={SECONDARY_BTN}>
+            Cancel
+          </button>
+          <button onClick={submit} disabled={!canSubmit} className={PRIMARY_BTN}>
+            {busy ? "· · ·" : "Create"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

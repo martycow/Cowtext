@@ -17,10 +17,18 @@ import {
   type Tile,
 } from "./iso";
 import {
+  makeBarrel,
   makeBookshelf,
   makeCabinet,
   makeCrate,
   makeDevDesk,
+  makeFeedTrough,
+  makeFenceSegment,
+  makeHayBaleLying,
+  makeHayBaleStack,
+  makeHayPile,
+  makeLanternPost,
+  makeMouseHole,
   makeSideDesk,
   type PropView,
 } from "./props";
@@ -53,6 +61,33 @@ const AUTO_SLOTS: Tile[] = [
   { tx: 5, ty: 6 },
   { tx: 10, ty: 3 },
   { tx: 10, ty: 6 },
+];
+
+/** R10 barn reskin: static set-dressing, deliberately parked at edges/corners
+ *  the AUTO_SLOTS layout and the fixed furniture never reach (checked against
+ *  DEV_DESK_TILE, SIDE_DESK_TILE, COW_HOME_TILE, BARN_DOOR_TILE and every
+ *  AUTO_SLOTS entry above) — decorative only, never competes with an
+ *  info-anchor prop or the cow's walk targets. */
+interface DecorSpec {
+  id: string;
+  tile: Tile;
+  make: () => Container;
+  label: string;
+  /** Hover box size hint (Task-Board §9 extension) — tall props (posts,
+   *  bales, barrels) vs. low ones (troughs, fences, the mouse hole). */
+  tall: boolean;
+}
+
+const DECOR_ITEMS: DecorSpec[] = [
+  { id: "hay-stack", tile: { tx: 11, ty: 1 }, make: makeHayBaleStack, label: "Hay bale — fuel for hard-working cows", tall: true },
+  { id: "hay-lying", tile: { tx: 11, ty: 4 }, make: makeHayBaleLying, label: "Hay bale — fuel for hard-working cows", tall: true },
+  { id: "hay-pile", tile: { tx: 2, ty: 11 }, make: makeHayPile, label: "Loose hay — snack pile", tall: false },
+  { id: "lantern", tile: { tx: 0, ty: 4 }, make: makeLanternPost, label: "Lantern — lights the night shift", tall: true },
+  { id: "trough", tile: { tx: 3, ty: 10 }, make: makeFeedTrough, label: "Feed trough — keeps the herd fed", tall: false },
+  { id: "fence-a", tile: { tx: 0, ty: 9 }, make: makeFenceSegment, label: "Fence — keeps the barnyard tidy", tall: false },
+  { id: "fence-b", tile: { tx: 0, ty: 11 }, make: makeFenceSegment, label: "Fence — keeps the barnyard tidy", tall: false },
+  { id: "barrel", tile: { tx: 11, ty: 11 }, make: makeBarrel, label: "Barrel — spare supplies", tall: true },
+  { id: "mouse-hole", tile: { tx: 0, ty: 0 }, make: makeMouseHole, label: "A tiny mouse hole — someone else lives here too", tall: false },
 ];
 
 function propForRole(role: NodeRole): PropView {
@@ -97,6 +132,10 @@ export interface BarnLayout {
    *  as calves; not part of the sortable prop map. */
   devDeskView: Container;
   sideDeskView: Container;
+  /** R10 static set-dressing (hay/lantern/trough/fence/barrel/mouse hole) —
+   *  hover.ts (Task-Board §9) reads this to add decoTall/decoLow targets and
+   *  to exclude these views from its calf leftover-scan. */
+  decos: ReadonlyArray<{ id: string; view: Container; label: string; tall: boolean }>;
   props: Map<string, PropEntry>;
   rebuildProps: (nodes: readonly MemoryNode[]) => void;
   /** Trigger the ≤1.5s open/bounce animation on a node's prop. */
@@ -119,21 +158,36 @@ export interface BarnLayout {
   center: { x: number; y: number };
 }
 
+/** R10: wood plank floor. Boards run along the ty axis — every tile sharing
+ *  a tx column takes the same one of 3 wood tones, so a constant-tx line of
+ *  tiles reads as one long floorboard running diagonally across the screen
+ *  (real floorboards, not a checkerboard). End-seams land every 3 tiles,
+ *  phase-shifted per column so they stagger brick-style instead of lining
+ *  into a grid. Dither stays sparse and warm (ART_DIRECTION: dither is wear,
+ *  never a texture fill). */
 function buildGround(): Container {
   const ground = new Container();
   const g = new Graphics();
+  const tones = [PALETTE.woodMid, PALETTE.woodLight, PALETTE.woodShadow];
   for (let ty = 0; ty < GRID_H; ty += 1) {
     for (let tx = 0; tx < GRID_W; tx += 1) {
       const { x, y } = tileToScreen(tx, ty);
       const cy = y - TILE_H / 2;
-      const fill = (tx + ty) % 2 === 0 ? PALETTE.woodMid : PALETTE.woodShadow;
+      const fill = tones[tx % tones.length];
       g.poly([
         x, cy - TILE_H / 2,
         x + TILE_W / 2, cy,
         x, cy + TILE_H / 2,
         x - TILE_W / 2, cy,
       ]).fill(fill);
-      // sparse warm dither speckle so the checker reads as planks, not chess
+      // board end-seam, staggered per plank column (brick-style, not a grid)
+      const seamPhase = (tx * 2) % 3;
+      if ((ty + seamPhase) % 3 === 0) {
+        g.moveTo(x - TILE_W / 2, cy)
+          .lineTo(x, cy + TILE_H / 2)
+          .stroke({ width: 1, color: PALETTE.woodShadow, alpha: 0.5 });
+      }
+      // sparse warm dither speckle — wear marks, not a texture
       if ((tx * 7 + ty * 13) % 5 === 0) {
         g.rect(x - 6, cy - 1, 2, 1).fill(PALETTE.woodLight);
         g.rect(x + 4, cy + 2, 2, 1).fill(PALETTE.woodShadow);
@@ -216,6 +270,13 @@ export function buildLayout(): BarnLayout {
   const sideDesk = makeSideDesk();
   placeStatic(objects, sideDesk, SIDE_DESK_TILE);
 
+  // R10 barn reskin — static hay/set-dressing, placed once, never rebuilt.
+  const decos = DECOR_ITEMS.map((spec) => {
+    const view = spec.make();
+    placeStatic(objects, view, spec.tile);
+    return { id: spec.id, view, label: spec.label, tall: spec.tall };
+  });
+
   // ── E5 coffee: cup + 2-frame steam curl (8 s period), dev-desk child ──
   const coffee = new Container();
   const cup = new Graphics();
@@ -297,6 +358,7 @@ export function buildLayout(): BarnLayout {
     objects,
     devDeskView: devDesk,
     sideDeskView: sideDesk,
+    decos,
     props,
     center: tileToScreen((GRID_W - 1) / 2, (GRID_H - 1) / 2),
 
