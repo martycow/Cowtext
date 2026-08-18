@@ -1,5 +1,6 @@
 import { useEffect, useState, Suspense, lazy } from "react";
 import {
+  Copy,
   FileOutput,
   FileText,
   FolderOpen,
@@ -10,6 +11,7 @@ import {
   RefreshCw,
   Send,
   Settings,
+  X,
 } from "lucide-react";
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
@@ -24,8 +26,14 @@ const BarnScene = lazy(() => import("./scene/BarnScene").then(m => ({ default: m
 const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
-import { flushSettings, useSettingsStore } from "./store/settings";
+import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { initSfx } from "./scene/sfx";
+import { probeProjectDirs, revealPath } from "./fs/api";
+import { ResizeHandle } from "./ui/ResizeHandle";
+import { ScanOverlay } from "./ui/ScanOverlay";
+import { ContextMenu } from "./ui/ContextMenu";
+import { useContextMenu } from "./ui/useContextMenu";
+import type { MenuItem } from "./ui/menuTypes";
 
 /** The two faces of an open project: the graph editor and the barn monitor. */
 type View = "canvas" | "barn";
@@ -216,10 +224,168 @@ function TopBar({
   );
 }
 
+/** Relative last-opened, coarse — "today", "3 days ago", falling back to a
+ *  date once it's old enough that a relative phrase stops being useful. */
+function relativeTime(ms: number): string {
+  const diffMs = Date.now() - ms;
+  const day = 86_400_000;
+  if (diffMs < day) return "today";
+  const days = Math.floor(diffMs / day);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  return new Date(ms).toLocaleDateString();
+}
+
+function RecentProjectRow({ project, missing }: { project: RecentProject; missing: boolean }) {
+  const openProjectAt = useProjectStore((s) => s.openProjectAt);
+  const removeRecentProject = useSettingsStore((s) => s.removeRecentProject);
+  const contextMenu = useContextMenu();
+  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
+  // error, never a silent no-op."
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const open = () => {
+    if (missing) return;
+    void openProjectAt(project.root);
+  };
+
+  const openMenu = (e: React.MouseEvent) => {
+    const items: MenuItem[] = [
+      { kind: "item", id: "open", label: "Open", icon: FolderOpen, disabled: missing, hint: missing ? "folder not found" : undefined, onSelect: open },
+      {
+        kind: "item",
+        id: "reveal",
+        label: "Reveal in File Explorer",
+        icon: FolderOpen,
+        disabled: missing,
+        hint: missing ? "folder not found" : undefined,
+        onSelect: () => {
+          setRevealError(null);
+          void revealPath(project.root, null).catch((err: unknown) => setRevealError(String(err)));
+        },
+      },
+      { kind: "separator", id: "sep-1" },
+      {
+        kind: "item",
+        id: "remove",
+        label: "Remove from list",
+        icon: X,
+        danger: true,
+        onSelect: () => removeRecentProject(project.root),
+      },
+    ];
+    contextMenu.openAt(e, items);
+  };
+
+  return (
+    <li onContextMenu={openMenu} className="group flex flex-col">
+      <div
+        onClick={open}
+        className={`flex h-row items-center gap-2 px-3 ${
+          missing ? "cursor-default opacity-60" : "cursor-default hover:bg-[var(--surface-hover)]"
+        }`}
+      >
+        <FolderOpen size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
+        <span className="min-w-0 flex-1 truncate text-sm text-content">{project.name}</span>
+        <span
+          dir="rtl"
+          title={project.root}
+          className="hidden min-w-0 max-w-[220px] truncate font-mono text-2xs text-content-muted md:block"
+        >
+          {project.root}
+        </span>
+        {missing && (
+          <span className="flex-none rounded-sm bg-danger-surface px-1 py-px font-mono text-micro text-danger-text">
+            missing
+          </span>
+        )}
+        <span className="flex-none font-mono text-2xs text-content-disabled">
+          {relativeTime(project.lastOpenedMs)}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            removeRecentProject(project.root);
+          }}
+          title="Remove from list"
+          className="hidden h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content group-hover:grid"
+        >
+          <X size={12} strokeWidth={1.5} />
+        </button>
+      </div>
+      {revealError !== null && (
+        <div className="flex items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
+            {revealError}
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevealError(null);
+            }}
+            title="Dismiss"
+            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={10} strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
+      {contextMenu.menu !== null && (
+        <ContextMenu
+          x={contextMenu.menu.x}
+          y={contextMenu.menu.y}
+          items={contextMenu.menu.items}
+          onClose={contextMenu.close}
+        />
+      )}
+    </li>
+  );
+}
+
+/** Up to 8 rows, newest first (contract §7.7). Absent entirely when the
+ *  list is empty — the first-run empty state is unchanged. */
+function RecentProjects() {
+  const recentProjects = useSettingsStore((s) => s.recentProjects);
+  const [missing, setMissing] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (recentProjects.length === 0) return;
+    let live = true;
+    void probeProjectDirs(recentProjects.map((p) => p.root)).then((exists) => {
+      if (!live) return;
+      const next = new Set<string>();
+      recentProjects.forEach((p, i) => {
+        if (exists[i] === false) next.add(p.root);
+      });
+      setMissing(next);
+    });
+    return () => {
+      live = false;
+    };
+    // Re-probe only when the list identity (roots) changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentProjects.map((p) => p.root).join("|")]);
+
+  if (recentProjects.length === 0) return null;
+
+  return (
+    <div className="w-full max-w-[520px]">
+      <div className="mb-1 px-1 font-mono text-2xs uppercase tracking-wider text-content-muted">
+        Recent
+      </div>
+      <ul className="rounded-lg border border-border-subtle bg-surface-1">
+        {recentProjects.map((p) => (
+          <RecentProjectRow key={p.root} project={p} missing={missing.has(p.root)} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function EmptyState() {
   const { openProject } = useProjectStore();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto py-8">
       <div
         className="grid h-[58px] w-[88px] place-items-center border border-dashed border-border-strong"
         style={{
@@ -241,6 +407,7 @@ function EmptyState() {
         <FolderOpen size={15} strokeWidth={1.8} />
         Open folder
       </button>
+      <RecentProjects />
     </div>
   );
 }
@@ -264,55 +431,165 @@ function Scanning({ caption }: { caption: string }) {
   );
 }
 
-function FileRow({ file }: { file: MdFile }) {
+function FileRow({ file, root }: { file: MdFile; root: string }) {
   const node = useGraphStore((s) => s.nodes.find((n) => n.filePath === file.relPath));
   const adoptFile = useGraphStore((s) => s.adoptFile);
   const setSelection = useGraphStore((s) => s.setSelection);
+  const rescan = useProjectStore((s) => s.rescan);
+  const contextMenu = useContextMenu();
+  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
+  // error, never a silent no-op."
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const openMenu = (e: React.MouseEvent) => {
+    const items: MenuItem[] = [
+      node !== undefined
+        ? {
+            kind: "item",
+            id: "select",
+            label: "Select node",
+            icon: FileText,
+            onSelect: () => setSelection([node.id], []),
+          }
+        : {
+            kind: "item",
+            id: "adopt",
+            label: "Adopt as memory node",
+            icon: Plus,
+            onSelect: () => adoptFile(file.relPath),
+          },
+      {
+        kind: "item",
+        id: "reveal",
+        label: "Reveal in File Explorer",
+        icon: FolderOpen,
+        onSelect: () => {
+          setRevealError(null);
+          void revealPath(root, file.relPath).catch((err: unknown) => setRevealError(String(err)));
+        },
+      },
+      {
+        kind: "item",
+        id: "copy",
+        label: "Copy relative path",
+        icon: Copy,
+        onSelect: () => void navigator.clipboard.writeText(file.relPath),
+      },
+      { kind: "separator", id: "sep-1" },
+      {
+        kind: "item",
+        id: "rescan",
+        label: "Rescan",
+        icon: RefreshCw,
+        onSelect: () => void rescan(),
+      },
+    ];
+    contextMenu.openAt(e, items);
+  };
 
   return (
-    <li
-      className="group flex h-row cursor-default items-center gap-2 px-3 hover:bg-[var(--surface-hover)]"
-      title={file.relPath}
-      onClick={() => {
-        if (node !== undefined) setSelection([node.id], []);
-      }}
-    >
-      {node !== undefined ? (
-        <span
-          className="h-2 w-2 flex-none rounded-sm"
-          style={{ background: `var(--role-${node.role})` }}
-          title={`On canvas — ${node.role}`}
-        />
-      ) : (
-        <FileText size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
+    <li className="group flex flex-col" onContextMenu={openMenu}>
+      <div
+        className="flex h-row cursor-default items-center gap-2 px-3 hover:bg-[var(--surface-hover)]"
+        title={file.relPath}
+        onClick={() => {
+          if (node !== undefined) setSelection([node.id], []);
+        }}
+      >
+        {node !== undefined ? (
+          <span
+            className="h-2 w-2 flex-none rounded-sm"
+            style={{ background: `var(--role-${node.role})` }}
+            title={`On canvas — ${node.role}`}
+          />
+        ) : (
+          <FileText size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary [direction:rtl] [text-align:left]">
+          {file.relPath}
+        </span>
+        <span className="flex-none font-mono text-2xs text-content-disabled group-hover:hidden">
+          {formatSize(file.sizeBytes)}
+        </span>
+        {node === undefined && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              adoptFile(file.relPath);
+            }}
+            title="Adopt as memory node"
+            className="hidden h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text group-hover:flex"
+          >
+            <Plus size={11} strokeWidth={1.5} />
+            adopt
+          </button>
+        )}
+      </div>
+      {revealError !== null && (
+        <div className="flex items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
+            {revealError}
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevealError(null);
+            }}
+            title="Dismiss"
+            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={10} strokeWidth={1.5} />
+          </button>
+        </div>
       )}
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary [direction:rtl] [text-align:left]">
-        {file.relPath}
-      </span>
-      <span className="flex-none font-mono text-2xs text-content-disabled group-hover:hidden">
-        {formatSize(file.sizeBytes)}
-      </span>
-      {node === undefined && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            adoptFile(file.relPath);
-          }}
-          title="Adopt as memory node"
-          className="hidden h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text group-hover:flex"
-        >
-          <Plus size={11} strokeWidth={1.5} />
-          adopt
-        </button>
+      {contextMenu.menu !== null && (
+        <ContextMenu
+          x={contextMenu.menu.x}
+          y={contextMenu.menu.y}
+          items={contextMenu.menu.items}
+          onClose={contextMenu.close}
+        />
       )}
     </li>
   );
 }
 
-/** Phase-0 file list, kept reachable as a collapsible left rail. */
-function FileRail() {
+/** Left rail — width and collapsed flag both come from the settings store
+ *  (contract §7.3) so they survive a restart; the drag handle lives beside
+ *  this component in Workspace. */
+function FileRail({ root }: { root: string }) {
   const { files, rescan, scanning } = useProjectStore();
-  const [collapsed, setCollapsed] = useState(false);
+  const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
+  const collapsed = useSettingsStore((s) => s.leftPanelCollapsed);
+  const setCollapsed = useSettingsStore((s) => s.setLeftPanelCollapsed);
+  const headerMenu = useContextMenu();
+  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
+  // error, never a silent no-op."
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const openHeaderMenu = (e: React.MouseEvent) => {
+    const items: MenuItem[] = [
+      { kind: "item", id: "rescan", label: "Rescan", icon: RefreshCw, onSelect: () => void rescan() },
+      {
+        kind: "item",
+        id: "reveal-root",
+        label: "Reveal project in File Explorer",
+        icon: FolderOpen,
+        onSelect: () => {
+          setRevealError(null);
+          void revealPath(root, null).catch((err: unknown) => setRevealError(String(err)));
+        },
+      },
+      {
+        kind: "item",
+        id: "collapse",
+        label: "Collapse panel",
+        icon: PanelLeftClose,
+        onSelect: () => setCollapsed(true),
+      },
+    ];
+    headerMenu.openAt(e, items);
+  };
 
   if (collapsed) {
     return (
@@ -332,8 +609,14 @@ function FileRail() {
   }
 
   return (
-    <div className="flex w-[248px] flex-none flex-col border-r border-border-subtle bg-surface-1">
-      <div className="flex h-[31px] flex-none items-center gap-1.5 border-b border-border-subtle px-3">
+    <div
+      className="flex flex-none flex-col border-r border-border-subtle bg-surface-1"
+      style={{ width: leftPanelWidth }}
+    >
+      <div
+        onContextMenu={openHeaderMenu}
+        className="flex h-[31px] flex-none items-center gap-1.5 border-b border-border-subtle px-3"
+      >
         <span className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-wider text-content-muted">
           {files.length} markdown {files.length === 1 ? "file" : "files"}
         </span>
@@ -352,18 +635,43 @@ function FileRail() {
         >
           <PanelLeftClose size={13} strokeWidth={1.5} />
         </button>
+        {headerMenu.menu !== null && (
+          <ContextMenu
+            x={headerMenu.menu.x}
+            y={headerMenu.menu.y}
+            items={headerMenu.menu.items}
+            onClose={headerMenu.close}
+          />
+        )}
       </div>
-      {files.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-3">
-          <span className="text-center text-sm text-content-muted">No markdown files here.</span>
+      {revealError !== null && (
+        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
+            {revealError}
+          </span>
+          <button
+            onClick={() => setRevealError(null)}
+            title="Dismiss"
+            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={10} strokeWidth={1.5} />
+          </button>
         </div>
-      ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto py-1">
-          {files.map((f) => (
-            <FileRow key={f.relPath} file={f} />
-          ))}
-        </ul>
       )}
+      <div className="relative min-h-0 flex-1">
+        <ScanOverlay caption="rescanning" />
+        {files.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-3">
+            <span className="text-center text-sm text-content-muted">No markdown files here.</span>
+          </div>
+        ) : (
+          <ul className="h-full overflow-y-auto py-1">
+            {files.map((f) => (
+              <FileRow key={f.relPath} file={f} root={root} />
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -371,10 +679,24 @@ function FileRail() {
 function Workspace({ root, view }: { root: string; view: View }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
+  const leftPanelCollapsed = useSettingsStore((s) => s.leftPanelCollapsed);
+  const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
+  const setLeftPanelWidth = useSettingsStore((s) => s.setLeftPanelWidth);
+  const rightPanelWidth = useSettingsStore((s) => s.rightPanelWidth);
+  const setRightPanelWidth = useSettingsStore((s) => s.setRightPanelWidth);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <FileRail />
+      <FileRail root={root} />
+      {!leftPanelCollapsed && (
+        <ResizeHandle
+          value={leftPanelWidth}
+          defaultValue={PANEL_LIMITS.leftDefault}
+          side="left"
+          onChange={setLeftPanelWidth}
+          label="Resize file panel"
+        />
+      )}
       <main className="relative min-w-0 flex-1 bg-surface-canvas">
         {loadError !== null ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-4">
@@ -408,9 +730,18 @@ function Workspace({ root, view }: { root: string; view: View }) {
         )}
       </main>
       {loaded && loadError === null && view === "canvas" && (
-        <Suspense fallback={<div className="w-inspector flex-none bg-surface-1" />}>
-          <Inspector root={root} />
-        </Suspense>
+        <>
+          <ResizeHandle
+            value={rightPanelWidth}
+            defaultValue={PANEL_LIMITS.rightDefault}
+            side="right"
+            onChange={setRightPanelWidth}
+            label="Resize inspector panel"
+          />
+          <Suspense fallback={<div style={{ width: rightPanelWidth }} className="flex-none bg-surface-1" />}>
+            <Inspector root={root} />
+          </Suspense>
+        </>
       )}
     </div>
   );

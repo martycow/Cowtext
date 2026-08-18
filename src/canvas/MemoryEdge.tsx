@@ -7,7 +7,11 @@
 
 import { memo } from "react";
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from "@xyflow/react";
-import type { EdgeKind } from "../store/graph";
+import { Edit3, Trash2 } from "lucide-react";
+import { EDGE_KINDS, useGraphStore, type EdgeKind } from "../store/graph";
+import { ContextMenu } from "../ui/ContextMenu";
+import { useContextMenu } from "../ui/useContextMenu";
+import type { MenuItem } from "../ui/menuTypes";
 import type { CanvasEdge } from "./types";
 
 const STROKE: Record<EdgeKind, { width: number; dash?: string }> = {
@@ -29,24 +33,38 @@ function markerId(kind: EdgeKind, selected: boolean): string {
 }
 
 /** Marker defs, rendered once inside the canvas. Explicit per-kind colours —
- *  markers cannot inherit the edge stroke without context-stroke. */
+ *  markers cannot inherit the edge stroke without context-stroke.
+ *  markerUnits="userSpaceOnUse" (contract §7.11.4) fixes the arrow to an
+ *  absolute size regardless of each kind's stroke width (1.5 vs 1.75), and
+ *  refX is tuned to the BACK of each shape (not the tip) so the line's
+ *  round linecap terminates under the marker instead of poking past it. */
 export function EdgeMarkerDefs() {
   const arrow = (id: string, colour: string) => (
     <marker
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="9"
+      refX="1"
       refY="5"
-      markerWidth="7"
-      markerHeight="7"
+      markerWidth="8"
+      markerHeight="8"
+      markerUnits="userSpaceOnUse"
       orient="auto-start-reverse"
     >
       <path d="M0 0 L10 5 L0 10 z" fill={colour} />
     </marker>
   );
   const circle = (id: string, colour: string) => (
-    <marker key={id} id={id} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8">
+    <marker
+      key={id}
+      id={id}
+      viewBox="0 0 10 10"
+      refX="7"
+      refY="5"
+      markerWidth="9"
+      markerHeight="9"
+      markerUnits="userSpaceOnUse"
+    >
       <circle cx="5" cy="5" r="3.25" fill="var(--surface-canvas)" stroke={colour} strokeWidth="1.5" />
     </marker>
   );
@@ -55,13 +73,14 @@ export function EdgeMarkerDefs() {
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="8"
+      refX="2"
       refY="5"
-      markerWidth="8"
-      markerHeight="8"
+      markerWidth="9"
+      markerHeight="9"
+      markerUnits="userSpaceOnUse"
       orient="auto-start-reverse"
     >
-      <path d="M3 1 L8 5 L3 9" fill="none" stroke={colour} strokeWidth="1.5" />
+      <path d="M3 1 L8 5 L3 9" fill="none" stroke={colour} strokeWidth="1.5" strokeLinecap="round" />
     </marker>
   );
   return (
@@ -79,10 +98,28 @@ export function EdgeMarkerDefs() {
   );
 }
 
+/** Curvature for getBezierPath (contract §7.11.3): ~0.28 for a normal
+ *  left-to-right run, rising toward 0.6 when the target sits behind the
+ *  source or the vertical delta dominates — so the curve bulges out and
+ *  around a card instead of folding back through it. */
+function computeCurvature(sourceX: number, sourceY: number, targetX: number, targetY: number): number {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const dist = Math.hypot(dx, dy) || 1;
+  const behind = dx < 0 ? 1 : 0;
+  const verticalDominant = Math.min(1, Math.abs(dy) / dist);
+  const t = Math.max(behind, verticalDominant);
+  return 0.28 + t * (0.6 - 0.28);
+}
+
 function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
   const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected } =
     props;
   const kind: EdgeKind = props.data?.kind ?? "references";
+  const updateEdge = useGraphStore((s) => s.updateEdge);
+  const deleteEdges = useGraphStore((s) => s.deleteEdges);
+  const setSelection = useGraphStore((s) => s.setSelection);
+  const contextMenu = useContextMenu();
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -90,24 +127,67 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
     targetY,
     sourcePosition,
     targetPosition,
+    curvature: computeCurvature(sourceX, sourceY, targetX, targetY),
   });
   const isSelected = selected === true;
   const colour = isSelected ? "var(--edge-selected)" : `var(--edge-${kind})`;
   const stroke = STROKE[kind];
 
+  const openMenu = (e: React.MouseEvent) => {
+    const items: MenuItem[] = [
+      ...EDGE_KINDS.map(
+        (k): MenuItem => ({
+          kind: "item",
+          id: `kind-${k}`,
+          label: k,
+          checked: k === kind,
+          onSelect: () => updateEdge(id, { kind: k }),
+        }),
+      ),
+      {
+        kind: "item",
+        id: "edit-note",
+        label: "Edit note…",
+        icon: Edit3,
+        onSelect: () => setSelection([], [id]),
+      },
+      { kind: "separator", id: "sep-1" },
+      {
+        kind: "item",
+        id: "delete",
+        label: "Delete edge",
+        icon: Trash2,
+        danger: true,
+        onSelect: () => deleteEdges([id]),
+      },
+    ];
+    contextMenu.openAt(e, items);
+  };
+
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={path}
-        markerEnd={`url(#${markerId(kind, isSelected)})`}
-        style={{
-          stroke: colour,
-          strokeWidth: stroke.width,
-          strokeDasharray: stroke.dash,
-        }}
-        interactionWidth={16}
-      />
+      <g onContextMenu={openMenu}>
+        <BaseEdge
+          id={id}
+          path={path}
+          markerEnd={`url(#${markerId(kind, isSelected)})`}
+          style={{
+            stroke: colour,
+            strokeWidth: stroke.width,
+            strokeDasharray: stroke.dash,
+            strokeLinecap: "round",
+          }}
+          interactionWidth={16}
+        />
+      </g>
+      {contextMenu.menu !== null && (
+        <ContextMenu
+          x={contextMenu.menu.x}
+          y={contextMenu.menu.y}
+          items={contextMenu.menu.items}
+          onClose={contextMenu.close}
+        />
+      )}
       {(kind === "conditional" || kind === "sequence" || props.data?.note !== undefined) && (
         <EdgeLabelRenderer>
           <div

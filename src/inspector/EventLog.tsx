@@ -4,9 +4,14 @@
 // Also hosts the hooks-install entry point (trust-boundary modal).
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Plug, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, FolderOpen, Plug, Trash2, X } from "lucide-react";
 import { useEventsStore, resolveNodeId, type BarnEvent, type LogEvent } from "../store/events";
 import { useGraphStore } from "../store/graph";
+import { useProjectStore } from "../store/project";
+import { revealPath } from "../fs/api";
+import { ContextMenu } from "../ui/ContextMenu";
+import { useContextMenu } from "../ui/useContextMenu";
+import type { MenuItem } from "../ui/menuTypes";
 import { HooksModal } from "./HooksModal";
 
 /** Kind tag colours per DESIGN_SPEC: read = amber (agent acts), write/edit =
@@ -23,14 +28,76 @@ function formatTime(ts: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function EventRow({ event }: { event: LogEvent }) {
+/** True when `filePath` (absolute or relative) resolves inside `root`
+ *  (contract §7.9 event-log row: the reveal entry only appears then). */
+function resolvesInsideRoot(filePath: string, root: string): boolean {
+  const norm = filePath.replace(/\\/g, "/");
+  const isAbsolute = /^[a-zA-Z]:\//.test(norm) || norm.startsWith("/");
+  if (!isAbsolute) return true;
+  const rootNorm = root.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const lower = norm.toLowerCase();
+  return lower === rootNorm || lower.startsWith(`${rootNorm}/`);
+}
+
+function toRelPath(filePath: string, root: string): string {
+  const norm = filePath.replace(/\\/g, "/");
+  const rootNorm = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (norm.toLowerCase().startsWith(`${rootNorm.toLowerCase()}/`)) {
+    return norm.slice(rootNorm.length + 1);
+  }
+  return norm;
+}
+
+function EventRow({
+  event,
+  root,
+  onRevealError,
+}: {
+  event: LogEvent;
+  root: string;
+  onRevealError: (msg: string) => void;
+}) {
   const nodes = useGraphStore((s) => s.nodes);
   const nodeId = event.filePath !== undefined ? resolveNodeId(event.filePath) : null;
   const node = nodeId !== null ? nodes.find((n) => n.id === nodeId) : undefined;
   const unknownPath = event.filePath !== undefined && nodeId === null;
+  const contextMenu = useContextMenu();
+
+  const canReveal = event.filePath !== undefined && resolvesInsideRoot(event.filePath, root);
+
+  const openMenu = (e: React.MouseEvent) => {
+    if (event.filePath === undefined) return;
+    const filePath = event.filePath;
+    const items: MenuItem[] = [
+      ...(canReveal
+        ? ([
+            {
+              kind: "item",
+              id: "reveal",
+              label: "Reveal in File Explorer",
+              icon: FolderOpen,
+              onSelect: () => {
+                void revealPath(root, toRelPath(filePath, root)).catch((err: unknown) =>
+                  onRevealError(String(err)),
+                );
+              },
+            },
+          ] satisfies MenuItem[])
+        : []),
+      {
+        kind: "item",
+        id: "copy",
+        label: "Copy path",
+        icon: Copy,
+        onSelect: () => void navigator.clipboard.writeText(filePath),
+      },
+    ];
+    contextMenu.openAt(e, items);
+  };
 
   return (
     <li
+      onContextMenu={event.filePath !== undefined ? openMenu : undefined}
       className={`flex h-row flex-none items-center gap-2 px-3 ${
         unknownPath ? "bg-accent-surface" : ""
       }`}
@@ -65,6 +132,14 @@ function EventRow({ event }: { event: LogEvent }) {
       <span className="flex-none font-mono text-2xs text-content-disabled">
         {formatTime(event.ts)}
       </span>
+      {contextMenu.menu !== null && (
+        <ContextMenu
+          x={contextMenu.menu.x}
+          y={contextMenu.menu.y}
+          items={contextMenu.menu.items}
+          onClose={contextMenu.close}
+        />
+      )}
     </li>
   );
 }
@@ -73,8 +148,13 @@ export function EventLog({ root }: { root: string }) {
   const events = useEventsStore((s) => s.events);
   const demoMode = useEventsStore((s) => s.demoMode);
   const clear = useEventsStore((s) => s.clear);
+  const hooksInstalled = useProjectStore((s) => s.hooksInstalled);
+  const hooksReadable = useProjectStore((s) => s.hooksReadable);
   const [collapsed, setCollapsed] = useState(true);
   const [hooksOpen, setHooksOpen] = useState(false);
+  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
+  // error, never a silent no-op."
+  const [revealError, setRevealError] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
   // Newest last — keep the list pinned to the bottom as events arrive.
@@ -103,17 +183,43 @@ export function EventLog({ root }: { root: string }) {
           </span>
         )}
         <div className="flex-1" />
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setHooksOpen(true);
-          }}
-          title="Preview and install Claude Code hooks into this project's .claude/settings.json"
-          className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text"
-        >
-          <Plug size={11} strokeWidth={1.5} />
-          install hooks
-        </button>
+        {/* Four-state hooks indicator (contract §7.2) — installed is a
+            static badge with no button; unreadable is a clickable amber
+            badge that opens the same modal; unknown (null) renders nothing,
+            never a guess. */}
+        {hooksInstalled === true ? (
+          <span
+            title={`${root}\\.claude\\settings.json`}
+            className="flex h-control-sm flex-none items-center gap-1 rounded border border-transparent bg-success-surface px-1.5 font-mono text-micro text-success-text"
+          >
+            <Plug size={11} strokeWidth={1.5} />
+            hooks installed
+          </span>
+        ) : hooksInstalled === false && hooksReadable ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setHooksOpen(true);
+            }}
+            title="Preview and install Claude Code hooks into this project's .claude/settings.json"
+            className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text"
+          >
+            <Plug size={11} strokeWidth={1.5} />
+            install hooks
+          </button>
+        ) : hooksInstalled === false && !hooksReadable ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setHooksOpen(true);
+            }}
+            title="settings.json could not be parsed — open to see details"
+            className="flex h-control-sm flex-none items-center gap-1 rounded border border-amber-border bg-amber-surface px-1.5 font-mono text-micro text-amber-text transition-colors duration-fast hover:bg-amber-surface"
+          >
+            <Plug size={11} strokeWidth={1.5} />
+            hooks: settings.json unreadable
+          </button>
+        ) : null}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -133,6 +239,20 @@ export function EventLog({ root }: { root: string }) {
           )}
         </span>
       </div>
+      {!collapsed && revealError !== null && (
+        <div className="flex flex-none items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
+            {revealError}
+          </span>
+          <button
+            onClick={() => setRevealError(null)}
+            title="Dismiss"
+            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={10} strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
       {!collapsed &&
         (events.length === 0 ? (
           <p className="border-t border-border-subtle px-3 py-4 text-center text-sm text-content-muted">
@@ -142,10 +262,12 @@ export function EventLog({ root }: { root: string }) {
         ) : (
           <ul
             ref={listRef}
-            className="max-h-[168px] flex-none overflow-y-auto border-t border-border-subtle py-0.5"
+            className={`max-h-[168px] flex-none overflow-y-auto py-0.5 ${
+              revealError === null ? "border-t border-border-subtle" : ""
+            }`}
           >
             {events.map((e, i) => (
-              <EventRow key={`${e.ts}-${i}`} event={e} />
+              <EventRow key={`${e.ts}-${i}`} event={e} root={root} onRevealError={setRevealError} />
             ))}
           </ul>
         ))}

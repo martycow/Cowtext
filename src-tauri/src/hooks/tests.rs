@@ -138,3 +138,74 @@ fn hooks_write_rejects_bad_root() {
     let err = hooks_write("Z:/no/such/dir".to_string(), "{}".to_string()).unwrap_err();
     assert!(err.starts_with("Not a directory: "));
 }
+
+#[test]
+fn status_absent_file() {
+    let dir = temp_project("status-absent");
+    let status = hooks_status(dir.to_string_lossy().into_owned()).unwrap();
+    assert!(!status.installed);
+    assert!(!status.file_exists);
+    assert!(status.readable);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn status_fully_installed() {
+    let dir = temp_project("status-full");
+    let root = dir.to_string_lossy().into_owned();
+    let preview = hooks_preview(root.clone()).unwrap();
+    hooks_write(root.clone(), preview.new_content).unwrap();
+
+    let status = hooks_status(root).unwrap();
+    assert!(status.installed);
+    assert!(status.file_exists);
+    assert!(status.readable);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn status_partially_installed() {
+    let dir = temp_project("status-partial");
+    let root = dir.to_string_lossy().into_owned();
+    let content = format!(
+        r#"{{ "hooks": {{ "PostToolUse": [{{ "matcher": "{POST_TOOL_USE_MATCHER}",
+            "hooks": [{{ "type": "command", "command": "{HOOK_COMMAND}" }}] }}] }} }}"#
+    );
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(dir.join(".claude/settings.json"), content).unwrap();
+
+    let status = hooks_status(root).unwrap();
+    assert!(!status.installed);
+    assert!(status.file_exists);
+    assert!(status.readable);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn status_unparsable() {
+    let dir = temp_project("status-bad-json");
+    let root = dir.to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(dir.join(".claude/settings.json"), "{ nope").unwrap();
+
+    let status = hooks_status(root.clone()).unwrap();
+    assert!(!status.installed);
+    assert!(status.file_exists);
+    assert!(!status.readable);
+
+    // Top-level not an object also counts as unreadable.
+    std::fs::write(dir.join(".claude/settings.json"), "[1, 2]").unwrap();
+    let status = hooks_status(root.clone()).unwrap();
+    assert!(!status.readable);
+
+    // `hooks` present but not an object.
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{ "hooks": "nope" }"#,
+    )
+    .unwrap();
+    let status = hooks_status(root).unwrap();
+    assert!(!status.readable);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -187,3 +187,105 @@ pub fn write_md_file(root: String, rel_path: String, content: String) -> Result<
     let path = resolve_within_root(&checked_root(&root)?, &rel_path)?;
     write_atomic(&path, &content)
 }
+
+/// Files/directories the app must never rename or clobber — generated
+/// outputs and tool-owned trees. `rel_path` is normalized to forward
+/// slashes and lowercased before comparison.
+pub(crate) fn is_rename_protected(rel_path: &str) -> bool {
+    let normalized = rel_path.replace('\\', "/").to_ascii_lowercase();
+    normalized == "claude.md"
+        || normalized == "agents.md"
+        || normalized.starts_with(".claude/")
+        || normalized.starts_with(".cursor/")
+        || normalized.starts_with(".cowtext/")
+}
+
+/// Rename a node's .md file inside the project root. Never clobbers.
+/// Returns the normalized (forward-slash) new relative path — the exact
+/// string `scan_project` would emit — so the store can store it verbatim.
+#[tauri::command]
+pub fn rename_node_file(
+    root: String,
+    rel_path: String,
+    new_rel_path: String,
+) -> Result<String, String> {
+    let root_path = checked_root(&root)?;
+    let src = resolve_within_root(&root_path, &rel_path)?;
+    let dest = resolve_within_root(&root_path, &new_rel_path)?;
+
+    if !new_rel_path.to_ascii_lowercase().ends_with(".md") {
+        return Err(format!("Destination must be a .md file: {new_rel_path}"));
+    }
+
+    if is_rename_protected(&rel_path) || is_rename_protected(&new_rel_path) {
+        return Err(format!(
+            "Refusing to rename a generated or tool-owned file: {rel_path}"
+        ));
+    }
+
+    if !src.is_file() {
+        return Err(format!("Not a file: {rel_path}"));
+    }
+
+    if src == dest {
+        return Err("Source and destination are the same".to_string());
+    }
+
+    if dest.exists() {
+        return Err(format!("Already exists: {new_rel_path}"));
+    }
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("{new_rel_path}: {e}"))?;
+    }
+    fs::rename(&src, &dest).map_err(|e| format!("{rel_path}: {e}"))?;
+
+    Ok(dest
+        .strip_prefix(&root_path)
+        .unwrap_or(&dest)
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
+/// Show a project file (or the project folder itself) in the OS file
+/// manager. `rel_path == None` (or empty) reveals `root`. If the resolved
+/// path is missing, walk up to the nearest existing ancestor still inside
+/// `root` and reveal that instead.
+#[tauri::command]
+pub fn reveal_path(
+    app: tauri::AppHandle,
+    root: String,
+    rel_path: Option<String>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let root_path = checked_root(&root)?;
+    let target = match rel_path.as_deref() {
+        Some(p) if !p.trim().is_empty() => resolve_within_root(&root_path, p)?,
+        _ => root_path.clone(),
+    };
+
+    let mut candidate = target.as_path();
+    while !candidate.exists() {
+        match candidate.parent() {
+            Some(parent) if parent.starts_with(&root_path) => candidate = parent,
+            _ => {
+                return Err(format!(
+                    "Nothing to reveal: {}",
+                    rel_path.as_deref().unwrap_or("")
+                ))
+            }
+        }
+    }
+
+    app.opener()
+        .reveal_item_in_dir(candidate)
+        .map_err(|e| e.to_string())
+}
+
+/// Existence probe for the recent-projects list. Same order as the input;
+/// individual entries never error.
+#[tauri::command]
+pub fn probe_project_dirs(paths: Vec<String>) -> Result<Vec<bool>, String> {
+    Ok(paths.iter().map(|p| Path::new(p).is_dir()).collect())
+}

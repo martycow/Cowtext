@@ -91,6 +91,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const calmMode = useSettingsStore((s) => s.calmMode);
   const prefersReducedMotion = useSettingsStore((s) => s.prefersReducedMotion);
   const claudeBinaryPath = useSettingsStore((s) => s.claudeBinaryPath);
+  const syncFileName = useSettingsStore((s) => s.syncFileName);
   const persistError = useSettingsStore((s) => s.persistError);
   const setMasterVolume = useSettingsStore((s) => s.setMasterVolume);
   const setBarnSounds = useSettingsStore((s) => s.setBarnSounds);
@@ -98,6 +99,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setMuted = useSettingsStore((s) => s.setMuted);
   const setCalmMode = useSettingsStore((s) => s.setCalmMode);
   const setClaudeBinaryPath = useSettingsStore((s) => s.setClaudeBinaryPath);
+  const setSyncFileName = useSettingsStore((s) => s.setSyncFileName);
 
   const root = useProjectStore((s) => s.root);
 
@@ -251,6 +253,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           {/* Context */}
           <section className="px-4 py-3">
             <SectionLabel>Context</SectionLabel>
+
+            <Row label="Rename file with title">
+              <Toggle
+                checked={syncFileName}
+                onChange={setSyncFileName}
+                label="Rename file with title"
+              />
+            </Row>
+            <HelperLine>
+              Editing a node&rsquo;s title also renames its .md file to match. Off leaves the
+              file path untouched — you can still rename it by hand.
+            </HelperLine>
 
             <Row label="Context data">
               {graphPath !== null ? (

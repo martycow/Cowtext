@@ -119,3 +119,89 @@ fn md_round_trip_creates_parent_dirs() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn rename_happy_path_returns_normalized_path() {
+    let dir = temp_project("rename-happy");
+    let root = dir.to_string_lossy().into_owned();
+    write_md_file(root.clone(), "context/old-name.md".into(), "# Hi\n".into()).unwrap();
+
+    let new_path = rename_node_file(
+        root.clone(),
+        "context/old-name.md".into(),
+        "context/new-name.md".into(),
+    )
+    .unwrap();
+    assert_eq!(new_path, "context/new-name.md");
+    assert!(!dir.join("context/old-name.md").exists());
+    assert_eq!(
+        read_md_file(root, "context/new-name.md".into()).unwrap(),
+        "# Hi\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rename_clobber_refused_both_files_intact() {
+    let dir = temp_project("rename-clobber");
+    let root = dir.to_string_lossy().into_owned();
+    write_md_file(root.clone(), "a.md".into(), "aaa".into()).unwrap();
+    write_md_file(root.clone(), "b.md".into(), "bbb".into()).unwrap();
+
+    let err = rename_node_file(root.clone(), "a.md".into(), "b.md".into()).unwrap_err();
+    assert!(err.starts_with("Already exists: "));
+    assert_eq!(read_md_file(root.clone(), "a.md".into()).unwrap(), "aaa");
+    assert_eq!(read_md_file(root, "b.md".into()).unwrap(), "bbb");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rename_rejects_dotdot_on_either_arg() {
+    let dir = temp_project("rename-dotdot");
+    let root = dir.to_string_lossy().into_owned();
+    write_md_file(root.clone(), "a.md".into(), "aaa".into()).unwrap();
+
+    assert!(rename_node_file(root.clone(), "../a.md".into(), "b.md".into()).is_err());
+    assert!(rename_node_file(root.clone(), "a.md".into(), "../b.md".into()).is_err());
+    assert!(dir.join("a.md").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rename_rejects_claude_md() {
+    let dir = temp_project("rename-protected");
+    let root = dir.to_string_lossy().into_owned();
+    write_md_file(root.clone(), "CLAUDE.md".into(), "# claude".into()).unwrap();
+
+    let err = rename_node_file(root.clone(), "CLAUDE.md".into(), "renamed.md".into()).unwrap_err();
+    assert!(err.starts_with("Refusing to rename a generated or tool-owned file"));
+    assert!(dir.join("CLAUDE.md").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rename_rejects_missing_source() {
+    let dir = temp_project("rename-missing");
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = rename_node_file(root, "nope.md".into(), "new.md".into()).unwrap_err();
+    assert!(err.starts_with("Not a file: "));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rename_into_new_subdirectory_creates_it() {
+    let dir = temp_project("rename-subdir");
+    let root = dir.to_string_lossy().into_owned();
+    write_md_file(root.clone(), "loose.md".into(), "# loose".into()).unwrap();
+
+    let new_path = rename_node_file(
+        root.clone(),
+        "loose.md".into(),
+        "nested/deeper/loose.md".into(),
+    )
+    .unwrap();
+    assert_eq!(new_path, "nested/deeper/loose.md");
+    assert!(dir.join("nested/deeper/loose.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}

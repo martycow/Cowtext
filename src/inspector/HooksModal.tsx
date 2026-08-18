@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
+import { useProjectStore } from "../store/project";
 import { diffLines, type DiffHunk } from "../compile/diff";
 
 /** Mirrors src-tauri hooks::HooksPreview (contract §1.2). */
@@ -116,7 +117,11 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
     setPhase("writing");
     setErrText(null);
     invoke("hooks_write", { root, content: preview.newContent })
-      .then(() => setPhase("done"))
+      .then(() => {
+        setPhase("done");
+        // The badge disappears without a reopen (contract §7.2).
+        void useProjectStore.getState().refreshHooksStatus();
+      })
       .catch((e: unknown) => {
         setErrText(String(e));
         setPhase("failed");
@@ -136,7 +141,7 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
         aria-modal="true"
         aria-label="Install Claude Code hooks"
         tabIndex={-1}
-        className="flex max-h-[80vh] w-[720px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
+        className="flex max-h-[80vh] w-[1040px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         {/* Header — 44px */}
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
@@ -159,7 +164,7 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
         </div>
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-[46vh] flex-1 overflow-y-auto">
           {phase === "loading" ? (
             <p className="px-4 py-6 text-center text-sm text-content-muted">
               Reading .claude/settings.json…

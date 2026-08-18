@@ -57,8 +57,10 @@
 
 /* Node handles — 7px sharp squares, offset 4px outside the card; fade in on
    hover/selection (DESIGN_SPEC.md: the one place the pixel grid shows in a
-   control). */
+   control). A transparent ::after enlarges the pointer/connection hit area
+   to ~16px square (contract §7.11.5) without growing the visible mark. */
 .react-flow__handle.ct-handle {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: 0;
@@ -67,11 +69,27 @@
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
+.react-flow__handle.ct-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  background: transparent;
+}
 .react-flow__handle.ct-handle.react-flow__handle-left {
   left: -4px;
 }
 .react-flow__handle.ct-handle.react-flow__handle-right {
   right: -4px;
+}
+.react-flow__handle.ct-handle.react-flow__handle-top {
+  top: -4px;
+}
+.react-flow__handle.ct-handle.react-flow__handle-bottom {
+  bottom: -4px;
 }
 .ct-node:hover .ct-handle,
 .react-flow__node.selected .ct-handle,

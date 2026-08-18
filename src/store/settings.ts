@@ -3,6 +3,29 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
+/** One entry in the recent-projects list (startup screen). */
+export interface RecentProject {
+  /** Absolute project root, exactly as the dialog / scan returned it. */
+  root: string;
+  /** Basename, precomputed so the startup screen needs no path parsing. */
+  name: string;
+  lastOpenedMs: number;
+}
+
+export const MAX_RECENT_PROJECTS = 8;
+
+export const PANEL_LIMITS = {
+  leftMin: 180,
+  leftMax: 480,
+  leftDefault: 248,
+  rightMin: 320,
+  rightMax: 900,
+  rightDefault: 460,
+  briefMin: 48,
+  briefMax: 600,
+  briefDefault: 72,
+} as const;
+
 export interface AppSettings {
   version: 1;
   masterVolume: number; // 0..1
@@ -11,6 +34,13 @@ export interface AppSettings {
   muted: boolean;
   calmMode: boolean;
   claudeBinaryPath: string; // "" = auto-resolve via `where claude`
+  // ── new in this batch ──
+  recentProjects: RecentProject[]; // newest first, <= MAX_RECENT_PROJECTS
+  leftPanelWidth: number; // px, clamped leftMin..leftMax
+  rightPanelWidth: number; // px, clamped rightMin..rightMax
+  leftPanelCollapsed: boolean; // default false
+  briefHeight: number; // px, clamped briefMin..briefMax
+  syncFileName: boolean; // default true (idea #1)
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -21,6 +51,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   muted: false,
   calmMode: false,
   claudeBinaryPath: "",
+  recentProjects: [],
+  leftPanelWidth: PANEL_LIMITS.leftDefault,
+  rightPanelWidth: PANEL_LIMITS.rightDefault,
+  leftPanelCollapsed: false,
+  briefHeight: PANEL_LIMITS.briefDefault,
+  syncFileName: true,
 };
 
 export interface SettingsState extends AppSettings {
@@ -38,6 +74,13 @@ export interface SettingsState extends AppSettings {
   setMuted: (b: boolean) => void;
   setCalmMode: (b: boolean) => void;
   setClaudeBinaryPath: (p: string) => void;
+  pushRecentProject: (root: string) => void;
+  removeRecentProject: (root: string) => void;
+  setLeftPanelWidth: (px: number) => void;
+  setRightPanelWidth: (px: number) => void;
+  setLeftPanelCollapsed: (b: boolean) => void;
+  setBriefHeight: (px: number) => void;
+  setSyncFileName: (b: boolean) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -49,19 +92,60 @@ export function selectSoundOff(s: SettingsState): boolean {
   return s.muted || s.calmMode;
 }
 
+/** Dedupe/compare key: trailing slash stripped, lowercased (Windows paths). */
+function recentKey(root: string): string {
+  return root.replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v));
+}
+
+/** Validate + normalize a raw recentProjects value. Anything malformed -> []. */
+function mergeRecentProjects(raw: unknown): RecentProject[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: RecentProject[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.root !== "string" || e.root === "") continue;
+    if (typeof e.name !== "string" || e.name === "") continue;
+    if (typeof e.lastOpenedMs !== "number" || !Number.isFinite(e.lastOpenedMs)) continue;
+    const key = recentKey(e.root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ root: e.root, name: e.name, lastOpenedMs: e.lastOpenedMs });
+    if (out.length >= MAX_RECENT_PROJECTS) break;
+  }
+  return out;
+}
+
 /** Tolerant merge: unknown fields ignored, missing fields default, bad types default. */
 function mergeSettings(raw: unknown): AppSettings {
   const out = { ...DEFAULT_SETTINGS };
   if (typeof raw !== "object" || raw === null) return out;
   const r = raw as Record<string, unknown>;
   if (typeof r.masterVolume === "number" && Number.isFinite(r.masterVolume)) {
-    out.masterVolume = Math.min(1, Math.max(0, r.masterVolume));
+    out.masterVolume = clamp(r.masterVolume, 0, 1);
   }
   if (typeof r.barnSounds === "boolean") out.barnSounds = r.barnSounds;
   if (typeof r.toolSounds === "boolean") out.toolSounds = r.toolSounds;
   if (typeof r.muted === "boolean") out.muted = r.muted;
   if (typeof r.calmMode === "boolean") out.calmMode = r.calmMode;
   if (typeof r.claudeBinaryPath === "string") out.claudeBinaryPath = r.claudeBinaryPath;
+  out.recentProjects = mergeRecentProjects(r.recentProjects);
+  if (typeof r.leftPanelWidth === "number" && Number.isFinite(r.leftPanelWidth)) {
+    out.leftPanelWidth = clamp(r.leftPanelWidth, PANEL_LIMITS.leftMin, PANEL_LIMITS.leftMax);
+  }
+  if (typeof r.rightPanelWidth === "number" && Number.isFinite(r.rightPanelWidth)) {
+    out.rightPanelWidth = clamp(r.rightPanelWidth, PANEL_LIMITS.rightMin, PANEL_LIMITS.rightMax);
+  }
+  if (typeof r.leftPanelCollapsed === "boolean") out.leftPanelCollapsed = r.leftPanelCollapsed;
+  if (typeof r.briefHeight === "number" && Number.isFinite(r.briefHeight)) {
+    out.briefHeight = clamp(r.briefHeight, PANEL_LIMITS.briefMin, PANEL_LIMITS.briefMax);
+  }
+  if (typeof r.syncFileName === "boolean") out.syncFileName = r.syncFileName;
   return out;
 }
 
@@ -80,6 +164,12 @@ function persistNow(): void {
     muted: s.muted,
     calmMode: s.calmMode,
     claudeBinaryPath: s.claudeBinaryPath,
+    recentProjects: s.recentProjects,
+    leftPanelWidth: s.leftPanelWidth,
+    rightPanelWidth: s.rightPanelWidth,
+    leftPanelCollapsed: s.leftPanelCollapsed,
+    briefHeight: s.briefHeight,
+    syncFileName: s.syncFileName,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -161,6 +251,44 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setClaudeBinaryPath: (p) => {
     set({ claudeBinaryPath: p });
+    schedulePersist();
+  },
+
+  pushRecentProject: (root) => {
+    const key = recentKey(root);
+    const name = root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? root;
+    const entry: RecentProject = { root, name, lastOpenedMs: Date.now() };
+    set((st) => {
+      const rest = st.recentProjects.filter((p) => recentKey(p.root) !== key);
+      return { recentProjects: [entry, ...rest].slice(0, MAX_RECENT_PROJECTS) };
+    });
+    schedulePersist();
+  },
+  removeRecentProject: (root) => {
+    const key = recentKey(root);
+    set((st) => ({
+      recentProjects: st.recentProjects.filter((p) => recentKey(p.root) !== key),
+    }));
+    schedulePersist();
+  },
+  setLeftPanelWidth: (px) => {
+    set({ leftPanelWidth: clamp(px, PANEL_LIMITS.leftMin, PANEL_LIMITS.leftMax) });
+    schedulePersist();
+  },
+  setRightPanelWidth: (px) => {
+    set({ rightPanelWidth: clamp(px, PANEL_LIMITS.rightMin, PANEL_LIMITS.rightMax) });
+    schedulePersist();
+  },
+  setLeftPanelCollapsed: (b) => {
+    set({ leftPanelCollapsed: b });
+    schedulePersist();
+  },
+  setBriefHeight: (px) => {
+    set({ briefHeight: clamp(px, PANEL_LIMITS.briefMin, PANEL_LIMITS.briefMax) });
+    schedulePersist();
+  },
+  setSyncFileName: (b) => {
+    set({ syncFileName: b });
     schedulePersist();
   },
 }));

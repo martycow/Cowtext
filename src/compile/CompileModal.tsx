@@ -386,7 +386,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
         aria-modal="true"
         aria-label="Compile"
         tabIndex={-1}
-        className="flex max-h-[80vh] w-[720px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
+        className="flex max-h-[80vh] w-[1040px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         {/* Header — 44px, title 15/600, mono root right, ✕ */}
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
@@ -442,7 +442,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
         )}
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-[46vh] flex-1 overflow-y-auto">
           {phase === "loading" ? (
             <PixelMarch caption="the cow is compiling" />
           ) : phase === "errors" && preview !== null ? (

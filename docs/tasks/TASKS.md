@@ -10,6 +10,7 @@ All seven phases (0–6) are accepted as of 2026-08-18; the only open work is th
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
+| UX batch manual acceptance walk | uxbatch, qa, acceptance | `docs/testing/UXBATCH_TEST_MANUAL.md`: walk the 12 in-batch items (new names/reveals/handles/menus/modals) and the three known-issue repros (refreshHooksStatus race, TitleField stale-closure collision, reveal_path silent-fail). Batch code is in place; manual walk gates the delivery. | P0 | 2026-08-18 | 🔲 Open |
 | CSP runtime check under production build | v0.1.0, csp, qa | One `npm run tauri build` run against the production `csp`: verify invoke round-trips (open a project), SFX cues play, fonts render (Silkscreen/JetBrains Mono/IBM Plex, not fallbacks), Barn renders (`pixi.js/unsafe-eval` shim active); watch devtools for `Refused to connect/load` entries; confirm lazy-chunk Suspense fallbacks don't flash on Canvas⇄Barn. Dev-mode behaviour was covered by the acceptance walks (devCsp). | P1 | 2026-08-17 | 🔲 Open |
 | Cut v0.1.0 | v0.1.0, release | `tauri.conf.json` is pre-bumped to 0.1.0; the cut is: real sprites landed (see BACKLOG), CSP runtime check green, then a verified production build + tagged release commit. | P1 | 2026-08-18 | 🔲 Open |
 
@@ -17,16 +18,18 @@ All seven phases (0–6) are accepted as of 2026-08-18; the only open work is th
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
+| Phase 5 manual acceptance walk | phase-5, acceptance, qa | SETTINGS → PHASE5_JUICE → PHASE5_SOUND manuals walked; acceptance bar met ("a stranger watches a live session for 30 s and smiles"). | P0 | 2026-08-17 | ✅ Done — accepted by Marty 2026-08-18 |
 | Phase 3+4 manual acceptance walk | phase-3, phase-4, acceptance, qa | PHASE3/PHASE4 manuals walked in a running app: real assemble (5 briefs), hooks install via confirmation diff, live canvas pulses from a real Claude Code session, Barn demo. | P0 | 2026-08-16 | ✅ Done — accepted by Marty 2026-08-18 |
 | Phase 5 manual acceptance walk | phase-5, acceptance, qa | SETTINGS → PHASE5_JUICE → PHASE5_SOUND manuals walked; acceptance bar met ("a stranger watches a live session for 30 s and smiles"). | P0 | 2026-08-17 | ✅ Done — accepted by Marty 2026-08-18 |
 | Phase 6 manual acceptance walk | phase-6, acceptance, qa | PHASE6 manual walked: preset apply never-clobber in < 1 minute; `HANDOFF.md` + Chat/Code/Design clipboard variants give Claude Chat full context. | P0 | 2026-08-17 | ✅ Done — accepted by Marty 2026-08-18 |
 
 ## Done — history by session
 
-One line per task; detail in git (`635ebaf`, `4f01275`, `c241b86`, `cb770d4`), BUGS.md, and ACTIVITY_LOG.md.
+One line per task; detail in git, BUGS.md, and ACTIVITY_LOG.md.
 
 | Session | Name | Tags | Summary | Status |
 |---|---|---|---|---|
+| 2026-08-18 UX batch (v0.0.0008) | Ultracode UX quick-win batch | uxbatch, product | 12 in-batch items + 4 new invoke commands (rename_node_file, reveal_path, probe_project_dirs, hooks_status; 23→27 total), 3 lanes (Rust/store/UI), manual written, 3 major defects documented for manual walk | ✅ Code done; pending manual acceptance |
 | 2026-08-17 ship-prep (v0.0.0007, `cb770d4`) | Tighten CSP | v0.1.0, security | Production `csp` + relaxed `devCsp` in `tauri.conf.json`; version pre-bumped to 0.1.0 | ✅ Done |
 | 2026-08-17 ship-prep | Code-split main JS chunk | v0.1.0, perf | Main chunk 1,334 → 207 kB (React.lazy + manualChunks: pixi/codemirror/xyflow vendor chunks) | ✅ Done |
 | 2026-08-17 ship-prep | Add ESLint + `npm run lint` | v0.1.0, lint | ESLint 10 flat config; `no-explicit-any` error; classic react-hooks rules (Compiler preset deferred) | ✅ Done |

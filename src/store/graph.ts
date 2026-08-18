@@ -4,7 +4,9 @@
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { renameNodeFile as fsRenameNodeFile } from "../fs/api";
 import { useProjectStore } from "./project";
+import { useSettingsStore } from "./settings";
 
 // ── Data model (plan §4) ──────────────────────────────────────────────
 
@@ -157,6 +159,45 @@ function slugify(title: string): string {
   return slug === "" ? "node" : slug;
 }
 
+/** Slug portion of a relative .md path (basename, extension stripped). */
+function pathSlug(relPath: string): string {
+  const base = relPath.split("/").pop() ?? relPath;
+  return base.replace(/\.md$/i, "");
+}
+
+/** Paths the app must never rename — mirrors the Rust guard in rename_node_file
+ *  (src-tauri/src/project.rs). Normalized to forward slashes, lowercased. */
+export function isRenameProtected(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, "/").toLowerCase();
+  if (normalized === "claude.md" || normalized === "agents.md") return true;
+  if (
+    normalized.startsWith(".claude/") ||
+    normalized.startsWith(".cursor/") ||
+    normalized.startsWith(".cowtext/")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Suggested .md path for a title: same directory as `currentPath`, slugified
+ *  title, `.md`; de-duped with `-2`, `-3`… against `taken`. Pure. */
+export function suggestFilePath(
+  currentPath: string,
+  title: string,
+  taken: ReadonlySet<string>,
+): string {
+  const idx = currentPath.lastIndexOf("/");
+  const dir = idx >= 0 ? currentPath.slice(0, idx) : "";
+  const slug = slugify(title);
+  const build = (suffix: string): string => (dir ? `${dir}/${slug}${suffix}.md` : `${slug}${suffix}.md`);
+  let candidate = build("");
+  for (let i = 2; taken.has(candidate); i += 1) {
+    candidate = build(`-${i}`);
+  }
+  return candidate;
+}
+
 export interface PendingConnection {
   source: string;
   target: string;
@@ -207,6 +248,15 @@ interface GraphState {
 
   /** Compile-target picker (Compile modal); persisted like any graph edit. */
   setCompileTargets: (targets: CompileTarget[]) => void;
+
+  /** Rename the node's file on disk, then adopt the returned path.
+   *  Rejects with a plain string; on failure `filePath` is unchanged. */
+  renameNodeFile: (id: string, nextRelPath: string) => Promise<void>;
+  /** Commit a title edit. Always sets the title. When settings.syncFileName is
+   *  on and the file is not protected and the slug changed, also renames the
+   *  file. Resolves to an error message when the rename failed (title is still
+   *  applied), or null on success/no-op. Never throws. */
+  commitTitle: (id: string, title: string) => Promise<string | null>;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -460,5 +510,38 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   setCompileTargets: (targets) => {
     set({ compileTargets: targets });
     scheduleSave();
+  },
+
+  renameNodeFile: async (id, nextRelPath) => {
+    const s = get();
+    if (s.root === null) throw new Error("No project open");
+    const node = s.nodes.find((n) => n.id === id);
+    if (!node) throw new Error(`Unknown node: ${id}`);
+    const returned = await fsRenameNodeFile(s.root, node.filePath, nextRelPath);
+    set((st) => ({
+      nodes: st.nodes.map((n) => (n.id === id ? { ...n, filePath: returned } : n)),
+    }));
+    scheduleSave();
+    void useProjectStore.getState().rescan();
+  },
+
+  commitTitle: async (id, title) => {
+    const node = get().nodes.find((n) => n.id === id);
+    if (!node) return null;
+    get().updateNode(id, { title });
+    if (!useSettingsStore.getState().syncFileName) return null;
+    if (isRenameProtected(node.filePath)) return null;
+    if (pathSlug(node.filePath) === slugify(title)) return null;
+    const taken = new Set([
+      ...get().nodes.map((n) => n.filePath),
+      ...useProjectStore.getState().files.map((f) => f.relPath),
+    ]);
+    const nextRelPath = suggestFilePath(node.filePath, title, taken);
+    try {
+      await get().renameNodeFile(id, nextRelPath);
+      return null;
+    } catch (e) {
+      return String(e);
+    }
   },
 }));

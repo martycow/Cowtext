@@ -110,7 +110,7 @@ fn merge_hooks(existing: Option<&str>) -> Result<String, String> {
                 "settings.json: \"hooks.{event}\" is not an array — refusing to overwrite"
             ));
         };
-        let installed = arr.iter().any(|entry| entry.to_string().contains(HOOK_MARKER));
+        let installed = event_already_installed(arr);
         if !installed {
             arr.push(hook_entry(matcher));
             changed = true;
@@ -126,6 +126,86 @@ fn merge_hooks(existing: Option<&str>) -> Result<String, String> {
     let mut out = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     out.push('\n');
     Ok(out)
+}
+
+/// True when `arr` (an event's hook-entry array) already carries a Cowtext
+/// entry. Shared by `merge_hooks` and `hooks_status` so the two paths
+/// cannot drift.
+fn event_already_installed(arr: &[Value]) -> bool {
+    arr.iter().any(|entry| entry.to_string().contains(HOOK_MARKER))
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HooksStatus {
+    /// All three Cowtext hook entries present in .claude/settings.json.
+    pub installed: bool,
+    /// .claude/settings.json exists on disk.
+    pub file_exists: bool,
+    /// The file parsed as a JSON object with a usable `hooks` object.
+    /// false ⇒ `installed` is meaningless; the UI must say so, not lie.
+    pub readable: bool,
+}
+
+/// Passive, read-only probe. Never writes, never errors on malformed JSON —
+/// `Err` is reserved for infrastructure failure (bad root, IO read error).
+#[tauri::command]
+pub fn hooks_status(root: String) -> Result<HooksStatus, String> {
+    let path = checked_root(&root)?.join(SETTINGS_REL_PATH);
+    if !path.is_file() {
+        return Ok(HooksStatus {
+            installed: false,
+            file_exists: false,
+            readable: true,
+        });
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("{SETTINGS_REL_PATH}: {e}"))?;
+
+    let parsed: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(HooksStatus {
+                installed: false,
+                file_exists: true,
+                readable: false,
+            })
+        }
+    };
+    let Value::Object(top) = &parsed else {
+        return Ok(HooksStatus {
+            installed: false,
+            file_exists: true,
+            readable: false,
+        });
+    };
+    let hooks = match top.get("hooks") {
+        None => {
+            // No hooks key at all: readable, just nothing installed yet.
+            return Ok(HooksStatus {
+                installed: false,
+                file_exists: true,
+                readable: true,
+            });
+        }
+        Some(Value::Object(h)) => h,
+        Some(_) => {
+            return Ok(HooksStatus {
+                installed: false,
+                file_exists: true,
+                readable: false,
+            })
+        }
+    };
+
+    let installed = HOOK_EVENTS.iter().all(|(event, _)| {
+        matches!(hooks.get(*event), Some(Value::Array(arr)) if event_already_installed(arr))
+    });
+
+    Ok(HooksStatus {
+        installed,
+        file_exists: true,
+        readable: true,
+    })
 }
 
 fn hook_entry(matcher: Option<&str>) -> Value {

@@ -2,7 +2,7 @@
 // The RF-local node/edge arrays are a projection: in-flight drag positions and
 // selection live here; every real mutation round-trips through the store.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -15,11 +15,17 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { Plus } from "lucide-react";
+import { FolderOpen, Maximize2, Plus, X } from "lucide-react";
 import { useGraphStore } from "../store/graph";
+import { useProjectStore } from "../store/project";
+import { revealPath } from "../fs/api";
 import { MemoryNodeCard } from "./MemoryNodeCard";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
 import { KindPicker } from "./KindPicker";
+import { pickHandles } from "./handles";
+import { ContextMenu } from "../ui/ContextMenu";
+import { useContextMenu } from "../ui/useContextMenu";
+import type { MenuItem } from "../ui/menuTypes";
 import type { CanvasEdge, CanvasNode } from "./types";
 
 const nodeTypes = { memory: MemoryNodeCard };
@@ -34,11 +40,16 @@ function CanvasInner() {
   const beginConnection = useGraphStore((s) => s.beginConnection);
   const createNode = useGraphStore((s) => s.createNode);
   const setSelection = useGraphStore((s) => s.setSelection);
+  const root = useProjectStore((s) => s.root);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdge>([]);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const paneMenu = useContextMenu();
+  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
+  // error, never a silent no-op."
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   // Store → RF nodes. Keep in-flight drag positions and RF-side selection;
   // brand-new nodes take their selection from the store (createNode selects).
@@ -62,16 +73,27 @@ function CanvasInner() {
   }, [domainNodes, setNodes]);
 
   // Store → RF edges. Sequence edges carry the target's readOrder as the
-  // numbered step dot (DESIGN_SPEC.md edge rules).
+  // numbered step dot (DESIGN_SPEC.md edge rules). sourceHandle/targetHandle
+  // are derived here (contract §7.11 — pickHandles) purely for rendering;
+  // they are never written back to the store or graph.json.
   useEffect(() => {
     const orderById = new Map(domainNodes.map((n) => [n.id, n.readOrder] as const));
+    const nodeById = new Map(domainNodes.map((n) => [n.id, n] as const));
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e] as const));
-      return domainEdges.map(
-        (e): CanvasEdge => ({
+      return domainEdges.map((e): CanvasEdge => {
+        const sourceNode = nodeById.get(e.source);
+        const targetNode = nodeById.get(e.target);
+        const picked =
+          sourceNode !== undefined && targetNode !== undefined
+            ? pickHandles(sourceNode, targetNode)
+            : undefined;
+        return {
           id: e.id,
           source: e.source,
           target: e.target,
+          sourceHandle: picked?.sourceHandle,
+          targetHandle: picked?.targetHandle,
           type: "memory",
           selected: prevById.get(e.id)?.selected ?? false,
           data: {
@@ -80,8 +102,8 @@ function CanvasInner() {
             note: e.note,
             step: e.kind === "sequence" ? orderById.get(e.target) : undefined,
           },
-        }),
-      );
+        };
+      });
     });
   }, [domainEdges, domainNodes, setEdges]);
 
@@ -95,6 +117,43 @@ function CanvasInner() {
     void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
   };
 
+  const onPaneContextMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains("react-flow__pane")) return;
+    const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const items: MenuItem[] = [
+      {
+        kind: "item",
+        id: "new-node",
+        label: "New node here",
+        icon: Plus,
+        onSelect: () => void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) }),
+      },
+      {
+        kind: "item",
+        id: "fit-view",
+        label: "Fit view",
+        icon: Maximize2,
+        onSelect: () => void fitView({ maxZoom: 1, padding: 0.2 }),
+      },
+      { kind: "separator", id: "sep-1" },
+      {
+        kind: "item",
+        id: "reveal-root",
+        label: "Reveal project in File Explorer",
+        icon: FolderOpen,
+        disabled: root === null,
+        hint: root === null ? "no project open" : undefined,
+        onSelect: () => {
+          if (root === null) return;
+          setRevealError(null);
+          void revealPath(root, null).catch((err: unknown) => setRevealError(String(err)));
+        },
+      },
+    ];
+    paneMenu.openAt(e, items);
+  };
+
   return (
     <div
       ref={wrapperRef}
@@ -105,6 +164,7 @@ function CanvasInner() {
         const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
         void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
       }}
+      onContextMenu={onPaneContextMenu}
     >
       <EdgeMarkerDefs />
       <ReactFlow<CanvasNode, CanvasEdge>
@@ -129,6 +189,7 @@ function CanvasInner() {
         }
         onConnect={(c) => beginConnection({ source: c.source, target: c.target })}
         connectionLineStyle={{ stroke: "var(--accent)", strokeWidth: 1.5 }}
+        connectionRadius={44}
         deleteKeyCode={["Delete", "Backspace"]}
         selectionKeyCode="Shift"
         multiSelectionKeyCode={["Control", "Meta"]}
@@ -167,8 +228,32 @@ function CanvasInner() {
             New node
           </button>
         </Panel>
+        {revealError !== null && (
+          <Panel position="top-center">
+            <div className="flex max-w-[420px] items-center gap-2 rounded border border-danger bg-danger-surface px-2.5 py-1.5 shadow-card">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-danger-text">
+                {revealError}
+              </span>
+              <button
+                onClick={() => setRevealError(null)}
+                title="Dismiss"
+                className="grid h-4 w-4 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
+              >
+                <X size={11} strokeWidth={1.5} />
+              </button>
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
       <KindPicker />
+      {paneMenu.menu !== null && (
+        <ContextMenu
+          x={paneMenu.menu.x}
+          y={paneMenu.menu.y}
+          items={paneMenu.menu.items}
+          onClose={paneMenu.close}
+        />
+      )}
     </div>
   );
 }

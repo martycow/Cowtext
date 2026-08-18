@@ -26,17 +26,17 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (23)
+## Invoke commands (27)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
 
 | Group | Commands |
 |---|---|
-| project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file` |
+| project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
 | compile | `compile_preview`, `compile_write` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
-| hooks | `hooks_preview`, `hooks_write` |
+| hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
 | settings | `read_app_settings`, `write_app_settings` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
 | handoff | `handoff_generate`, `handoff_write` |
