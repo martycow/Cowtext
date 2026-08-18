@@ -1,6 +1,6 @@
 [package]
 name = "cowtext"
-version = "0.0.1"
+version = "0.1.0"
 description = "A tool to maintain and visualize context files."
 authors = ["you"]
 edition = "2021"

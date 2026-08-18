@@ -32,6 +32,40 @@ fn rejects_non_directory() {
     assert!(scan_project("Z:/definitely/not/a/dir".into()).is_err());
 }
 
+#[test]
+fn scan_includes_claude_agents_but_excludes_the_rest_of_claude() {
+    let dir = std::env::temp_dir().join(format!("cowtext-scan-agents-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+
+    touch(&dir.join("README.md"), "# hi");
+    touch(&dir.join(".claude/agents/tech-lead.md"), "---\nname: tech-lead\n---\n");
+    touch(&dir.join(".claude/agents/tech-ui.MD"), "case-insensitive");
+    touch(&dir.join(".claude/settings.json"), "{}");
+    touch(&dir.join(".claude/skills/design-tokens/SKILL.md"), "# skill");
+    touch(&dir.join(".claude/skills/design-tokens/notes.md"), "# skill notes");
+
+    let scan = scan_project(dir.to_string_lossy().into_owned()).unwrap();
+    let paths: Vec<&str> = scan.files.iter().map(|f| f.rel_path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [".claude/agents/tech-lead.md", ".claude/agents/tech-ui.MD", "README.md"]
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn scan_tolerates_claude_with_no_agents_dir() {
+    let dir = std::env::temp_dir().join(format!("cowtext-scan-noagents-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    touch(&dir.join(".claude/settings.json"), "{}");
+
+    let scan = scan_project(dir.to_string_lossy().into_owned()).unwrap();
+    assert!(scan.files.is_empty());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 fn temp_project(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("cowtext-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -77,6 +111,22 @@ fn md_commands_respect_the_guard() {
     let root = dir.to_string_lossy().into_owned();
     assert!(write_md_file(root.clone(), "../evil.md".into(), "x".into()).is_err());
     assert!(read_md_file(root, "../../evil.md".into()).is_err());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_md_file_rejects_claude_settings_json() {
+    let dir = temp_project("settings-guard");
+    let root = dir.to_string_lossy().into_owned();
+    for bad in [
+        ".claude/settings.json",
+        ".CLAUDE/Settings.JSON",
+        ".claude\\settings.json",
+    ] {
+        let err = write_md_file(root.clone(), bad.into(), "{}".into()).unwrap_err();
+        assert_eq!(err, "Use Install hooks to edit .claude/settings.json");
+    }
+    assert!(!dir.join(".claude/settings.json").exists());
     let _ = fs::remove_dir_all(&dir);
 }
 

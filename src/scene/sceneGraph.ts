@@ -53,7 +53,7 @@ const AUTO_SLOTS: Tile[] = [
 function propForRole(role: NodeRole): PropView {
   switch (role) {
     case "rules":
-    case "persona":
+    case "agent":
       return makeCabinet(role);
     case "architecture":
     case "reference":

@@ -10,7 +10,7 @@ All seven phases (0–6) are accepted as of 2026-08-18; the only open work is th
 
 | Name | Tags | Description | Priority | Date Created | Status |
 |---|---|---|---|---|---|
-| UX batch manual acceptance walk | uxbatch, qa, acceptance | `docs/testing/UXBATCH_TEST_MANUAL.md`: walk the 12 in-batch items (new names/reveals/handles/menus/modals) and the three known-issue repros (refreshHooksStatus race, TitleField stale-closure collision, reveal_path silent-fail). Batch code is in place; manual walk gates the delivery. | P0 | 2026-08-18 | 🔲 Open |
+| Agents suite manual acceptance walk | agents, qa, acceptance | `docs/testing/AGENTS_TEST_MANUAL.md`: walk 53 steps covering agents CRUD, skill attach/detach, rename, orphan cleanup, SubagentStop hooks-diff, barn demo calves, reduced-motion check. Four audit defects traced and ALL FIXED in fix round before re-gate (2 major: frontmatter re-quote churn via should_touch_key logic, orphan-key precedence race via live meta + reconcileOrphan timing; 2 minor: case-insensitive rename via dest==src check, inline Save phase bypass via onSave routing). 143/143 cargo tests including 2 new regression tests. Walk gates final delivery. | P0 | 2026-08-18 | 🔲 Open |
 | CSP runtime check under production build | v0.1.0, csp, qa | One `npm run tauri build` run against the production `csp`: verify invoke round-trips (open a project), SFX cues play, fonts render (Silkscreen/JetBrains Mono/IBM Plex, not fallbacks), Barn renders (`pixi.js/unsafe-eval` shim active); watch devtools for `Refused to connect/load` entries; confirm lazy-chunk Suspense fallbacks don't flash on Canvas⇄Barn. Dev-mode behaviour was covered by the acceptance walks (devCsp). | P1 | 2026-08-17 | 🔲 Open |
 | Cut v0.1.0 | v0.1.0, release | `tauri.conf.json` is pre-bumped to 0.1.0; the cut is: real sprites landed (see BACKLOG), CSP runtime check green, then a verified production build + tagged release commit. | P1 | 2026-08-18 | 🔲 Open |
 
@@ -29,6 +29,7 @@ One line per task; detail in git, BUGS.md, and ACTIVITY_LOG.md.
 
 | Session | Name | Tags | Summary | Status |
 |---|---|---|---|---|
+| 2026-08-18 Agents Suite (v0.0.0011) | Agent/Skill management UI + Named Calves | agents, product | 10 new invoke commands (agents_scan, agent_*/skill_* CRUD, agents_meta_write; 27→37 total), 4 lanes (Rust frontmatter parser, identity+store, UI modal, barn calves), hand-rolled parser with byte-identity round-trip, stable agent identity via fnv1a32 hash, named calves with session-stable appearance, 40 new tests (143/143 after fix round), manual written, 4 audit defects found and ALL fixed pre-landing | ✅ Code done; pending manual acceptance |
 | 2026-08-18 UX batch (v0.0.0008) | Ultracode UX quick-win batch | uxbatch, product | 12 in-batch items + 4 new invoke commands (rename_node_file, reveal_path, probe_project_dirs, hooks_status; 23→27 total), 3 lanes (Rust/store/UI), manual written, 3 major defects documented for manual walk | ✅ Code done; pending manual acceptance |
 | 2026-08-17 ship-prep (v0.0.0007, `cb770d4`) | Tighten CSP | v0.1.0, security | Production `csp` + relaxed `devCsp` in `tauri.conf.json`; version pre-bumped to 0.1.0 | ✅ Done |
 | 2026-08-17 ship-prep | Code-split main JS chunk | v0.1.0, perf | Main chunk 1,334 → 207 kB (React.lazy + manualChunks: pixi/codemirror/xyflow vendor chunks) | ✅ Done |

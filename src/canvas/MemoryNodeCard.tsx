@@ -24,11 +24,13 @@ import {
   XCircle,
 } from "lucide-react";
 import { useProjectStore } from "../store/project";
-import { isRenameProtected, serializeGraph, useGraphStore } from "../store/graph";
+import { GRAPH_VERSION, isAgentFile, isRenameProtected, serializeGraph, useGraphStore } from "../store/graph";
 import { lastLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
 import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
+import { seedFor, useAgentsStore } from "../store/agents";
+import { AgentAvatar } from "../agents/AgentAvatar";
 import { useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
@@ -51,6 +53,10 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const setInspectorTab = useInspectorTabStore((s) => s.setTab);
   const requestRename = useInspectorTabStore((s) => s.requestRename);
   const role = roleVar(node.role);
+  // Agent-backed nodes wear their identity avatar instead of the role glyph.
+  const agentBacked = isAgentFile(node.filePath);
+  const agentFileName = agentBacked ? (node.filePath.split("/").pop() ?? node.filePath) : "";
+  const avatarSeed = useAgentsStore((s) => (agentBacked ? seedFor(s.meta, agentFileName) : ""));
   const contextMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." The card has no room for a permanent
@@ -104,7 +110,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
       const graphJson = serializeGraph({
-        version: 1,
+        version: GRAPH_VERSION,
         projectName: s.projectName,
         nodes: s.nodes,
         edges: s.edges,
@@ -264,7 +270,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
             moved to the top-right corner marker above) */}
         <div className="flex items-center gap-1.5">
           <span style={{ color: role }}>
-            <RoleGlyph role={node.role} />
+            {agentBacked ? <AgentAvatar seed={avatarSeed} size={11} /> : <RoleGlyph role={node.role} />}
           </span>
           <span
             className="font-mono text-micro uppercase"

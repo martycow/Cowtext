@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (23) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (38) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/compile.rs` | Three adapters (claude/agents/cursor), validation, topological order, write allowlist |
@@ -22,11 +22,15 @@
 | `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs` |
 | `src/inspector/` | Inspector panel, `EventLog`, `HooksModal`, AssembleSection |
 | `src/compile/` | CompileModal, invoke wrappers, hand-rolled LCS diff (`diff.ts`) |
-| `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
+| `src-tauri/src/frontmatter.rs` | Frontmatter parser/emitter: read-patch-write round-trip with byte-identity invariant, line-level EOL tracking, no regex/YAML crate |
+| `src-tauri/src/agents.rs` | Agent/skill CRUD, file creation, rename, delete, metadata write; validation (component/path guards), sidecar schema |
+| `src/identity/` | Identity hash (fnv1a32), avatar grid + accent/patch derivation, calf appearance generation |
+| `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
+| `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (27)
+## Invoke commands (38)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -34,6 +38,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Group | Commands |
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
+| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`, `agent_convert` |
 | compile | `compile_preview`, `compile_write` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
@@ -56,7 +61,12 @@ React Flow and PixiJS never import each other.
 | Term | One-liner |
 |---|---|
 | Memory Node | Graph node backed by a real `.md` file; file on disk is content source of truth |
-| Node role | One of seven: `persona`, `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` |
+| Agent file | A `.md` file in `.claude/agents/` defining a Claude Code agent with role/skills/priority/influence/duties |
+| Skill file | A `.md` file under `.claude/skills/*/SKILL.md` defining a reusable knowledge skill with invoke commands |
+| Sidecar agents.json | Per-project persisted metadata (v1 schema) for agents: nicknames, priority/influence/avatarSeed, skills-attach state, drafts, orphan retention |
+| Named Calf | Subagent sprite in the barn with stable identity across sessions via fnv1a32 hash of sessionId + ordinal, displaying unique coat pattern + accent role + tiny prop |
+| Identity hash | fnv1a32(seed) → avatar patch grid (8×8 mirrored), accent role (7 options via h2 % 7), calf patch bits (2–7 via popcount), visual identity tied to agent/calf name/type |
+| Node role | One of seven: `agent` (ex-`persona`; may be backed by `.claude/agents/*.md`), `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` |
 | Edge kinds | `imports` (inline), `references` (soft link), `conditional` (glob/NL condition), `sequence` (order only) |
 | Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure |
 | readOrder | Manual tie-break inside topological order (Kahn, pops by `(readOrder, id)`) |

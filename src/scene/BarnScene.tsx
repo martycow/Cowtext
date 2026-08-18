@@ -30,6 +30,7 @@ import { useEventsStore } from "../store/events";
 import { PALETTE } from "./palette";
 import { buildLayout, COW_HOME_TILE } from "./sceneGraph";
 import { Cow, type IdleStage } from "./cow";
+import { CalfHerd } from "./calf";
 import { handleEvent, resolveProp } from "./mapper";
 import { reducedMotion } from "./motion";
 import { tileToScreen } from "./iso";
@@ -140,6 +141,14 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         layout.spawnDust(p.x, p.y);
       };
 
+      // Named Calves (AGENTS_SUITE_CONTRACT §7.5) — calf.ts does not import
+      // sfx.ts (see its header), so the two cues are wired here from the
+      // herd's lifecycle callbacks; a cap-dropped spawn never fires onSpawn.
+      const herd = new CalfHerd(layout.objects);
+      herd.onSpawn = () => sfx.play("calf_spawn");
+      herd.onDespawn = () => sfx.play("calf_despawn");
+      cleanups.push(() => herd.destroy());
+
       // J5 — re-derive ajar props from the event ring, so accumulation
       // survives remounts and prop rebuilds (it is information, not decor).
       const applyOpened = (): void => {
@@ -178,7 +187,7 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       const push = (e: BarnEvent): void => {
         lastEventTs = performance.now();
         app.ticker.maxFPS = 60; // leave the idle throttle instantly (§7.4)
-        if (!disposed) handleEvent(e, { cow, layout });
+        if (!disposed) handleEvent(e, { cow, layout, herd });
       };
       const connect = connectRef.current;
       if (connect !== undefined) {
@@ -313,6 +322,7 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         }
         cow.update(ticker.deltaMS);
         layout.tick(ticker.deltaMS, reduced);
+        herd.tick(ticker.deltaMS, reduced);
         sfx.tickAmbient(now - lastEventTs);
         // all idle-loop holds are ≥120 ms, so 12 fps loses nothing
         const wantThrottle = idleMs > IDLE_FPS_AFTER_MS;

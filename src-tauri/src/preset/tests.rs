@@ -89,8 +89,9 @@ fn save_and_read_reject_invalid_presets() {
     assert!(save_inner(&dir, "x", &wrong_kind)
         .unwrap_err()
         .contains("kind"));
-    // Wrong version.
-    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 2");
+    // Wrong version — 1 and 2 are both accepted (persona→agent role
+    // rename), so this must be a version outside that range.
+    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 3");
     assert!(save_inner(&dir, "x", &wrong_version)
         .unwrap_err()
         .contains("version"));
@@ -98,6 +99,18 @@ fn save_and_read_reject_invalid_presets() {
     let bad_path = dir.join("bad.cowtext-preset.json");
     std::fs::write(&bad_path, &wrong_kind).unwrap();
     assert!(preset_read(bad_path.to_string_lossy().into_owned()).is_err());
+}
+
+#[test]
+fn save_and_read_accept_version_2_presets() {
+    // v1 presets may still arrive from disk; v2 presets (post persona→agent
+    // rename) must round-trip identically — bytes stored verbatim either way.
+    let dir = temp_dir("v2");
+    let v2 = preset_json("V2", 2).replace("\"version\": 1", "\"version\": 2");
+    let path = save_inner(&dir, "V2", &v2).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), v2);
+    assert_eq!(preset_read(path).unwrap(), v2);
+    assert_eq!(list_inner(&dir).unwrap()[0].node_count, 2);
 }
 
 #[test]

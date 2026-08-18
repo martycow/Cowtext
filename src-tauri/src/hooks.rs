@@ -28,11 +28,12 @@ const HOOK_MARKER: &str = "127.0.0.1:4923/event";
 
 const POST_TOOL_USE_MATCHER: &str = "Read|Edit|Write|Grep|Glob";
 
-/// The three hook events Cowtext installs: (event name, matcher).
-const HOOK_EVENTS: [(&str, Option<&str>); 3] = [
+/// The four hook events Cowtext installs: (event name, matcher).
+const HOOK_EVENTS: [(&str, Option<&str>); 4] = [
     ("PostToolUse", Some(POST_TOOL_USE_MATCHER)),
     ("UserPromptSubmit", None),
     ("Stop", None),
+    ("SubagentStop", None),
 ];
 
 #[derive(Serialize, Debug)]
@@ -79,7 +80,7 @@ pub fn hooks_write(root: String, content: String) -> Result<(), String> {
 }
 
 /// Merge the Cowtext hook block into `existing` (None = file absent).
-/// Every key we don't own passes through untouched. If all three hook
+/// Every key we don't own passes through untouched. If all four hook
 /// entries are already installed, the existing content is returned
 /// verbatim so the preview shows no diff. A file that exists but is not
 /// valid JSON is NEVER clobbered — that is an `Err`.
@@ -138,7 +139,7 @@ fn event_already_installed(arr: &[Value]) -> bool {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HooksStatus {
-    /// All three Cowtext hook entries present in .claude/settings.json.
+    /// All four Cowtext hook entries present in .claude/settings.json.
     pub installed: bool,
     /// .claude/settings.json exists on disk.
     pub file_exists: bool,

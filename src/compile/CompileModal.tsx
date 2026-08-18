@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
-import { serializeGraph, useGraphStore, type CompileTarget } from "../store/graph";
+import { GRAPH_VERSION, serializeGraph, useGraphStore, type CompileTarget } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { compilePreview, compileWrite } from "./api";
 import { play as sfxPlay } from "../scene/sfx";
@@ -275,7 +275,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
       const graphJson = serializeGraph({
-        version: 1,
+        version: GRAPH_VERSION,
         projectName: s.projectName,
         nodes: s.nodes,
         edges: s.edges,

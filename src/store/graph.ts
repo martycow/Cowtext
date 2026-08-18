@@ -7,11 +7,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { renameNodeFile as fsRenameNodeFile } from "../fs/api";
 import { useProjectStore } from "./project";
 import { useSettingsStore } from "./settings";
+import { agentRenameListeners, useAgentsStore } from "./agents";
 
 // ── Data model (plan §4) ──────────────────────────────────────────────
 
+// v2: the former "persona" role IS the agent (Marty, 2026-08-18) — an
+// agent-role node may be backed by a real .claude/agents/*.md file.
 export type NodeRole =
-  | "persona"
+  | "agent"
   | "rules"
   | "architecture"
   | "workflow"
@@ -20,7 +23,7 @@ export type NodeRole =
   | "glossary";
 
 export const NODE_ROLES: readonly NodeRole[] = [
-  "persona",
+  "agent",
   "rules",
   "architecture",
   "workflow",
@@ -28,6 +31,11 @@ export const NODE_ROLES: readonly NodeRole[] = [
   "reference",
   "glossary",
 ];
+
+/** Is this node backed by a real Claude Code agent definition file? */
+export function isAgentFile(relPath: string): boolean {
+  return relPath.replace(/\\/g, "/").toLowerCase().startsWith(".claude/agents/");
+}
 
 export interface MemoryNode {
   id: string;
@@ -74,8 +82,10 @@ export interface MemoryEdge {
 
 export type CompileTarget = "claude" | "agents" | "cursor";
 
+export const GRAPH_VERSION = 2;
+
 export interface BarnGraph {
-  version: 1;
+  version: typeof GRAPH_VERSION;
   projectName: string;
   nodes: MemoryNode[];
   edges: MemoryEdge[];
@@ -112,7 +122,7 @@ function stableEdge(e: MemoryEdge): MemoryEdge {
 
 export function serializeGraph(g: BarnGraph): string {
   const stable: BarnGraph = {
-    version: 1,
+    version: GRAPH_VERSION,
     projectName: g.projectName,
     nodes: [...g.nodes].sort((a, b) => a.id.localeCompare(b.id)).map(stableNode),
     edges: [...g.edges].sort((a, b) => a.id.localeCompare(b.id)).map(stableEdge),
@@ -122,25 +132,30 @@ export function serializeGraph(g: BarnGraph): string {
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
 
-/** Migration harness (backlog 9.2): version 1 is current; anything else
- *  must come through here with an explicit migration step. */
+/** Migration harness (backlog 9.2): version 2 is current.
+ *  v1 → v2: the "persona" role was renamed to "agent" (same semantics,
+ *  now unified with Claude Code agent files). Anything else must come
+ *  through here with an explicit migration step. */
 export function migrateGraph(data: unknown): BarnGraph {
   if (typeof data !== "object" || data === null) {
     throw new Error("graph.json is not an object");
   }
-  const g = data as Partial<BarnGraph>;
-  if (g.version !== 1) {
+  const g = data as { version?: unknown; projectName?: unknown; nodes?: unknown; edges?: unknown; compileTargets?: unknown };
+  if (g.version !== 1 && g.version !== GRAPH_VERSION) {
     throw new Error(`Unsupported graph.json version: ${String(g.version)}`);
   }
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) {
     throw new Error("graph.json is missing nodes/edges arrays");
   }
+  const nodes = (g.nodes as MemoryNode[]).map((n) =>
+    (n.role as string) === "persona" ? { ...n, role: "agent" as NodeRole } : n,
+  );
   return {
-    version: 1,
+    version: GRAPH_VERSION,
     projectName: typeof g.projectName === "string" ? g.projectName : "",
-    nodes: g.nodes,
-    edges: g.edges,
-    compileTargets: Array.isArray(g.compileTargets) ? g.compileTargets : ["claude"],
+    nodes,
+    edges: g.edges as MemoryEdge[],
+    compileTargets: Array.isArray(g.compileTargets) ? (g.compileTargets as CompileTarget[]) : ["claude"],
   };
 }
 
@@ -232,7 +247,7 @@ interface GraphState {
   flushSave: () => Promise<void>;
 
   createNode: (position: { x: number; y: number }) => Promise<void>;
-  adoptFile: (relPath: string) => void;
+  adoptFile: (relPath: string, title?: string) => void;
   updateNode: (id: string, patch: Partial<Omit<MemoryNode, "id">>) => void;
   moveNode: (id: string, position: { x: number; y: number }) => void;
   deleteNodes: (ids: string[]) => void;
@@ -337,7 +352,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     const s = get();
     if (s.root === null || !s.loaded || s.loadError !== null) return;
     const content = serializeGraph({
-      version: 1,
+      version: GRAPH_VERSION,
       projectName: s.projectName,
       nodes: s.nodes,
       edges: s.edges,
@@ -394,16 +409,17 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     scheduleSave();
   },
 
-  adoptFile: (relPath) => {
+  adoptFile: (relPath, title) => {
     const s = get();
     if (s.nodes.some((n) => n.filePath === relPath)) return;
     const fileName = relPath.split("/").pop() ?? relPath;
-    const title = fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
+    const derived = fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
     const i = s.nodes.length;
     const node: MemoryNode = {
       id: makeId(),
-      title,
-      role: "reference",
+      title: title !== undefined && title !== "" ? title : derived,
+      // An adopted .claude/agents file IS an agent — the unified role.
+      role: isAgentFile(relPath) ? "agent" : "reference",
       brief: "",
       filePath: relPath,
       readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
@@ -517,7 +533,17 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     if (s.root === null) throw new Error("No project open");
     const node = s.nodes.find((n) => n.id === id);
     if (!node) throw new Error(`Unknown node: ${id}`);
-    const returned = await fsRenameNodeFile(s.root, node.filePath, nextRelPath);
+    let returned: string;
+    if (isAgentFile(node.filePath)) {
+      // Agent-backed node: route through the agents layer (rename_node_file
+      // refuses .claude/*). The new name is the requested basename sans .md.
+      const fileName = node.filePath.split("/").pop() ?? node.filePath;
+      const base = (nextRelPath.split("/").pop() ?? nextRelPath).replace(/\.md$/i, "");
+      const nextFileName = await useAgentsStore.getState().renameAgentByFile(fileName, base);
+      returned = `.claude/agents/${nextFileName}`;
+    } else {
+      returned = await fsRenameNodeFile(s.root, node.filePath, nextRelPath);
+    }
     set((st) => ({
       nodes: st.nodes.map((n) => (n.id === id ? { ...n, filePath: returned } : n)),
     }));
@@ -530,7 +556,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     if (!node) return null;
     get().updateNode(id, { title });
     if (!useSettingsStore.getState().syncFileName) return null;
-    if (isRenameProtected(node.filePath)) return null;
+    // Agent-backed files are renameable (via the agents layer) even though
+    // the generic .claude/ guard would refuse them.
+    if (isRenameProtected(node.filePath) && !isAgentFile(node.filePath)) return null;
     if (pathSlug(node.filePath) === slugify(title)) return null;
     const taken = new Set([
       ...get().nodes.map((n) => n.filePath),
@@ -545,3 +573,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     }
   },
 }));
+
+// Agent renamed through the agents layer (rail / agent editor) → keep every
+// graph node backed by that file pointing at the new path, and mirror the
+// new agent name into the node title (they are one identity, Marty 2026-08-18).
+agentRenameListeners.push((oldFileName, newFileName, newName) => {
+  const oldPath = `.claude/agents/${oldFileName}`;
+  const newPath = `.claude/agents/${newFileName}`;
+  const s = useGraphStore.getState();
+  if (!s.nodes.some((n) => n.filePath === oldPath)) return;
+  useGraphStore.setState((st) => ({
+    nodes: st.nodes.map((n) =>
+      n.filePath === oldPath
+        ? { ...n, filePath: newPath, title: newName !== "" ? newName : n.title }
+        : n,
+    ),
+  }));
+  scheduleSave();
+});

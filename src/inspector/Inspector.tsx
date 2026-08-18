@@ -7,7 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import {
   EDGE_KINDS,
+  GRAPH_VERSION,
   NODE_ROLES,
+  isAgentFile,
   isRenameProtected,
   serializeGraph,
   suggestFilePath,
@@ -23,6 +25,9 @@ import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
 import { ROLE_DESCRIPTIONS } from "../canvas/roleMeta";
 import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
+import { useAgentsStore, type Selection as AgentsSelection } from "../store/agents";
+import { AgentEditor } from "../agents/AgentEditor";
+import { SkillEditor } from "../agents/SkillEditor";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
 import { ScanOverlay } from "../ui/ScanOverlay";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -87,7 +92,7 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
       const graphJson = serializeGraph({
-        version: 1,
+        version: GRAPH_VERSION,
         projectName: s.projectName,
         nodes: s.nodes,
         edges: s.edges,
@@ -646,6 +651,255 @@ function RelationsSection({ node }: { node: MemoryNode }) {
   );
 }
 
+/** Inline danger confirm — nothing destructive happens in one click. */
+function DangerConfirm({
+  label,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  label: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded border border-danger bg-danger-surface px-2 py-1.5">
+      <span className="min-w-0 flex-1 text-xs leading-snug text-danger-text">{label}</span>
+      <button
+        onClick={onConfirm}
+        className="h-control-sm flex-none rounded border border-danger px-2 font-mono text-micro text-danger-text transition-colors duration-fast hover:bg-danger hover:text-content-inverse"
+      >
+        {confirmLabel}
+      </button>
+      <button
+        onClick={onCancel}
+        className="h-control-sm flex-none rounded border border-border px-2 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-border-strong"
+      >
+        cancel
+      </button>
+    </div>
+  );
+}
+
+/** Banner on a legacy agent-role node whose file still lives outside
+ *  .claude/agents/ — one click moves it there (agent_convert) and the node
+ *  becomes a real agent. */
+function ConvertBanner({ node }: { node: MemoryNode }) {
+  const updateNode = useGraphStore((s) => s.updateNode);
+  const busy = useAgentsStore((s) => s.busy);
+  const [error, setError] = useState<string | null>(null);
+
+  const convert = () => {
+    setError(null);
+    void useAgentsStore
+      .getState()
+      .convertToAgent(node.filePath, node.title)
+      .then((doc) => {
+        updateNode(node.id, { filePath: `.claude/agents/${doc.fileName}` });
+        void useProjectStore.getState().rescan();
+      })
+      .catch((e: unknown) => setError(String(e)));
+  };
+
+  return (
+    <div className="rounded border border-accent-border bg-accent-surface px-2 py-1.5">
+      <p className="text-xs leading-snug text-accent-text">
+        This agent is not backed by a real <span className="font-mono">.claude/agents</span> file
+        yet — Claude Code cannot see it.
+      </p>
+      <button
+        onClick={convert}
+        disabled={busy}
+        className="mt-1.5 h-control-sm rounded bg-accent px-2.5 text-xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled"
+      >
+        Convert to agent file
+      </button>
+      {error !== null && (
+        <p className="mt-1 break-words font-mono text-2xs text-danger-text">{error}</p>
+      )}
+    </div>
+  );
+}
+
+/** Properties pane for a node backed by a real .claude/agents file: the full
+ *  agent editor (identity, meta, tools, skills, duties) plus the graph-side
+ *  facts (relations, read order, pinned, remove-from-graph). */
+function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
+  const fileName = node.filePath.split("/").pop() ?? node.filePath;
+  const doc = useAgentsStore((s) => s.agents.find((a) => a.fileName === fileName));
+  const busy = useAgentsStore((s) => s.busy);
+  const updateNode = useGraphStore((s) => s.updateNode);
+  const deleteNodes = useGraphStore((s) => s.deleteNodes);
+  const [armed, setArmed] = useState(false);
+  const sel: AgentsSelection = { kind: "agent", key: fileName };
+
+  if (doc === undefined) {
+    return (
+      <div className="flex flex-col gap-2 p-3">
+        <p className="text-sm text-content-muted">
+          Agent file <span className="font-mono text-xs">{node.filePath}</span> is not loaded.
+        </p>
+        <button
+          onClick={() => void useAgentsStore.getState().loadAgents(root)}
+          className="h-control self-start rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          Rescan agents
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <AgentEditor
+        root={root}
+        doc={doc}
+        disabled={busy}
+        onRequestDelete={() => setArmed(true)}
+        onSave={() => useAgentsStore.getState().saveDoc(sel)}
+      />
+      <div className="flex flex-col gap-3 border-t border-border-subtle p-3">
+        {armed && (
+          <DangerConfirm
+            label={`Delete .claude/agents/${fileName} AND remove this node?`}
+            confirmLabel="delete"
+            onConfirm={() => {
+              setArmed(false);
+              useAgentsStore.getState().select(sel);
+              void useAgentsStore
+                .getState()
+                .deleteSelected()
+                .then((err) => {
+                  if (err === null) deleteNodes([node.id]);
+                });
+            }}
+            onCancel={() => setArmed(false)}
+          />
+        )}
+        <RelationsSection node={node} />
+        <div className="flex items-center justify-between">
+          <div>
+            <FieldLabel>Pinned</FieldLabel>
+            <p className="text-xs leading-snug text-content-muted">
+              Always in context, survives compile.
+            </p>
+          </div>
+          <Toggle checked={node.pinned} onChange={(v) => updateNode(node.id, { pinned: v })} />
+        </div>
+        <div>
+          <FieldLabel>Read order</FieldLabel>
+          <input
+            type="number"
+            min={0}
+            value={node.readOrder}
+            onChange={(e) => {
+              const v = Number.parseInt(e.target.value, 10);
+              if (Number.isFinite(v)) updateNode(node.id, { readOrder: v });
+            }}
+            className="h-control w-[88px] rounded border border-border bg-surface-2 px-2 font-mono text-sm text-content focus:border-accent"
+          />
+        </div>
+        <div>
+          <button
+            onClick={() => deleteNodes([node.id])}
+            className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-danger-text transition-colors duration-fast hover:border-danger hover:bg-danger-surface"
+          >
+            <Trash2 size={13} strokeWidth={1.5} />
+            Remove from graph
+          </button>
+          <p className="mt-1.5 text-xs text-content-muted">The agent file stays on disk.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Right-panel editor for a rail selection with no graph node: an off-graph
+ *  agent or a skill. */
+function StandaloneAgentsPanel({ root }: { root: string }) {
+  const sel = useAgentsStore((s) => s.selection);
+  const agents = useAgentsStore((s) => s.agents);
+  const skills = useAgentsStore((s) => s.skills);
+  const busy = useAgentsStore((s) => s.busy);
+  const adoptFile = useGraphStore((s) => s.adoptFile);
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    setArmed(false);
+  }, [sel?.kind, sel?.key]);
+
+  if (sel === null) return null;
+
+  if (sel.kind === "agent") {
+    const doc = agents.find((a) => a.fileName === sel.key);
+    if (doc === undefined) return null;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-surface-inset px-3 py-1.5">
+          <span className="min-w-0 flex-1 truncate text-xs text-content-muted">
+            Off the graph — adopt it to wire context edges.
+          </span>
+          <button
+            onClick={() => adoptFile(`.claude/agents/${doc.fileName}`, doc.fields.name ?? "")}
+            className="h-control-sm flex-none rounded border border-accent-border bg-accent-surface px-2 text-xs text-accent-text transition-colors duration-fast hover:bg-accent hover:text-content-inverse"
+          >
+            Adopt to graph
+          </button>
+        </div>
+        {armed && (
+          <div className="p-3 pb-0">
+            <DangerConfirm
+              label={`Delete .claude/agents/${doc.fileName}?`}
+              confirmLabel="delete"
+              onConfirm={() => {
+                setArmed(false);
+                useAgentsStore.getState().select(sel);
+                void useAgentsStore.getState().deleteSelected();
+              }}
+              onCancel={() => setArmed(false)}
+            />
+          </div>
+        )}
+        <AgentEditor
+          root={root}
+          doc={doc}
+          disabled={busy}
+          onRequestDelete={() => setArmed(true)}
+          onSave={() => useAgentsStore.getState().saveDoc(sel)}
+        />
+      </div>
+    );
+  }
+
+  const skill = skills.find((sk) => sk.dirName === sel.key);
+  if (skill === undefined) return null;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      {armed && (
+        <div className="p-3 pb-0">
+          <DangerConfirm
+            label={`Delete .claude/skills/${skill.dirName}/ (${skill.extraFileCount} extra file${skill.extraFileCount === 1 ? "" : "s"})?`}
+            confirmLabel="delete"
+            onConfirm={() => {
+              setArmed(false);
+              useAgentsStore.getState().select(sel);
+              void useAgentsStore.getState().deleteSelected();
+            }}
+            onCancel={() => setArmed(false)}
+          />
+        </div>
+      )}
+      <SkillEditor
+        doc={skill}
+        disabled={busy}
+        onRequestDelete={() => setArmed(true)}
+        onSave={() => useAgentsStore.getState().saveDoc(sel)}
+      />
+    </div>
+  );
+}
+
 function PropertiesTab({
   node,
   root,
@@ -660,6 +914,7 @@ function PropertiesTab({
 
   return (
     <div className="flex flex-col gap-3 overflow-y-auto p-3">
+      {node.role === "agent" && !isAgentFile(node.filePath) && <ConvertBanner node={node} />}
       {/* Keyed by node.id: without this React reuses the same TitleField
           instance across a node switch. commit()/retry() close over the
           `node` prop from the render that created them, and commitTitle is
@@ -996,6 +1251,7 @@ export function Inspector({ root }: { root: string }) {
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const tab = useInspectorTabStore((s) => s.tab);
+  const agentsSel = useAgentsStore((s) => s.selection);
   const rightPanelWidth = useSettingsStore((s) => s.rightPanelWidth);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." Both reveal entry points in this panel
@@ -1042,7 +1298,11 @@ export function Inspector({ root }: { root: string }) {
             </div>
           )}
           {tab === "properties" ? (
-            <PropertiesTab node={node} root={root} onRevealError={setRevealError} />
+            isAgentFile(node.filePath) ? (
+              <AgentNodePanel node={node} root={root} />
+            ) : (
+              <PropertiesTab node={node} root={root} onRevealError={setRevealError} />
+            )
           ) : (
             <MarkdownTab node={node} root={root} />
           )}
@@ -1067,6 +1327,8 @@ export function Inspector({ root }: { root: string }) {
           </button>
           <p className="text-xs text-content-muted">Files stay on disk.</p>
         </div>
+      ) : agentsSel !== null ? (
+        <StandaloneAgentsPanel root={root} />
       ) : (
         <div className="flex flex-1 items-center justify-center p-3">
           <p className="max-w-[240px] text-center text-sm leading-relaxed text-content-muted">

@@ -37,7 +37,7 @@ export const PALETTE = {
 /** Role-hue accents (contents only, never structure — ART_DIRECTION rule). */
 export const ROLE_ACCENT: Record<string, number> = {
   rules: PALETTE.straw,
-  persona: PALETTE.clay,
+  agent: PALETTE.clay,
   architecture: PALETTE.screen,
   reference: PALETTE.orchid,
   task: PALETTE.iris,

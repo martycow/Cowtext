@@ -58,8 +58,13 @@ fn validate_preset(json: &str) -> Result<PresetMeta, String> {
     if v.get("kind").and_then(|k| k.as_str()) != Some("cowtext-preset") {
         return Err("Not a Cowtext preset (kind mismatch)".to_string());
     }
-    if v.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
-        return Err("Unsupported preset version (expected 1)".to_string());
+    // v1 presets predate the persona→agent role rename; v2 presets may
+    // already carry `role: "agent"` nodes. Both graph shapes deserialize the
+    // same way downstream (compile.rs's `RoleIn` accepts both spellings), so
+    // presets accept either version — the frontend owns the migration.
+    match v.get("version").and_then(serde_json::Value::as_u64) {
+        Some(1) | Some(2) => {}
+        _ => return Err("Unsupported preset version (expected 1 or 2)".to_string()),
     }
     let nodes = v
         .get("nodes")
@@ -80,9 +85,9 @@ fn validate_preset(json: &str) -> Result<PresetMeta, String> {
     })
 }
 
-/// Slug per contract §3: lowercase, `[a-z0-9-]` only, whitespace/`_` → `-`,
+/// Slug: lowercase, `[a-z0-9-]` only, whitespace/`_` → `-`,
 /// runs collapsed, edges trimmed. Empty result → Err.
-fn slugify(name: &str) -> Result<String, String> {
+pub(crate) fn slugify(name: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut prev_dash = true; // suppresses leading dashes
     for c in name.to_lowercase().chars() {
@@ -96,7 +101,7 @@ fn slugify(name: &str) -> Result<String, String> {
     }
     let out = out.trim_end_matches('-').to_string();
     if out.is_empty() {
-        return Err(format!("Preset name has no usable characters: {name:?}"));
+        return Err(format!("Name has no usable characters: {name:?}"));
     }
     Ok(out)
 }

@@ -16,8 +16,19 @@ fn touch(path: &Path, content: &str) {
 }
 
 fn node(id: &str, title: &str, file_path: &str, read_order: i64, pinned: bool) -> serde_json::Value {
+    node_role(id, title, file_path, read_order, pinned, "rules")
+}
+
+fn node_role(
+    id: &str,
+    title: &str,
+    file_path: &str,
+    read_order: i64,
+    pinned: bool,
+    role: &str,
+) -> serde_json::Value {
     json!({
-        "id": id, "title": title, "role": "rules", "brief": "",
+        "id": id, "title": title, "role": role, "brief": "",
         "filePath": file_path, "readOrder": read_order, "pinned": pinned,
         "position": { "x": 0, "y": 0 }
     })
@@ -560,5 +571,212 @@ fn compile_write_allowlist() {
     for rel in &written {
         assert_eq!(fs::read_to_string(dir.join(rel)).unwrap(), ok);
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ── Agent context blocks ────────────────────────────────────────────────
+
+fn find_file<'a>(p: &'a CompilePreview, rel: &str) -> Option<&'a PreviewFile> {
+    p.files.iter().find(|f| f.rel_path == rel)
+}
+
+#[test]
+fn agent_block_appended_when_absent_independent_of_compile_targets() {
+    let dir = temp_project("agent-append");
+    touch(&dir.join(".claude/agents/tech-ui.md"), "---\nname: tech-ui\n---\n\nDuties.\n");
+    touch(&dir.join("context/rules.md"), "rules\n");
+    let g = graph_json(
+        "P",
+        &[
+            node_role("a", "tech-ui", ".claude/agents/tech-ui.md", 1, false, "agent"),
+            node("b", "Rules", "context/rules.md", 2, false),
+        ],
+        &[edge("e1", "a", "b", "imports", None)],
+        &[], // no compile targets selected — the block is independent
+    );
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty());
+    assert_eq!(p.files.len(), 1, "no claude/agents/cursor targets requested");
+    let f = find_file(&p, ".claude/agents/tech-ui.md").unwrap();
+    assert_eq!(f.target, "agent");
+    assert!(!f.handwritten);
+    assert!(!f.unchanged);
+    let expected = format!(
+        "---\nname: tech-ui\n---\n\nDuties.\n\n{AGENT_BLOCK_START}\n@context/rules.md\n{AGENT_BLOCK_END}\n"
+    );
+    assert_eq!(f.new_content, expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_block_replaced_in_place_surrounding_bytes_identical() {
+    let dir = temp_project("agent-replace");
+    let before = format!(
+        "---\nname: tech-ui\n---\n\nHand-written intro.\n\n{AGENT_BLOCK_START}\n@context/old.md\n{AGENT_BLOCK_END}\n\nHand-written outro.\n"
+    );
+    touch(&dir.join(".claude/agents/tech-ui.md"), &before);
+    touch(&dir.join("context/new.md"), "new\n");
+    let g = graph_json(
+        "P",
+        &[
+            node_role("a", "tech-ui", ".claude/agents/tech-ui.md", 1, false, "agent"),
+            node("b", "New", "context/new.md", 2, false),
+        ],
+        &[edge("e1", "a", "b", "references", None)],
+        &[],
+    );
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty());
+    let f = find_file(&p, ".claude/agents/tech-ui.md").unwrap();
+    let expected = format!(
+        "---\nname: tech-ui\n---\n\nHand-written intro.\n\n{AGENT_BLOCK_START}\n@context/new.md\n{AGENT_BLOCK_END}\n\nHand-written outro.\n"
+    );
+    assert_eq!(f.new_content, expected);
+    // Prefix and suffix around the block are byte-identical to the original.
+    assert!(before.starts_with("---\nname: tech-ui\n---\n\nHand-written intro.\n\n"));
+    assert!(f.new_content.ends_with("\n\nHand-written outro.\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_block_orders_targets_by_read_order_then_id() {
+    let dir = temp_project("agent-order");
+    touch(&dir.join(".claude/agents/lead.md"), "---\nname: lead\n---\n\nBody.\n");
+    touch(&dir.join("context/z.md"), "z\n");
+    touch(&dir.join("context/a.md"), "a\n");
+    touch(&dir.join("context/m.md"), "m\n");
+    let g = graph_json(
+        "P",
+        &[
+            node_role("agent1", "lead", ".claude/agents/lead.md", 1, false, "agent"),
+            node("z", "Z", "context/z.md", 5, false),
+            node("a", "A", "context/a.md", 5, false),
+            node("m", "M", "context/m.md", 1, false),
+        ],
+        &[
+            edge("e1", "agent1", "z", "imports", None),
+            edge("e2", "agent1", "a", "references", None),
+            edge("e3", "agent1", "m", "imports", None),
+        ],
+        &[],
+    );
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty());
+    let f = find_file(&p, ".claude/agents/lead.md").unwrap();
+    let lines: Vec<&str> = f.new_content.lines().filter(|l| l.starts_with('@')).collect();
+    // m (readOrder 1) first, then a/z (both readOrder 5, tie-broken by id).
+    assert_eq!(lines, ["@context/m.md", "@context/a.md", "@context/z.md"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_node_without_imports_or_references_edges_emits_nothing() {
+    let dir = temp_project("agent-no-edges");
+    touch(&dir.join(".claude/agents/solo.md"), "---\nname: solo\n---\n\nBody.\n");
+    touch(&dir.join("context/rules.md"), "rules\n");
+    // No edges at all.
+    let g1 = graph_json(
+        "P",
+        &[
+            node_role("a", "solo", ".claude/agents/solo.md", 1, false, "agent"),
+            node("b", "Rules", "context/rules.md", 2, false),
+        ],
+        &[],
+        &[],
+    );
+    let p1 = preview(&dir, &g1);
+    assert!(p1.errors.is_empty());
+    assert!(find_file(&p1, ".claude/agents/solo.md").is_none());
+
+    // A `sequence` edge doesn't count — only imports/references do.
+    let g2 = graph_json(
+        "P",
+        &[
+            node_role("a", "solo", ".claude/agents/solo.md", 1, false, "agent"),
+            node("b", "Rules", "context/rules.md", 2, false),
+        ],
+        &[edge("e1", "a", "b", "sequence", None)],
+        &[],
+    );
+    let p2 = preview(&dir, &g2);
+    assert!(p2.errors.is_empty());
+    assert!(find_file(&p2, ".claude/agents/solo.md").is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_output_disallows_nested_subdirectory() {
+    let dir = temp_project("agent-write-nested");
+    let root = dir.to_string_lossy().into_owned();
+    let content = format!("---\nname: x\n---\n\n{AGENT_BLOCK_START}\n@a.md\n{AGENT_BLOCK_END}\n");
+    let err = compile_write(
+        root,
+        vec![ApprovedFile {
+            rel_path: ".claude/agents/sub/dir.md".to_string(),
+            content,
+        }],
+    )
+    .unwrap_err();
+    assert!(err.contains("Refusing to write outside compile outputs"));
+    assert!(!dir.join(".claude/agents/sub/dir.md").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_output_requires_context_block_markers_not_generated_header() {
+    let dir = temp_project("agent-write-markers");
+    let root = dir.to_string_lossy().into_owned();
+
+    // No markers at all → refused, even with the GENERATED header present.
+    let no_markers = format!("{GENERATED_HEADER}\n---\nname: x\n---\n\nBody.\n");
+    let err = compile_write(
+        root.clone(),
+        vec![ApprovedFile {
+            rel_path: ".claude/agents/x.md".to_string(),
+            content: no_markers,
+        }],
+    )
+    .unwrap_err();
+    assert!(err.contains("Missing Cowtext context block markers"));
+    assert!(!dir.join(".claude/agents/x.md").exists());
+
+    // Markers present, GENERATED header absent → accepted (agent files are
+    // exempt from the header requirement).
+    let with_markers = format!(
+        "---\nname: x\n---\n\n{AGENT_BLOCK_START}\n@a.md\n{AGENT_BLOCK_END}\n"
+    );
+    let written = compile_write(
+        root,
+        vec![ApprovedFile {
+            rel_path: ".claude/agents/x.md".to_string(),
+            content: with_markers.clone(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(written, [".claude/agents/x.md"]);
+    assert_eq!(fs::read_to_string(dir.join(".claude/agents/x.md")).unwrap(), with_markers);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_persona_role_in_v1_graph_also_emits_agent_block() {
+    let dir = temp_project("agent-legacy-persona");
+    touch(&dir.join(".claude/agents/legacy.md"), "---\nname: legacy\n---\n\nBody.\n");
+    touch(&dir.join("context/rules.md"), "rules\n");
+    // graph_json always stamps "version": 1 — the pre-rename shape.
+    let g = graph_json(
+        "P",
+        &[
+            node_role("a", "legacy", ".claude/agents/legacy.md", 1, false, "persona"),
+            node("b", "Rules", "context/rules.md", 2, false),
+        ],
+        &[edge("e1", "a", "b", "imports", None)],
+        &[],
+    );
+    assert!(g.contains("\"version\":1"));
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty());
+    let f = find_file(&p, ".claude/agents/legacy.md").unwrap();
+    assert!(f.new_content.contains("@context/rules.md"));
     let _ = fs::remove_dir_all(&dir);
 }

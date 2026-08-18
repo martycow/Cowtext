@@ -15,7 +15,9 @@ export type ValidationError =
 
 export interface PreviewFile {
   relPath: string;
-  target: CompileTarget;
+  /** The three adapters, plus "agent" for a managed context block inside a
+   *  .claude/agents/*.md file (emitted per agent node with context edges). */
+  target: CompileTarget | "agent";
   oldContent: string | null;
   newContent: string;
   handwritten: boolean;

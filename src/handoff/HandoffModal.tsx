@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
-import { serializeGraph, useGraphStore } from "../store/graph";
+import { GRAPH_VERSION, serializeGraph, useGraphStore } from "../store/graph";
 import { useEventsStore } from "../store/events";
 import { handoffGenerate, handoffWrite } from "./api";
 import type { HandoffResult } from "./types";
@@ -114,7 +114,7 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
       const graphJson = serializeGraph({
-        version: 1,
+        version: GRAPH_VERSION,
         projectName: s.projectName,
         nodes: s.nodes,
         edges: s.edges,

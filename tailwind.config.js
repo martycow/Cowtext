@@ -47,7 +47,7 @@ export default {
         danger:  { DEFAULT: 'var(--danger)',  text: 'var(--danger-text)',  surface: 'var(--danger-surface)' },
         info:    { DEFAULT: 'var(--info)',    text: 'var(--info-text)',    surface: 'var(--info-surface)' },
         role: {
-          persona:      'var(--role-persona)',
+          agent:        'var(--role-agent)',
           rules:        'var(--role-rules)',
           architecture: 'var(--role-architecture)',
           workflow:     'var(--role-workflow)',

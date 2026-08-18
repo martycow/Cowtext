@@ -74,6 +74,15 @@ pub(crate) fn walk(root: &Path, dir: &Path, out: &mut Vec<MdFile>) -> Result<(),
         let name = name.to_string_lossy();
 
         if path.is_dir() {
+            // Special case, root only: `.claude/agents/*.md` are real
+            // Memory Nodes (agent-role nodes may be backed by them) and
+            // belong in the scan like any other `.md` file. Nothing else
+            // under `.claude/` (settings.json, skills/) is scanned — the
+            // dot-directory skip below still applies to everything else.
+            if dir == root && name == ".claude" {
+                collect_agent_md(root, &path.join("agents"), out);
+                continue;
+            }
             let skip = name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref());
             if !skip {
                 // A subdirectory that vanishes mid-scan is not an error.
@@ -96,6 +105,40 @@ pub(crate) fn walk(root: &Path, dir: &Path, out: &mut Vec<MdFile>) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// Non-recursive listing of `agents_dir`'s `*.md` files (mirrors
+/// `agents::agents_scan`'s own walk), pushed into the project scan with
+/// `rel_path`s like `.claude/agents/foo.md`. A missing `agents_dir` (no
+/// `.claude/agents/` yet) contributes nothing — not an error.
+fn collect_agent_md(root: &Path, agents_dir: &Path, out: &mut Vec<MdFile>) {
+    let Ok(entries) = fs::read_dir(agents_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.to_lowercase().ends_with(".md") {
+            continue;
+        }
+        let meta = entry.metadata().ok();
+        out.push(MdFile {
+            rel_path: path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/"),
+            size_bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            modified_ms: meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64),
+        });
+    }
 }
 
 /// Resolve `rel` against `root`, rejecting anything that could escape it.
@@ -184,6 +227,10 @@ pub fn read_md_file(root: String, rel_path: String) -> Result<String, String> {
 /// directories as needed (e.g. `context/` for a brand-new node).
 #[tauri::command]
 pub fn write_md_file(root: String, rel_path: String, content: String) -> Result<(), String> {
+    // hooks_write is the only sanctioned path into the trust boundary.
+    if rel_path.replace('\\', "/").eq_ignore_ascii_case(".claude/settings.json") {
+        return Err("Use Install hooks to edit .claude/settings.json".to_string());
+    }
     let path = resolve_within_root(&checked_root(&root)?, &rel_path)?;
     write_atomic(&path, &content)
 }

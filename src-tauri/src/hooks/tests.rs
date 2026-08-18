@@ -13,7 +13,7 @@ fn parsed(content: &str) -> Value {
     serde_json::from_str(content).unwrap()
 }
 
-/// All three events present, each with exactly one Cowtext command entry.
+/// All four events present, each with exactly one Cowtext command entry.
 fn assert_fully_installed(v: &Value) {
     for (event, matcher) in HOOK_EVENTS {
         let arr = v["hooks"][event].as_array().unwrap_or_else(|| {
@@ -38,7 +38,7 @@ fn assert_fully_installed(v: &Value) {
 }
 
 #[test]
-fn merge_into_absent_file_installs_all_three_events() {
+fn merge_into_absent_file_installs_all_four_events() {
     let out = merge_hooks(None).unwrap();
     assert!(out.ends_with('\n'));
     assert_fully_installed(&parsed(&out));

@@ -57,7 +57,7 @@ export interface PropView {
   setOpened: (b: boolean) => void;
 }
 
-/** Filing cabinet — rules / persona nodes. Slate metal, drawer seams. */
+/** Filing cabinet — rules / agent nodes. Slate metal, drawer seams. */
 export function makeCabinet(role: string): PropView {
   const c = new Container();
   c.addChild(makeShadow(26));

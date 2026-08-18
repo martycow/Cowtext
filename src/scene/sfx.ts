@@ -1,7 +1,6 @@
 // The barn's voice. Only file importing howler. See PHASE56_CONTRACT §5.
 //
-// NOT WIRED (contract D9): calf_spawn / calf_despawn load with the rest but
-// have no call site — calves aren't rendered and no spawn event kind exists.
+// calf_spawn / calf_despawn (contract D9/AGENTS_SUITE_CONTRACT §7.5): wired from CalfHerd's onSpawn/onDespawn callbacks in BarnScene.tsx — see calf.ts's header.
 // Deliberately silent (SOUND_DESIGN §2b): footsteps, bubbles, camera pan/zoom,
 // view/demo toggles, queue-cap drops. Never queue a cue — late sound is wrong
 // sound; anything that can't play NOW is dropped.
@@ -344,10 +343,10 @@ export function claimReadCue(): boolean {
   return true;
 }
 
-/** Cabinet=rules/persona → drawer_slide; bookshelf=architecture/reference/
+/** Cabinet=rules/agent → drawer_slide; bookshelf=architecture/reference/
  *  glossary → page_flip; crate=task/workflow → paper_shuffle. */
 export function readCueForRole(role: NodeRole): SfxCue {
-  return role === "rules" || role === "persona" ? "drawer_slide"
+  return role === "rules" || role === "agent" ? "drawer_slide"
     : role === "task" || role === "workflow" ? "paper_shuffle"
     : "page_flip";
 }

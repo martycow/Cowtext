@@ -5,7 +5,7 @@
 import type { NodeRole } from "../store/graph";
 
 export const ROLE_DESCRIPTIONS: Record<NodeRole, string> = {
-  persona: "Who the agent is: voice, stance, standing preferences.",
+  agent: "An agent: identity, duties, tools — may be backed by a real .claude/agents file.",
   rules: "Hard constraints the agent must never break.",
   architecture: "How the system fits together: modules, boundaries, data flow.",
   workflow: "Ordered processes — the steps to follow for a recurring job.",

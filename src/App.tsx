@@ -29,6 +29,8 @@ const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
+import { flushMetaSave, useAgentsStore } from "./store/agents";
+import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
 import { initSfx } from "./scene/sfx";
 import { probeProjectDirs, revealPath } from "./fs/api";
 import { ResizeHandle } from "./ui/ResizeHandle";
@@ -619,6 +621,9 @@ function FileRow({ file, root }: { file: MdFile; root: string }) {
  *  this component in Workspace. */
 function FileRail({ root }: { root: string }) {
   const { files, rescan, scanning } = useProjectStore();
+  // Agent files scan too (project.rs opts into .claude/agents/) but they
+  // render in the AGENTS section below, not among context files.
+  const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
   const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
   const collapsed = useSettingsStore((s) => s.leftPanelCollapsed);
   const setCollapsed = useSettingsStore((s) => s.setLeftPanelCollapsed);
@@ -662,7 +667,7 @@ function FileRail({ root }: { root: string }) {
           <PanelLeftOpen size={14} strokeWidth={1.5} />
         </button>
         <span className="mt-3 font-mono text-2xs uppercase tracking-wider text-content-muted [writing-mode:vertical-rl]">
-          {files.length} files
+          {contextFiles.length} files
         </span>
       </div>
     );
@@ -678,7 +683,7 @@ function FileRail({ root }: { root: string }) {
         className="flex h-[31px] flex-none items-center gap-1.5 border-b border-border-subtle px-3"
       >
         <span className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-wider text-content-muted">
-          {files.length} markdown {files.length === 1 ? "file" : "files"}
+          {contextFiles.length} markdown {contextFiles.length === 1 ? "file" : "files"}
         </span>
         <button
           onClick={() => void rescan()}
@@ -718,19 +723,21 @@ function FileRail({ root }: { root: string }) {
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
         <ScanOverlay caption="rescanning" />
-        {files.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-3">
+        {contextFiles.length === 0 ? (
+          <div className="flex items-center justify-center px-3 py-6">
             <span className="text-center text-sm text-content-muted">No markdown files here.</span>
           </div>
         ) : (
-          <ul className="h-full overflow-y-auto py-1">
-            {files.map((f) => (
+          <ul className="py-1">
+            {contextFiles.map((f) => (
               <FileRow key={f.relPath} file={f} root={root} />
             ))}
           </ul>
         )}
+        <AgentsRailSection root={root} />
+        <SkillsRailSection root={root} />
       </div>
     </div>
   );
@@ -821,9 +828,12 @@ export default function App() {
     setView("canvas");
   }, [root]);
 
-  // Project opened → load (or start) its graph.
+  // Project opened → load (or start) its graph, and scan .claude/ agents.
   useEffect(() => {
-    if (root !== null) void loadGraph(root);
+    if (root !== null) {
+      void loadGraph(root);
+      void useAgentsStore.getState().loadAgents(root);
+    }
   }, [root, loadGraph]);
 
   // Wire barn://event + assemble://status once (idempotent — StrictMode-safe).
@@ -842,6 +852,7 @@ export default function App() {
     const flush = () => {
       void useGraphStore.getState().flushSave();
       flushSettings();
+      flushMetaSave();
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);

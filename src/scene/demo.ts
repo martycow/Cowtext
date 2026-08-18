@@ -11,7 +11,7 @@ import type { BarnEvent, BarnEventKind } from "./types";
  *  run without a backend or an open project. */
 export const DEMO_NODES: MemoryNode[] = [
   { id: "demo-a", title: "Rules", role: "rules", brief: "", filePath: "context/rules.md", readOrder: 1, pinned: true, position: { x: 0, y: 0 } },
-  { id: "demo-b", title: "Persona", role: "persona", brief: "", filePath: "context/persona.md", readOrder: 2, pinned: false, position: { x: 0, y: 0 } },
+  { id: "demo-b", title: "Agent", role: "agent", brief: "", filePath: "context/persona.md", readOrder: 2, pinned: false, position: { x: 0, y: 0 } },
   { id: "demo-c", title: "Architecture", role: "architecture", brief: "", filePath: "context/architecture.md", readOrder: 3, pinned: false, position: { x: 0, y: 0 } },
   { id: "demo-d", title: "API reference", role: "reference", brief: "", filePath: "context/api-reference.md", readOrder: 4, pinned: false, position: { x: 0, y: 0 } },
   { id: "demo-e", title: "Current task", role: "task", brief: "", filePath: "context/current-task.md", readOrder: 5, pinned: false, position: { x: 0, y: 0 } },
@@ -24,18 +24,26 @@ interface DemoStep {
   kind: BarnEventKind;
   /** Index into the available filePath list; undefined = no path. */
   file?: number;
+  /** Named Calves (AGENTS_SUITE_CONTRACT §7.5): used in place of "demo" when
+   *  present, so subagent_stop beats produce stable, recognizable calves
+   *  (e.g. "tech-ui", "tester") instead of everything sharing one seed. */
+  sessionId?: string;
 }
 
 // A believable little agent turn: prompt → reads → search → edit → stop.
+// Two subagent_stop beats (tech-ui, tester) demonstrate Named Calves: two
+// distinct, recurring calf visitors, restart-stable via calfLook(seed).
 const SCRIPT: DemoStep[] = [
   { delay: 400, kind: "prompt" },
   { delay: 900, kind: "read", file: 0 },
   { delay: 1800, kind: "read", file: 2 },
+  { delay: 1400, kind: "subagent_stop", sessionId: "tech-ui" },
   { delay: 1800, kind: "grep" },
   { delay: 1600, kind: "read", file: 3 },
   { delay: 1800, kind: "glob" },
   { delay: 1600, kind: "read", file: 4 },
   { delay: 1800, kind: "edit", file: 4 },
+  { delay: 1400, kind: "subagent_stop", sessionId: "tester" },
   { delay: 2400, kind: "write", file: 1 },
   { delay: 2400, kind: "read", file: 5 },
   { delay: 1800, kind: "stop" },
@@ -84,7 +92,7 @@ export class DemoPlayer {
       this.push({
         kind: step.kind,
         ...(filePath !== undefined ? { filePath } : {}),
-        sessionId: "demo",
+        sessionId: step.sessionId ?? "demo",
         ts: Date.now(),
       });
       this.index += 1;

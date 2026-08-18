@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, FolderInput, Package, X } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { serializeGraph, useGraphStore, type BarnGraph } from "../store/graph";
+import { GRAPH_VERSION, serializeGraph, useGraphStore, type BarnGraph } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { presetApply, presetExport, presetList, presetRead, presetSave } from "./api";
 import { buildPreset, parsePreset, type CowtextPreset, type PresetInfo } from "./types";
@@ -140,9 +140,10 @@ export function PresetsModal({ root, onClose }: { root: string; onClose: () => v
     (async () => {
       const { preset } = confirm;
       const graph: BarnGraph = {
-        version: 1,
+        version: GRAPH_VERSION,
         projectName: projectNameFromRoot(root),
-        nodes: preset.nodes,
+        // Presets saved before graph v2 may still carry the old "persona" role.
+        nodes: preset.nodes.map((n) => ((n.role as string) === "persona" ? { ...n, role: "agent" as const } : n)),
         edges: preset.edges,
         compileTargets: preset.compileTargets,
       };

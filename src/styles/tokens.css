@@ -68,7 +68,7 @@
   /* ── Node roles — colour is REDUNDANT coding.
         The pixel glyph is the primary identifier; lightness is
         staggered so the set survives deuteranopia in greyscale. */
-  --role-persona:      #E4784F;  /* 5.5:1 on surface-2 */
+  --role-agent:        #E4784F;  /* 5.5:1 on surface-2 */
   --role-rules:        #E3C25F;  /* 9.3:1 */
   --role-architecture: #56B4E9;  /* 7.0:1 */
   --role-workflow:     #3FBF92;  /* 7.0:1 */

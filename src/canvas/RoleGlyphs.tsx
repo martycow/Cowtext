@@ -8,7 +8,7 @@ import type { NodeRole } from "../store/graph";
 // 8 rows × 8 cols; "#" = filled pixel.
 const PIXELS: Record<NodeRole, readonly string[]> = {
   // Head and shoulders — who the agent is.
-  persona: [
+  agent: [
     "..####..",
     "..####..",
     "..####..",
