@@ -26,6 +26,9 @@ export const PANEL_LIMITS = {
   briefDefault: 72,
 } as const;
 
+export type LensMode = "none" | "activity" | "weight" | "live";
+export const LENS_MODES: readonly LensMode[] = ["none", "activity", "weight", "live"];
+
 export interface AppSettings {
   version: 1;
   masterVolume: number; // 0..1
@@ -41,6 +44,7 @@ export interface AppSettings {
   leftPanelCollapsed: boolean; // default false
   briefHeight: number; // px, clamped briefMin..briefMax
   syncFileName: boolean; // default true (idea #1)
+  lens: LensMode; // canvas lens (WO01 Block A); additive, tolerant-merge field
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -57,6 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   leftPanelCollapsed: false,
   briefHeight: PANEL_LIMITS.briefDefault,
   syncFileName: true,
+  lens: "none",
 };
 
 export interface SettingsState extends AppSettings {
@@ -81,6 +86,7 @@ export interface SettingsState extends AppSettings {
   setLeftPanelCollapsed: (b: boolean) => void;
   setBriefHeight: (px: number) => void;
   setSyncFileName: (b: boolean) => void;
+  setLens: (l: LensMode) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -146,6 +152,9 @@ function mergeSettings(raw: unknown): AppSettings {
     out.briefHeight = clamp(r.briefHeight, PANEL_LIMITS.briefMin, PANEL_LIMITS.briefMax);
   }
   if (typeof r.syncFileName === "boolean") out.syncFileName = r.syncFileName;
+  if (typeof r.lens === "string" && LENS_MODES.some((m) => m === r.lens)) {
+    out.lens = r.lens as LensMode;
+  }
   return out;
 }
 
@@ -170,6 +179,7 @@ function persistNow(): void {
     leftPanelCollapsed: s.leftPanelCollapsed,
     briefHeight: s.briefHeight,
     syncFileName: s.syncFileName,
+    lens: s.lens,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -289,6 +299,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setSyncFileName: (b) => {
     set({ syncFileName: b });
+    schedulePersist();
+  },
+  setLens: (l) => {
+    set({ lens: l });
     schedulePersist();
   },
 }));

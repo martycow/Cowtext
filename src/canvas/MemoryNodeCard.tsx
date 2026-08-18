@@ -8,7 +8,7 @@
 // persisted (src/canvas/handles.ts#pickHandles derives the pair at render
 // time). Contract §7.9: right-click opens the node's dynamic context menu.
 
-import { memo, useEffect, useReducer, useState } from "react";
+import { memo, useEffect, useMemo, useReducer, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -24,10 +24,12 @@ import {
   XCircle,
 } from "lucide-react";
 import { useProjectStore } from "../store/project";
+import { useSettingsStore } from "../store/settings";
 import { GRAPH_VERSION, isAgentFile, isRenameProtected, serializeGraph, useGraphStore } from "../store/graph";
-import { lastLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
+import { lastLiveTs, lensLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
 import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
+import { activityEmphasis, brightnessFor, useLensTickStore, weightEmphasis } from "./lens";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
 import { seedFor, useAgentsStore } from "../store/agents";
 import { AgentAvatar } from "../agents/AgentAvatar";
@@ -101,6 +103,36 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         ? "0 0 0 2px var(--success), var(--elev-1)"
         : "var(--elev-1)";
   const boxShadow = live ? `${ring}, var(--glow-live)` : ring;
+
+  // Lens emphasis/brightness — styling only, never layout (contract §6.1).
+  // `tick` is subscribed unconditionally (rules-of-hooks); it only ever
+  // advances while the Activity lens is mounted and active (LensControl).
+  const lens = useSettingsStore((s) => s.lens);
+  const tick = useLensTickStore((s) => s.tick);
+  const maxBytes = useProjectStore((s) => s.files.reduce((m, f) => Math.max(m, f.sizeBytes), 0));
+  const liveEmphasisTs = useEventsStore((s) => lensLiveTs(node.id, s.events));
+  // Date.now() is intentionally not itself a dependency: tick/lens are the
+  // proxies that decide when "now" should be recomputed (contract §6.2).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nowMs = useMemo(() => Date.now(), [tick, lens]);
+  const lensEmphasis =
+    lens === "activity"
+      ? activityEmphasis(nowMs, file?.modifiedMs ?? null)
+      : lens === "weight"
+        ? weightEmphasis(file?.sizeBytes, maxBytes)
+        : lens === "live"
+          ? liveEmphasisTs !== null
+            ? 1
+            : 0
+          : 1;
+  const lensBrightness = lens === "none" ? 1 : brightnessFor(lensEmphasis);
+  const lensStyle: React.CSSProperties & { [customProp: `--${string}`]: string | number } = {
+    minHeight: 80,
+    boxShadow,
+    "--lens-brightness": lensBrightness,
+    "--lens-emphasis": lens === "none" ? 1 : lensEmphasis,
+    filter: "brightness(var(--lens-brightness, 1))",
+  };
 
   // Fire-and-forget enqueue, mirroring Inspector's AssembleSection — the
   // card has no room for an error line, so failures surface through the
@@ -242,7 +274,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       className={`ct-node group relative w-node rounded border bg-surface-2 transition-colors duration-fast ${
         selected ? "border-transparent" : "border-border hover:border-border-strong"
       }`}
-      style={{ minHeight: 80, boxShadow }}
+      style={lensStyle}
     >
       {/* Live-read pulse ring — 2px amber, inset −4px, scale+fade loop */}
       {live && (

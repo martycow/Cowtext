@@ -20,6 +20,7 @@ import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { revealPath } from "../fs/api";
 import { MemoryNodeCard } from "./MemoryNodeCard";
+import { LensControl } from "./LensControl";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
 import { KindPicker } from "./KindPicker";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -209,14 +210,17 @@ function CanvasInner() {
           nodeColor={(n) => `var(--role-${(n as CanvasNode).data.memory.role})`}
         />
         <Panel position="top-left">
-          <button
-            onClick={newNodeAtCenter}
-            title="New memory node (or double-click the canvas)"
-            className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content shadow-card transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-          >
-            <Plus size={14} strokeWidth={1.5} />
-            New node
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={newNodeAtCenter}
+              title="New memory node (or double-click the canvas)"
+              className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content shadow-card transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+            >
+              <Plus size={14} strokeWidth={1.5} />
+              New node
+            </button>
+            <LensControl />
+          </div>
         </Panel>
         {revealError !== null && (
           <Panel position="top-center">
