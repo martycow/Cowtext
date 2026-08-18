@@ -21,6 +21,13 @@
 // of layout.objects — everything that is not the cow, a node prop, or
 // static furniture — and labeled by first-seen discovery order, not their
 // true spawn seed. Flagged as a known limitation in the dispatch report.
+//
+// Agent sessions (WO01 Block F §9.2): AgentHerd's sprites live in the same
+// object layer and would otherwise be misdiscovered as calves. The leftover
+// scan below asks `agents.labelFor(child)` FIRST — a hit is an agent (real
+// name + status label, no ordinal) and is skipped from the calf counter
+// entirely, so real subagent calves keep their existing ordinals undisturbed
+// by however many agent sessions are live.
 
 import { Container, Graphics, Text } from "pixi.js";
 import { PALETTE } from "./palette";
@@ -29,6 +36,7 @@ import { BARN_DOOR_TILE, DEV_DESK_TILE } from "./sceneGraph";
 import { tileToScreen } from "./iso";
 import type { Cow } from "./cow";
 import { reducedMotion } from "./motion";
+import type { AgentHerd } from "./agentHerd";
 
 const OUT = { width: 1, color: PALETTE.outline } as const;
 
@@ -105,6 +113,7 @@ interface HoverTarget {
 export interface HoverSyncCtx {
   cow: Cow;
   layout: BarnLayout;
+  agents: AgentHerd;
 }
 
 const DOOR_LABEL = "Barn door — agents come and go";
@@ -145,7 +154,7 @@ export class HoverController {
    *  counts are small; no allocation beyond one short-lived array). Call
    *  once per ticker frame, before tick(). */
   sync(ctx: HoverSyncCtx): void {
-    const { cow, layout } = ctx;
+    const { cow, layout, agents } = ctx;
     const targets: HoverTarget[] = [];
 
     targets.push({
@@ -180,9 +189,16 @@ export class HoverController {
       });
     }
 
-    // Leftover children of the object layer are live calves (see header).
+    // Leftover children of the object layer are live calves OR live agent
+    // sessions (see header) — agents are asked first so they never get
+    // folded into the calf ordinal count.
     for (const child of layout.objects.children) {
       if (known.has(child)) continue;
+      const agentLabel = agents.labelFor(child);
+      if (agentLabel !== null) {
+        targets.push({ id: `agent:${child.uid}`, kind: "calf", x: child.position.x, y: child.position.y, label: agentLabel });
+        continue;
+      }
       let n = this.calfIds.get(child);
       if (n === undefined) {
         this.calfOrdinal += 1;

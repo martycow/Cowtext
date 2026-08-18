@@ -7,9 +7,11 @@ mod hooks;
 mod hooks_server;
 mod preset;
 mod project;
+mod sessions;
 mod settings;
 mod tasks;
 mod watcher;
+mod worktree;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -27,6 +29,7 @@ pub fn run() {
                 assemble::ClaudeRunner::default(),
             )));
             app.manage(watcher::WatcherState::default());
+            app.manage(sessions::SessionRegistry::default());
             settings::init(app.handle());
             hooks_server::start(app.handle().clone());
             Ok(())
@@ -74,8 +77,22 @@ pub fn run() {
             tasks::task_toggle,
             tasks::task_append,
             tasks::task_move,
-            tasks::task_update
+            tasks::task_update,
+            worktree::worktree_check,
+            worktree::worktree_add,
+            sessions::agent_session_spawn,
+            sessions::agent_session_send,
+            sessions::agent_session_kill,
+            sessions::agent_session_restart,
+            sessions::agent_session_list
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Quitting Cowtext must never leave agent children behind
+            // (WO01 Block F contract §6.6).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                sessions::kill_all(&app_handle.state::<sessions::SessionRegistry>());
+            }
+        });
 }

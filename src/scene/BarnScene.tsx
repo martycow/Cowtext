@@ -31,6 +31,7 @@ import { PALETTE } from "./palette";
 import { buildLayout, COW_HOME_TILE } from "./sceneGraph";
 import { Cow, type IdleStage } from "./cow";
 import { CalfHerd } from "./calf";
+import { AgentHerd, type AgentSpriteInput } from "./agentHerd";
 import { handleEvent, resolveProp } from "./mapper";
 import { HoverController } from "./hover";
 import { reducedMotion } from "./motion";
@@ -38,6 +39,10 @@ import { tileToScreen } from "./iso";
 import * as sfx from "./sfx";
 import { DemoPlayer, DEMO_NODES } from "./demo";
 import type { BarnEvent, BarnEventSource } from "./types";
+// WO01 Block F barn tie-in (lane B, §9.1): live agent sessions get one
+// existing calf sprite each. Read-only store subscription, same idiom as
+// useGraphStore below — the scene never writes to useSessionsStore.
+import { useSessionsStore, type Session } from "../store/sessions";
 
 export interface BarnSceneProps {
   /** Start the scripted demo sequence on mount. */
@@ -155,6 +160,24 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       herd.onSpawn = () => sfx.play("calf_spawn");
       herd.onDespawn = () => sfx.play("calf_despawn");
       cleanups.push(() => herd.destroy());
+
+      // WO01 Block F §9.1/§9.3 — one AgentHerd sprite per LIVE session;
+      // killed (alive=false) and dismissed (removed from the array) sessions
+      // both fall out of this filter, so both despawn their animal via the
+      // same sync() diff, no separate lifecycle wiring needed. No sfx here
+      // (contract: session lifecycle has no cue in Block F).
+      const agents = new AgentHerd(layout.objects);
+      const toAgentInputs = (sessions: readonly Session[]): AgentSpriteInput[] =>
+        sessions
+          .filter((s) => s.alive)
+          .map((s) => ({ id: s.id, name: s.name, status: s.status, currentTool: s.currentTool }));
+      agents.sync(toAgentInputs(useSessionsStore.getState().sessions));
+      cleanups.push(
+        useSessionsStore.subscribe((s, prev) => {
+          if (s.sessions !== prev.sessions) agents.sync(toAgentInputs(s.sessions));
+        }),
+      );
+      cleanups.push(() => agents.destroy());
 
       // J5 — re-derive ajar props from the event ring, so accumulation
       // survives remounts and prop rebuilds (it is information, not decor).
@@ -343,7 +366,8 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         cow.update(ticker.deltaMS);
         layout.tick(ticker.deltaMS, reduced);
         herd.tick(ticker.deltaMS, reduced);
-        hover.sync({ cow, layout });
+        agents.tick(ticker.deltaMS, reduced);
+        hover.sync({ cow, layout, agents });
         hover.tick(ticker.deltaMS);
         sfx.tickAmbient(now - lastEventTs);
         // all idle-loop holds are ≥120 ms, so 12 fps loses nothing

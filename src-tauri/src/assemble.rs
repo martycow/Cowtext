@@ -33,7 +33,7 @@ pub fn set_claude_override(p: Option<PathBuf>) {
     *CLAUDE_OVERRIDE.lock().unwrap() = p;
 }
 
-fn claude_override() -> Option<PathBuf> {
+pub(crate) fn claude_override() -> Option<PathBuf> {
     CLAUDE_OVERRIDE.lock().unwrap().clone()
 }
 
@@ -404,7 +404,7 @@ impl ClaudeRunner {
 }
 
 #[cfg(windows)]
-fn resolve_claude() -> Option<PathBuf> {
+pub(crate) fn resolve_claude() -> Option<PathBuf> {
     where_probe("claude")
 }
 
@@ -440,7 +440,7 @@ pub(crate) fn where_probe(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn resolve_claude() -> Option<PathBuf> {
+pub(crate) fn resolve_claude() -> Option<PathBuf> {
     let out = std::process::Command::new("which")
         .arg("claude")
         .output()

@@ -24,10 +24,12 @@ import type { MdFile } from "./store/project";
 import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
 import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
+import { initSessionsListener, useSessionsStore } from "./store/sessions";
 import { useReviewStore } from "./store/review";
 import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
+import { RosterBar } from "./sessions/RosterBar";
 // Lazy-loaded for code splitting
 const Inspector = lazy(() => import("./inspector/Inspector").then(m => ({ default: m.Inspector })));
 const CompileModal = lazy(() => import("./compile/CompileModal").then(m => ({ default: m.CompileModal })));
@@ -1013,6 +1015,9 @@ function ReviewBanner() {
 function Workspace({ root, view }: { root: string; view: View }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
+  // The agent panel is reachable from any view, including the barn — without
+  // this, selecting a roster card while watching the barn has no visible effect.
+  const sessionSelected = useSessionsStore((s) => s.selectedId !== null);
   const leftPanelCollapsed = useSettingsStore((s) => s.leftPanelCollapsed);
   const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
   const setLeftPanelWidth = useSettingsStore((s) => s.setLeftPanelWidth);
@@ -1087,7 +1092,9 @@ function Workspace({ root, view }: { root: string; view: View }) {
           </div>
         )}
       </main>
-      {loaded && loadError === null && (view === "canvas" || view === "tasks") && (
+      {loaded &&
+        loadError === null &&
+        (view === "canvas" || view === "tasks" || (view === "barn" && sessionSelected)) && (
         <>
           <ResizeHandle
             value={rightPanelWidth}
@@ -1132,6 +1139,12 @@ export default function App() {
   // The listeners live for the app's lifetime; no teardown on re-render.
   useEffect(() => {
     void initEventListener();
+  }, []);
+
+  // Wire agent://event once — same idempotent, StrictMode-safe idiom, its
+  // own listener (store/sessions.ts owns it; store/events.ts is untouched).
+  useEffect(() => {
+    void initSessionsListener();
   }, []);
 
   // Settings load then sfx init — both idempotent, StrictMode-safe.
@@ -1179,6 +1192,7 @@ export default function App() {
         <>
           <ReviewBanner />
           <Workspace root={root} view={view} />
+          <RosterBar root={root} />
           <EventLog root={root} />
         </>
       )}

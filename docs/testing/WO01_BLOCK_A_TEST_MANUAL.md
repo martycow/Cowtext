@@ -452,6 +452,182 @@ from earlier sections are left alone.
     Remove-Item -Recurse -Force C:\_cowlens, C:\_cowsmall, C:\_cowbudget, C:\_cowreview
     ```
 
+## Block F — Agents MVP
+
+Extends WO01 Block F (`docs/design/WO01_BLOCK_F_CONTRACT.md`, T7–T10 + barn tie-in): "Add agent"
+spawns a real headless `claude -p --output-format stream-json --verbose` child per turn in a
+chosen folder, the bottom **roster strip** shows one card per session, clicking a card opens the
+Inspector's **Agent panel** (transcript, real token usage, a Queue box), **Kill**/**Restart**
+manage the child process tree, and one existing calf sprite in the barn tracks each live session.
+Written against the code as of 2026-08-18 (`src-tauri/src/sessions.rs`, `src-tauri/src/
+worktree.rs`, `src/store/sessions.ts`, `src/sessions/api.ts`, `src/sessions/RosterBar.tsx`,
+`src/sessions/AgentPanel.tsx`, `src/sessions/AddAgentDialog.tsx`, `src/scene/agentHerd.ts`).
+Uses a **fresh throwaway git repository**, not a rescan-only markdown folder — agent sessions
+require `worktree_check(cwd).isRepo == true`. **This section spawns real Claude Code child
+processes and consumes real API usage** — keep prompts to short, cheap one-liners as scripted
+below.
+
+**Time budget:** ~20 min (most of it is waiting on real `claude` turns).
+
+64. **Make a throwaway git project:**
+
+    ```powershell
+    mkdir C:\_cowagents
+    cd C:\_cowagents
+    git init -q
+    git config user.email "test@test.com"
+    git config user.name "test"
+    Set-Content C:\_cowagents\README.md "# scratch repo for agent sessions"
+    git add README.md
+    git commit -q -m "init"
+    cd C:\
+    ```
+
+    *Expected:* a one-commit git repo at `C:\_cowagents`.
+65. In Cowtext, press **Open folder** and pick `C:\_cowagents`. *Expected:* the file rail reads
+    **`1 markdown files`** (`README.md`), canvas empty. (The git repo underneath is what this
+    section needs — the graph itself is unused.)
+
+### F1. Add-agent flow — non-repo refusal, main-working-copy nudge, worktree creation
+
+66. Look at the bottom of the window. *Expected:* a new **38 px roster strip** between the
+    workspace and the Event log panel, reading **`no agents running`** in muted mono text, with
+    an **Add agent** button (`+` icon) to its left.
+67. Click **Add agent**. *Expected:* a modal titled **Add agent** opens, initial focus on
+    **Cancel**; fields top to bottom are **Agent file** (select, default `(none)`), **Name**
+    (text input, placeholder `agent name`), **Folder** (read-only path field + **Browse…**
+    button); the footer reads `spawns a real Claude Code session in that folder`.
+68. Click **Browse…** and pick a **non-git folder** (e.g. run `mkdir C:\_cownotrepo` first and
+    pick that). *Expected:* after a brief `checking…`, a red line reads exactly
+    **`not a git repository`** and the **Add** button stays disabled.
+69. Click **Browse…** again and pick `C:\_cowagents` itself (the repo's **main working copy**,
+    not a linked worktree). Type `scout` into **Name**. *Expected:* an amber line reads
+    **`repo main working copy — a separate worktree is recommended`** with a
+    **Create worktree…** button under it, and **Add** becomes enabled anyway — the main-working-
+    copy case is a nudge, not a hard block (contract §8.3).
+70. Click **Create worktree…**. *Expected:* a second folder picker opens titled
+    **New worktree folder** — pick a new, not-yet-existing path, e.g. `C:\_cowagents-wt1`.
+    *Expected after picking:* a branch-name input appears pre-filled with **`agent/scout`** (the
+    slugified Name) plus a **Create** button.
+71. Click **Create**. *Expected:* the button briefly reads `· · ·`, then the Folder field
+    re-points to `C:\_cowagents-wt1` and a green line reads **`worktree · agent/scout`**.
+
+### F2. Spawn, roster status, transcript, real usage
+
+72. Click **Add**. *Expected:* the dialog closes immediately; a new roster card appears (avatar
+    seeded on `scout`, name `scout`, amber blinking status dot) and the right panel opens on this
+    session automatically — the Inspector's **first** branch, ahead of any node/edge selection
+    (contract §8.2).
+73. Watch the roster card and the panel's status pill. *Expected, within a few seconds and with
+    no reload:* status flips **working** (amber, blinking) → **idle** (muted grey, no blink) once
+    the boot turn's ready-line reply arrives.
+74. Read the panel's transcript. *Expected:* at least one plain text line carrying the agent's
+    short ready confirmation (the boot prompt's `BOOT_PROMPT_TAIL` reply, contract §6.3).
+75. Look at the usage line just under the cwd/agent-file meta. *Expected:* **not**
+    `no usage yet` — a line shaped `↑<N> ↓<N> · <N> tok · <N> turns`; hovering it shows the
+    tooltip **`reported by claude, not an estimate`**.
+
+    ⚠ **Known gap, confirm rather than assume a typo:** the CLI emits a `usage` payload twice
+    per logical turn — once on the streamed assistant text message, once on the final `result`
+    line — and both are non-zero, so the panel (which sums every `usage` event) double-counts:
+    after this single boot turn `turns` reads **`2`**, not `1`, and the token totals are roughly
+    double the turn's real usage. Reproducible outside the app too: pipe a one-line prompt
+    through `claude -p --output-format stream-json --verbose` in any repo and diff the
+    `assistant.message.usage` block against the final `result.usage` block — both present,
+    both non-zero, different `output_tokens`. Record as a known fail, do not chase further here
+    (see the fleet defect report against `src-tauri/src/sessions.rs`'s `map_line` and
+    `src/store/sessions.ts`'s `applyEvent` "usage" case).
+76. Type a one-line prompt in the **Queue** box — `What is 2+2? Reply with just the number.` —
+    and press **Enter**. *Expected:* the textarea clears, status flips to `working`, and within a
+    few seconds a reply appears in the transcript; the usage line's `turns` count jumps again
+    (by 2, not 1, per the same gap noted in step 75).
+
+### F3. Queue while busy
+
+77. Immediately after sending in step 76, while status still reads `working`, type a second
+    prompt (`What is 3+3? Reply with just the number.`) and press **Enter** right away.
+    *Expected:* it is **not** sent immediately — helper text **`queued: 1`** appears next to
+    **Send** — and once the session returns to `idle` the queued prompt sends itself; its reply
+    appears in the transcript without touching **Send** again.
+
+### F4. Barn tie-in
+
+78. Switch to the **Barn** view (top view switcher). *Expected:* the `scout` Agent panel is
+    **still open** — barn view also mounts the Inspector while a session is selected (§8.2). One
+    calf sprite stands near the developer's desk with the **same look/colors** as `scout`'s
+    roster-card avatar (both seed on the session name `scout`).
+79. Hover the `scout` calf. *Expected:* the hover label reads **`scout — idle`** (or
+    `scout — working: <Tool>` if a turn happens to be mid-flight) — never a generic
+    `Calf — subagent #n` label.
+
+### F5. Kill — verify no orphan processes
+
+80. Note the running `claude` processes before killing:
+
+    ```powershell
+    Get-Process claude -ErrorAction SilentlyContinue | Select-Object Id, ProcessName
+    ```
+
+    *Expected:* zero or more rows — a turn is one child process, so between turns (status
+    `idle`) there may be none; that alone is not a failure. If the list is empty, send one more
+    quick prompt and move to the next step while `scout` is still `working`.
+81. In the panel, click **Kill**. *Expected:* the button's label swaps in place to
+    **`Confirm kill?`** (danger red) — nothing has happened yet.
+82. Wait 5 s without clicking anything else. *Expected:* the button reverts to plain **Kill** —
+    the 4 s auto-disarm fired.
+83. Click **Kill** to re-arm, then immediately click **Confirm kill?**. *Expected:* the roster
+    card dims to `opacity-60` with a dismiss **X**, its dot stops animating, and the panel's
+    Queue box disables with placeholder `session has exited`.
+84. Verify no descendants survive:
+
+    ```powershell
+    Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'claude|node' }
+    ```
+
+    *Expected:* none of the pid(s) noted in step 80 remain (a brand-new unrelated `claude`/`node`
+    process on the machine is fine — the check is "your session's pid is gone", not "the process
+    name never appears"). Switch to **Barn**. *Expected:* the `scout` calf sprite is gone.
+
+### F6. Restart — same worktree, same conversation
+
+85. Click **Restart** on the exited `scout` panel. *Expected:* the button briefly reads `· · ·`,
+    then the roster card returns to full opacity with a working→idle cycle, and the transcript
+    gains a new muted line reading exactly **`— restarted —`**, followed by a fresh ready
+    confirmation — everything above that line (the F2/F3 exchange) is still there.
+86. Ask something that depends on the earlier exchange — `What number did I ask you about
+    earlier?` — and press Enter. *Expected:* the reply references the earlier 2+2/3+3 exchange,
+    proving `--resume <claudeSessionId>` continued the same conversation rather than starting a
+    fresh one (T10 acceptance).
+87. Return to **Barn**. *Expected:* the `scout` calf sprite is back.
+
+### F7. Guardrails — dup-cwd and MAX_SESSIONS
+
+88. Click **Add agent**, pick `C:\_cowagents-wt1` (the folder `scout` is running in) as the
+    Folder. *Expected:* once the worktree check settles, a red line reads exactly
+    **`an agent is already running there`** and **Add** stays disabled, even though the folder
+    checks out as a perfectly valid worktree.
+89. Cancel. Kill `scout` (Kill → Confirm kill?), then add three more short-lived agents in three
+    fresh worktrees off the same repo (repeat F1/F2 with new names/branches, e.g.
+    `C:\_cowagents-wt2/3/4`; boot turn only, skip the Send steps, to limit cost) until **4** are
+    alive at once. *Expected while adding the 4th:* it spawns normally, and the **Add agent**
+    button now renders disabled with title **`agent limit reached (4)`** — clicking it has no
+    effect.
+90. Confirm the roster strip holds all 4 cards via horizontal scroll (`overflow-x-auto`), not by
+    wrapping or clipping. Kill all 4 (F5's Kill → Confirm per card), then re-run:
+
+    ```powershell
+    Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'claude|node' }
+    ```
+
+    *Expected:* no descendant of any of the four sessions remains.
+
+91. Close the app and remove the scratch repo and its worktrees (adjust names to whatever you
+    actually created in F7):
+
+    ```powershell
+    Remove-Item -Recurse -Force C:\_cowagents, C:\_cowagents-wt1, C:\_cowagents-wt2, C:\_cowagents-wt3, C:\_cowagents-wt4, C:\_cownotrepo -ErrorAction SilentlyContinue
+    ```
+
 ## Sign-off
 
 | Section | Pass/Fail | Notes |
@@ -462,5 +638,6 @@ from earlier sections are left alone.
 | D Regression | | |
 | Block B Token budget | | |
 | Block C Disk-change review | | |
+| Block F Agents MVP | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________

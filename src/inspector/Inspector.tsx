@@ -31,6 +31,8 @@ import type { AgentDoc } from "../agents/types";
 import { AgentEditor, ChipEditor } from "../agents/AgentEditor";
 import { SkillEditor } from "../agents/SkillEditor";
 import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
+import { useSessionsStore } from "../store/sessions";
+import { AgentPanel } from "../sessions/AgentPanel";
 import { CodeMirrorEditor } from "./CodeMirrorEditor";
 import { ScanOverlay } from "../ui/ScanOverlay";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -1473,6 +1475,7 @@ export function Inspector({ root }: { root: string }) {
   const tab = useInspectorTabStore((s) => s.tab);
   const agentsSel = useAgentsStore((s) => s.selection);
   const taskItem = useTasksStore((s) => s.selected);
+  const sessionSelectedId = useSessionsStore((s) => s.selectedId);
   const rightPanelWidth = useSettingsStore((s) => s.rightPanelWidth);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." Both reveal entry points in this panel
@@ -1501,7 +1504,9 @@ export function Inspector({ root }: { root: string }) {
       style={{ width: rightPanelWidth }}
     >
       <ScanOverlay caption="rescanning" />
-      {node !== undefined ? (
+      {sessionSelectedId !== null ? (
+        <AgentPanel />
+      ) : node !== undefined ? (
         <>
           <InspectorHeader node={node} root={root} onRevealError={setRevealError} />
           {revealError !== null && (

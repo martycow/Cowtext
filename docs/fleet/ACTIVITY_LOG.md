@@ -2,6 +2,20 @@
 
 Maintained by **project-manager**. One brief entry per agent per session; newest on top. Target: keep the three most recent sessions here, older entries roll to `docs/_archive/ACTIVITY_LOG_2026H1.md` — note that `docs/_archive/` is write-frozen by the docs-guard hook, so rolling entries out needs Marty to lift the guard for that move (the 2026-08-16 Phase 2 entry below is queued to roll first).
 
+## 2026-08-18 — WO01 Block B→C→F (Ultracode work order, blocks B+C+F accepted, D/E pending)
+
+Directed by the tech-lead under the `/ultracode` dispatcher; pre-approved by Marty after accepting each block (2026-08-18). Frozen contract: `docs/design/WO01_BLOCK_F_CONTRACT.md`. App version stays **v0.1.0** (first public cut). All gates green: `npm run build` PASS, `npm run lint` 0 errors, `cargo clippy -- -D warnings` PASS, `cargo test` green (88 baseline + new WO01 tests), invoke contract verified **43 → 50** (six sessions commands + `agent_session_list`). Manual: `docs/testing/WO01_BLOCK_A_TEST_MANUAL.md` appended with Block B/C/F sections covering token budget UI, review queue with side-by-side diff, and agent MVP headless spawn.
+
+| Block | Summary | Status |
+|---|---|---|
+| B | Token budget: per-file chips in TopBar pinned context, per-target budget bars in CompileModal, 150-line/2k-token warn consts. Committed `f499ccf`. | ✅ Done |
+| C | Review queue: selfWrite suppression, snapshot UI, banner + side-by-side diff view. One MAJOR `skipCurrent` defect found in audit and FIXED before landing. Committed `306f56a`. | ✅ Done |
+| F | Agents MVP (T7–T10 from WO spec): spawn real Claude Code headless child (resume-loop only, no pty), roster bar (avatar/name/status dot/tool), agent read-only panel (transcript stream, real token usage, queue prompt), kill/restart process-tree. Three major issues handled per contract (spawn channel decision not ratified, portable-pty deferred D1, contextWindow frozen/empty D7). New event `agent://event {id,kind,status?,tool?,text?,usage?,ts}`. Uncommitted; awaits review walk. | 🔲 Pending review |
+
+**Defects found** (process-tree kill audit): 2 found, 0 remaining. Block C's skipCurrent race FIXED before landing.
+
+**Next in protocol**: Marty reviews WO01 B+C+F manual and gates; approve for immediate v0.1.0 cut or note blockers. Blocks D/E blocked on "go N#" approval gate.
+
 ## 2026-08-18 — Task-Board batch (primary agent dispatcher + 3 lanes, no Workflow)
 
 Marty's 7-item batch on top of WO01 (Block A still awaiting his review). Contract: `docs/design/TASKBOARD_BATCH_CONTRACT.md`. Gates green: build, lint 0 errors, clippy `-D warnings`, cargo test **196/196** (+27), invoke contract **42/42**. Manual: `docs/testing/TASKBOARD_BATCH_TEST_MANUAL.md` (18 min). NOT committed at entry time.
@@ -274,3 +288,11 @@ App version after session: **v0.0.0003** (set by Task Manager). All automated ch
 | 2026-08-18 15:18 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src-tauri/src/project.rs, src-tauri/src/watcher.rs, src-tauri/src/watcher/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/HooksModal.tsx, src/inspector/Inspector.tsx, src/store/events.ts, src/store/graph.ts, src/store/project.ts, src/ui/diff.ts |
 | 2026-08-18 15:28 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/project.rs, src-tauri/src/watcher.rs, src-tauri/src/watcher/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/HooksModal.tsx, src/inspector/Inspector.tsx, src/store/events.ts, src/store/graph.ts, src/store/project.ts, src/ui/diff.ts |
 | 2026-08-18 15:29 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/project.rs, src-tauri/src/watcher.rs, src-tauri/src/watcher/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/HooksModal.tsx, src/inspector/Inspector.tsx, src/store/events.ts, src/store/graph.ts, src/store/project.ts, src/ui/diff.ts |
+| 2026-08-18 15:40 | tech-lead | docs/INPUT_PROMPT.md |
+| 2026-08-18 15:47 | tech-barn | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 15:51 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src-tauri/src/assemble.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:19 | tech-general | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:27 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:31 | tech-general | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:33 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:36 | project-manager | CLAUDE.md, docs/INPUT_PROMPT.md, docs/TERMINOLOGY.md, docs/fleet/ACTIVITY_LOG.md, docs/tasks/BUGS.md, docs/tasks/TASKS.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |

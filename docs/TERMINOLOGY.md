@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (43) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (50) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/compile.rs` | Three adapters (claude/agents/cursor), validation, topological order, write allowlist |
@@ -30,7 +30,7 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (43)
+## Invoke commands (50)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -38,14 +38,16 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Group | Commands |
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
-| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`, `agent_convert`
-· tasks: `tasks_scan`, `task_toggle`, `task_update`, `task_append`, `task_move` |
+| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
 | compile | `compile_preview`, `compile_write` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
 | settings | `read_app_settings`, `write_app_settings` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
 | handoff | `handoff_generate`, `handoff_write` |
+| tasks | `tasks_scan`, `task_toggle`, `task_append`, `task_move`, `task_update` |
+| worktree | `worktree_check`, `worktree_add` |
+| sessions | `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list` |
 
 ## Events
 
@@ -54,6 +56,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | `barn://event` | `BarnEvent { kind, filePath?, sessionId, ts }` | hooks_server → emit → `useEventsStore.pushEvent` → canvas pulse + barn animation |
 | `assemble://status` | `AssembleProgress { nodeId, mode, status, error }` | assemble.rs → emit → `useGraphStore.setAssembleStatus` |
 | `fs://change` | `FsChange { relPath, modifiedMs, sizeBytes, kind }` | watcher.rs → emit → `useProjectStore.applyFsChange` → lens updates |
+| `agent://event` | `{ id, kind, status?, tool?, text?, usage?, ts }` | sessions.rs (headless resume-loop) → emit → event stream, inspector transcript, status badges |
 
 One-way pipeline: Rust emits → Tauri `emit` → Zustand store → both views react.
 React Flow and PixiJS never import each other.
@@ -64,9 +67,11 @@ React Flow and PixiJS never import each other.
 |---|---|
 | Memory Node | Graph node backed by a real `.md` file; file on disk is content source of truth |
 | Agent file | A `.md` file in `.claude/agents/` defining a Claude Code agent with role/skills/priority/influence/duties |
+| Agent session | One headless Claude Code child process spawned by the app (via `agent_session_spawn`), running in a worktree folder, persisting across restarts via sessionId, emitting `agent://event` stream |
 | Skill file | A `.md` file under `.claude/skills/*/SKILL.md` defining a reusable knowledge skill with invoke commands |
 | Sidecar agents.json | Per-project persisted metadata (v1 schema) for agents: nicknames, priority/influence/avatarSeed, skills-attach state, drafts, orphan retention |
 | Named Calf | Subagent sprite in the barn with stable identity across sessions via fnv1a32 hash of sessionId + ordinal, displaying unique coat pattern + accent role + tiny prop |
+| Roster bar | Bottom strip showing all live agent sessions (avatars, names, status dots, current tool); click a card to open agent panel with transcript stream and real token usage |
 | Identity hash | fnv1a32(seed) → avatar patch grid (8×8 mirrored), accent role (7 options via h2 % 7), calf patch bits (2–7 via popcount), visual identity tied to agent/calf name/type |
 | Node role | One of seven: `agent` (ex-`persona`; may be backed by `.claude/agents/*.md`), `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` |
 | Edge kinds | `imports` (inline), `references` (soft link), `conditional` (glob/NL condition), `sequence` (order only) |
