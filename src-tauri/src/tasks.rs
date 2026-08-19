@@ -30,8 +30,11 @@ mod tests;
 
 use crate::project::{checked_root, resolve_within_root, write_atomic};
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The five convention file names, in board-column order — also the order
 /// `tasks_scan` reports them in. **Positional coupling (WO02 §7.11)**: TS's
@@ -76,6 +79,18 @@ pub struct TaskItem {
     /// Scan-only: first ISO date / `Q1`..`Q4` / `Phase <n>` token found
     /// anywhere in the raw line, `None` if there isn't one.
     pub when: Option<String>,
+    /// Stable task id lifted out of the Tags cell (WO06 §3.1). `None` until
+    /// minted via [`task_id_ensure`].
+    pub task_id: Option<String>,
+    /// Stable ids this task depends on, lifted from `needs:` tokens. Order
+    /// as written (WO06 §3.1).
+    pub depends_on: Vec<String>,
+    /// SCAN-ONLY: any dependency resolves to a task whose status != "done",
+    /// or this task's own id participates in a reported cycle. ALWAYS
+    /// `false` from the single-file commands (toggle/update/append/move/
+    /// id_ensure/depends_add/depends_remove) — they cannot see the other
+    /// four files. Only [`tasks_scan`] computes it (WO06 §3.3 D1/D2).
+    pub blocked: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -91,6 +106,37 @@ pub struct TaskFileInfo {
 pub struct TasksScan {
     pub files: Vec<TaskFileInfo>,
     pub tasks: Vec<TaskItem>,
+    pub dag: TaskDag,
+}
+
+/// One task-id's dependency that resolves to no known task (WO06 §3.3 D1):
+/// reported, never fatal, and never blocking on its own — a typo must not
+/// deadlock the board. `task_id` is always a *stable* id (§3.1 R5 grammar);
+/// a task with no `id:` of its own is never represented here (O1 — §3.1 R6
+/// forbids substituting the volatile `"<relPath>#<line>"` locator for it),
+/// even though its own `depends_on` may still contain an unresolved target.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedDep {
+    pub task_id: String,
+    pub depends_on: String,
+}
+
+/// The task dependency DAG, derived at scan time over every task's already-
+/// lifted `task_id`/`depends_on` (WO06 §3.3). Never persisted — dependencies
+/// live in the markdown and nowhere else (D5).
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDag {
+    /// Each entry is a task-id cycle path with the first id repeated last —
+    /// same convention as `compile.rs`'s `ValidationError::Cycle` (D4).
+    /// Mirrors `compile.rs`/`lint.rs`'s own cycle detectors, which likewise
+    /// report at most one concrete cycle per pass, found by the identical
+    /// deterministic (smallest-id-first) walk — this is NOT one entry per
+    /// disjoint cycle in the graph.
+    pub cycles: Vec<Vec<String>>,
+    pub duplicate_ids: Vec<String>,
+    pub unresolved: Vec<UnresolvedDep>,
 }
 
 /// The full editable field set for [`task_update`] (contract §R3). All
@@ -434,6 +480,87 @@ fn split_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
+// ---------------------------------------------------------------------
+// Reserved tag namespace — stable ids + dependencies (WO06 §3.1)
+// ---------------------------------------------------------------------
+
+/// Id grammar (§3.1 R5): `^t-[0-9a-z]{6}$`. Nothing else is an id — this is
+/// the single gate that decides whether an `id:`/`needs:`-shaped tag is
+/// honored as a reserved token or left as an ordinary user tag.
+fn is_valid_task_id_str(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 8
+        && bytes[0] == b't'
+        && bytes[1] == b'-'
+        && bytes[2..].iter().all(|&b| b.is_ascii_digit() || b.is_ascii_lowercase())
+}
+
+/// Lifts `id:`/`needs:` reserved tokens (§3.1 R1/R2) out of a raw tag list.
+/// Returns `(remaining_user_tags, task_id, depends_on)`. Only a token whose
+/// suffix matches the strict id grammar is recognized as reserved — an
+/// `id:`/`needs:`-prefixed word that ISN'T a well-formed id is left as an
+/// ordinary user tag (R5: "nothing else is an id"). At most one `id:` is
+/// honored (first-wins, matching this file's convention-path search); every
+/// well-formed `id:`/`needs:` token disappears from the returned tags
+/// regardless (R2: "`TaskItem.tags` never contains a reserved token").
+/// `depends_on` keeps write order (duplicates included — write-time
+/// dedup is a separate concern from read-time lifting).
+fn lift_reserved_tokens(tags: Vec<String>) -> (Vec<String>, Option<String>, Vec<String>) {
+    let mut out_tags = Vec::with_capacity(tags.len());
+    let mut task_id: Option<String> = None;
+    let mut depends_on = Vec::new();
+    for tag in tags {
+        if let Some(id) = tag.strip_prefix("id:") {
+            if is_valid_task_id_str(id) {
+                if task_id.is_none() {
+                    task_id = Some(id.to_string());
+                }
+                continue;
+            }
+        } else if let Some(dep) = tag.strip_prefix("needs:") {
+            if is_valid_task_id_str(dep) {
+                depends_on.push(dep.to_string());
+                continue;
+            }
+        }
+        out_tags.push(tag);
+    }
+    (out_tags, task_id, depends_on)
+}
+
+/// Composes the write-time tags cell/tag-run content in the frozen order
+/// (§3.1 R4): `id:` first, then each `needs:` sorted byte-order, then
+/// `user_tags` in their existing order. Reserved tokens are re-emitted from
+/// `task_id`/`depends_on` — the already-parsed source — never from a patch.
+fn compose_reserved_and_user_tags(
+    task_id: Option<&str>,
+    depends_on: &[String],
+    user_tags: &[String],
+) -> Vec<String> {
+    let mut out = Vec::with_capacity(1 + depends_on.len() + user_tags.len());
+    if let Some(id) = task_id {
+        out.push(format!("id:{id}"));
+    }
+    let mut needs: Vec<&String> = depends_on.iter().collect();
+    needs.sort();
+    for d in needs {
+        out.push(format!("needs:{d}"));
+    }
+    out.extend(user_tags.iter().cloned());
+    out
+}
+
+/// `patch.tags`, trimmed and empty-filtered (mirrors the pre-WO06 write
+/// rule for both regenerate functions), defaulting to empty when the patch
+/// clears/omits tags.
+fn cleaned_patch_tags(patch: &TaskPatch) -> Vec<String> {
+    patch
+        .tags
+        .as_ref()
+        .map(|tags| tags.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+        .unwrap_or_default()
+}
+
 fn build_table_task(
     rel_path: &str,
     line_no: usize,
@@ -443,7 +570,8 @@ fn build_table_task(
     section: Option<String>,
 ) -> Option<TaskItem> {
     let name = cell_at(cells, map.name)?;
-    let tags = cell_at(cells, map.tags).map(|s| split_tags(&s)).unwrap_or_default();
+    let raw_tags = cell_at(cells, map.tags).map(|s| split_tags(&s)).unwrap_or_default();
+    let (tags, task_id, depends_on) = lift_reserved_tokens(raw_tags);
     let bucket = bucket_for_status_input(cell_at(cells, map.status).as_deref().unwrap_or(""));
     // WO02 §2.4: bucket when the cell text normalizes, otherwise the raw
     // trimmed cell text — tolerant, never drops an unrecognized value.
@@ -464,6 +592,9 @@ fn build_table_task(
         status: Some(bucket.to_string()),
         section,
         when: extract_when(raw_line),
+        task_id,
+        depends_on,
+        blocked: false,
     })
 }
 
@@ -565,6 +696,51 @@ fn marker_status(check_char: char) -> Option<(bool, &'static str)> {
     }
 }
 
+/// Strips well-formed `#id:`/`#needs:` words out of a checklist item's free
+/// text, BEFORE `split_name_desc`/`extract_tokens` ever see it (D7 fix).
+/// Without this, a token minted by [`task_id_ensure`] — or hand-typed by a
+/// user — is indistinguishable from prose to `split_name_desc`'s
+/// dash/period boundary search: on a line with no boundary it becomes part
+/// of `name`, on a line with an earlier `.` it becomes part of
+/// `description`; either way `regenerate_checklist_line`/
+/// `compose_checklist_text` then re-emit the SAME token from the
+/// separately-tracked `task_id`/`depends_on` field, duplicating it on every
+/// subsequent write (and, via [`task_move`]'s reparse-then-recompose path,
+/// on every subsequent move too). Mirrors [`lift_reserved_tokens`]'s
+/// grammar gate and first-wins `id:` rule exactly (R2/R5), just applied to
+/// whitespace-separated words in raw text instead of an already-split tag
+/// list. Returns the original `text` unchanged (not just equal — the very
+/// same allocation-free borrow) when nothing was stripped, so a line with
+/// no reserved token gets byte-identical treatment to before this fix.
+fn strip_reserved_tokens(text: &str) -> (String, Option<String>, Vec<String>) {
+    let mut task_id: Option<String> = None;
+    let mut depends_on = Vec::new();
+    let mut stripped_any = false;
+    let mut words: Vec<&str> = Vec::new();
+    for word in text.split_whitespace() {
+        if let Some(tag) = word.strip_prefix('#') {
+            if let Some(id) = tag.strip_prefix("id:") {
+                if is_valid_task_id_str(id) {
+                    if task_id.is_none() {
+                        task_id = Some(id.to_string());
+                    }
+                    stripped_any = true;
+                    continue;
+                }
+            } else if let Some(dep) = tag.strip_prefix("needs:") {
+                if is_valid_task_id_str(dep) {
+                    depends_on.push(dep.to_string());
+                    stripped_any = true;
+                    continue;
+                }
+            }
+        }
+        words.push(word);
+    }
+    let clean = if stripped_any { words.join(" ") } else { text.to_string() };
+    (clean, task_id, depends_on)
+}
+
 fn parse_checklist_line(
     rel_path: &str,
     line_no: usize,
@@ -581,8 +757,12 @@ fn parse_checklist_line(
     if text.is_empty() {
         return None;
     }
-    let (name, description) = split_name_desc(text);
-    let (tags, agent, priority) = extract_tokens(text);
+    // D7: reserved tokens are lifted out of the prose surface BEFORE the
+    // name/description boundary search and the ordinary-tag scan, not just
+    // out of the returned `tags` list — see `strip_reserved_tokens`.
+    let (clean_text, task_id, depends_on) = strip_reserved_tokens(text);
+    let (name, description) = split_name_desc(&clean_text);
+    let (tags, agent, priority) = extract_tokens(&clean_text);
     Some(TaskItem {
         id: format!("{rel_path}#{line_no}"),
         rel_path: rel_path.to_string(),
@@ -598,6 +778,9 @@ fn parse_checklist_line(
         status: Some(status_bucket.to_string()),
         section,
         when: extract_when(line),
+        task_id,
+        depends_on,
+        blocked: false,
     })
 }
 
@@ -711,9 +894,20 @@ fn leading_whitespace(line: &str) -> String {
 }
 
 /// Regenerates a checklist line canonically (contract §R3):
-/// `- [m] Name — description #tag… @agent P1`. Phase is not encoded here —
-/// it's a table-only field. `name` is assumed already validated non-empty.
-fn regenerate_checklist_line(indent: &str, name: &str, patch: &TaskPatch) -> String {
+/// `- [m] Name — description #id:… #needs:… #tag… @agent P1`. Phase is not
+/// encoded here — it's a table-only field. `name` is assumed already
+/// validated non-empty. `task_id`/`depends_on` come from the *current*
+/// parsed item, never from `patch` (WO06 §3.1 R4 — `TaskPatch` cannot carry
+/// reserved tokens at all, see [`task_update`]'s validation), so they
+/// survive a full-field rewrite even when `patch.tags` clears every user
+/// tag.
+fn regenerate_checklist_line(
+    indent: &str,
+    name: &str,
+    patch: &TaskPatch,
+    task_id: Option<&str>,
+    depends_on: &[String],
+) -> String {
     let bucket = derive_status_bucket(patch.status.as_deref(), patch.done);
     let marker = marker_for_bucket(bucket);
     let mut line = format!("{indent}- [{marker}] {name}");
@@ -722,14 +916,10 @@ fn regenerate_checklist_line(indent: &str, name: &str, patch: &TaskPatch) -> Str
         line.push_str(" — ");
         line.push_str(desc);
     }
-    if let Some(tags) = &patch.tags {
-        for tag in tags {
-            let tag = tag.trim();
-            if !tag.is_empty() {
-                line.push_str(" #");
-                line.push_str(tag);
-            }
-        }
+    let user_tags = cleaned_patch_tags(patch);
+    for tag in compose_reserved_and_user_tags(task_id, depends_on, &user_tags) {
+        line.push_str(" #");
+        line.push_str(&tag);
     }
     if let Some(agent) = patch.agent.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         line.push_str(" @");
@@ -821,20 +1011,26 @@ fn set_cell(cells: &mut [String], idx: Option<usize>, value: Option<&str>) {
 /// Regenerates a table row: only header-mapped cells are replaced (contract
 /// §R3), unmapped cells and the row's leading/trailing pipe style are
 /// preserved byte-exact. `name` is assumed already validated non-empty.
-fn regenerate_table_row(lines: &[String], row_idx: usize, name: &str, patch: &TaskPatch) -> Result<String, String> {
+/// `task_id`/`depends_on` come from the *current* parsed item (WO06 §3.1
+/// R4), composed into the Tags cell ahead of `patch`'s user tags — see
+/// [`regenerate_checklist_line`] for the same rule on the checklist side.
+fn regenerate_table_row(
+    lines: &[String],
+    row_idx: usize,
+    name: &str,
+    patch: &TaskPatch,
+    task_id: Option<&str>,
+    depends_on: &[String],
+) -> Result<String, String> {
     let str_lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     let map = table_at(&str_lines, row_idx).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
     let (leading, trailing, mut cells) =
         table_row_cells_raw(&lines[row_idx]).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
 
     let bucket = derive_status_bucket(patch.status.as_deref(), patch.done);
-    let tags_joined = patch.tags.as_ref().map(|tags| {
-        tags.iter()
-            .map(|t| t.trim())
-            .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ")
-    });
+    let user_tags = cleaned_patch_tags(patch);
+    let composed_tags = compose_reserved_and_user_tags(task_id, depends_on, &user_tags);
+    let tags_joined = if composed_tags.is_empty() { None } else { Some(composed_tags.join(", ")) };
 
     // WO02 §2.4: bucket when the patch value normalizes, else the raw
     // trimmed value.
@@ -878,20 +1074,24 @@ fn pad_cell(value: Option<&str>) -> String {
 }
 
 /// Builds one canonical-table data row (WO02 §2.3/§7.8 column order: Name,
-/// Status, Priority, Tags, Agent, Description). Status is always `"new"` —
-/// there is still no append-with-status primitive.
+/// Status, Priority, Tags, Agent, Description). `task_append` always passes
+/// `status = "new"` — there is still no append-with-status primitive
+/// (WO02); `task_move` (WO06 O3) passes the source item's own bucket
+/// through instead of hardcoding it.
+#[allow(clippy::too_many_arguments)]
 fn canonical_table_row(
     name: &str,
     description: Option<&str>,
     priority: Option<&str>,
     tags: &[String],
     agent: Option<&str>,
+    status: &str,
 ) -> String {
     let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
     format!(
         "|{}|{}|{}|{}|{}|{}|",
         pad_cell(Some(name)),
-        pad_cell(Some("new")),
+        pad_cell(Some(status)),
         pad_cell(priority),
         pad_cell(tags_joined.as_deref()),
         pad_cell(agent),
@@ -904,6 +1104,7 @@ fn canonical_table_row(
 /// block appended after a blank line when `existing` has content but no
 /// tasks. Returns the new full content and the 1-based line the new row
 /// landed on.
+#[allow(clippy::too_many_arguments)]
 fn create_canonical_table(
     existing: &str,
     rel_path_for_header: &str,
@@ -912,10 +1113,11 @@ fn create_canonical_table(
     priority: Option<&str>,
     tags: &[String],
     agent: Option<&str>,
+    status: &str,
 ) -> (String, usize) {
     const HEADER: &str = "| Name | Status | Priority | Tags | Agent | Description |";
     const SEP: &str = "|---|---|---|---|---|---|";
-    let row = canonical_table_row(name, description, priority, tags, agent);
+    let row = canonical_table_row(name, description, priority, tags, agent, status);
 
     let mut content = existing.to_string();
     if content.is_empty() {
@@ -979,7 +1181,9 @@ fn last_named_table(lines: &[&str]) -> Option<(ColumnMap, usize, bool, bool, usi
 /// Builds a new data row to insert into an existing table (WO02 §2.3 case
 /// 1): mapped columns are filled from the parsed fields, every other cell
 /// (unmapped, or a mapped field with no value) is a single space — mirrors
-/// [`set_cell`]'s existing "cleared field" convention.
+/// [`set_cell`]'s existing "cleared field" convention. `status` is the
+/// literal `"new"` from `task_append`, or the source item's own bucket from
+/// `task_move` (WO06 O3 — a moved row must not be forced back to `"new"`).
 #[allow(clippy::too_many_arguments)]
 fn build_table_append_row(
     map: &ColumnMap,
@@ -991,6 +1195,7 @@ fn build_table_append_row(
     tags: &[String],
     agent: Option<&str>,
     priority: Option<&str>,
+    status: &str,
 ) -> String {
     let mut cells = vec![" ".to_string(); cell_count];
     let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
@@ -999,7 +1204,7 @@ fn build_table_append_row(
     set_cell(&mut cells, map.tags, tags_joined.as_deref());
     set_cell(&mut cells, map.agent, agent);
     set_cell(&mut cells, map.priority, priority);
-    set_cell(&mut cells, map.status, Some("new"));
+    set_cell(&mut cells, map.status, Some(status));
 
     let mut out = String::new();
     if leading {
@@ -1024,9 +1229,18 @@ fn build_table_append_row(
 /// 3. Else, a fresh canonical table is created ([`create_canonical_table`]).
 ///
 /// Returns the new full content and the 1-based line the item landed on.
+///
+/// `task_append` never mints an id and takes no dependency-graph edge from
+/// free text (§3.1 "No auto-mint") — any `#id:t-xxxxxx`/`#needs:t-xxxxxx`-
+/// shaped word a user happens to type into the table-row-building path is
+/// silently dropped rather than accidentally becoming a real reserved
+/// token. This does not extend to the checklist-append branch below, which
+/// (like every token shape today, not just the new reserved ones) copies
+/// `text` verbatim — an extant, unmodified behavior, not a WO06 regression.
 fn write_task_text(existing: &str, rel_path_for_header: &str, text: &str) -> (String, usize) {
     let (name, description) = split_name_desc(text);
-    let (tags, agent, priority) = extract_tokens(text);
+    let (raw_tags, agent, priority) = extract_tokens(text);
+    let (tags, _dropped_id, _dropped_deps) = lift_reserved_tokens(raw_tags);
 
     let lines: Vec<&str> = existing.split('\n').collect();
     if let Some((map, anchor, leading, trailing, cell_count)) = last_named_table(&lines) {
@@ -1040,6 +1254,7 @@ fn write_task_text(existing: &str, rel_path_for_header: &str, text: &str) -> (St
             &tags,
             agent.as_deref(),
             priority.as_deref(),
+            "new",
         );
         let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
         let insert_at = anchor + 1;
@@ -1061,6 +1276,7 @@ fn write_task_text(existing: &str, rel_path_for_header: &str, text: &str) -> (St
         priority.as_deref(),
         &tags,
         agent.as_deref(),
+        "new",
     )
 }
 
@@ -1107,8 +1323,11 @@ fn compose_checklist_text(
 /// checklist- and table-sourced items already have them (from [`parse_tasks`]),
 /// so tags/agent/priority survive a move regardless of the source's shape.
 /// The checklist-target case (2) composes a fresh line via
-/// [`compose_checklist_text`]; status is always `"new"` in every case —
-/// mirroring [`task_append`]'s "no append-with-status primitive".
+/// [`compose_checklist_text`]. **WO06 O3**: `status` is the source item's
+/// own bucket (not hardcoded `"new"` — a moved `done` row must arrive
+/// `done`), and `task_id`/`depends_on` are re-composed into the tags ahead
+/// of `tags` in every branch (§3.1 R4 — otherwise moving a linked task
+/// silently orphans its tasklinks entry).
 #[allow(clippy::too_many_arguments)]
 fn write_task_fields(
     existing: &str,
@@ -1118,11 +1337,15 @@ fn write_task_fields(
     tags: &[String],
     agent: Option<&str>,
     priority: Option<&str>,
+    status: &str,
+    task_id: Option<&str>,
+    depends_on: &[String],
 ) -> (String, usize) {
+    let composed_tags = compose_reserved_and_user_tags(task_id, depends_on, tags);
     let lines: Vec<&str> = existing.split('\n').collect();
     if let Some((map, anchor, leading, trailing, cell_count)) = last_named_table(&lines) {
         let row = build_table_append_row(
-            &map, leading, trailing, cell_count, name, description, tags, agent, priority,
+            &map, leading, trailing, cell_count, name, description, &composed_tags, agent, priority, status,
         );
         let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
         let insert_at = anchor + 1;
@@ -1132,12 +1355,413 @@ fn write_task_fields(
 
     let existing_tasks = parse_tasks(rel_path_for_header, existing);
     if !existing_tasks.is_empty() {
-        let text = compose_checklist_text(name, description, tags, agent, priority);
-        let raw_line = format!("- [ ] {text}");
+        let text = compose_checklist_text(name, description, &composed_tags, agent, priority);
+        let marker = marker_for_bucket(status);
+        let raw_line = format!("- [{marker}] {text}");
         return append_raw_line(existing, rel_path_for_header, &raw_line);
     }
 
-    create_canonical_table(existing, rel_path_for_header, name, description, priority, tags, agent)
+    create_canonical_table(existing, rel_path_for_header, name, description, priority, &composed_tags, agent, status)
+}
+
+// ---------------------------------------------------------------------
+// Whole-board scan (WO06 §3.1/§3.3) — id collisions, the dependency DAG,
+// and the surgical tag-only write path shared by task_id_ensure /
+// task_depends_add / task_depends_remove.
+// ---------------------------------------------------------------------
+
+/// Reads and parses every convention file that currently exists,
+/// concatenated in [`CONVENTION_NAMES`] order. Shared by [`tasks_scan`]
+/// (which also needs per-file [`TaskFileInfo`], computed separately) and
+/// the id/dependency mutation commands, which only need the flat list — for
+/// the whole-board id index and cycle check.
+fn scan_all_task_items(root_path: &Path) -> Vec<TaskItem> {
+    let mut tasks = Vec::new();
+    for name in CONVENTION_NAMES {
+        if let Some(rel) = convention_candidates(name).into_iter().find(|c| root_path.join(c).is_file()) {
+            let content = fs::read_to_string(root_path.join(&rel)).unwrap_or_default();
+            tasks.extend(parse_tasks(&rel, &content));
+        }
+    }
+    tasks
+}
+
+/// Every distinct `id:` value already present across all five convention
+/// files (§3.1 minting rule #4's collision scan).
+fn all_existing_task_ids(root_path: &Path) -> HashSet<String> {
+    scan_all_task_items(root_path).into_iter().filter_map(|t| t.task_id).collect()
+}
+
+/// FNV-1a, 64-bit — the whole minting scheme's only "hash", chosen because
+/// it needs no dependency (§3.1 minting rule #3 forbids one).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Base36, lower-case, zero-padded to 6 chars — id grammar `t-[0-9a-z]{6}`
+/// (§3.1 R5).
+fn base36_6(mut n: u64) -> String {
+    const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = [b'0'; 6];
+    for slot in out.iter_mut().rev() {
+        *slot = ALPHABET[(n % 36) as usize];
+        n /= 36;
+    }
+    String::from_utf8(out.to_vec()).expect("ALPHABET is ASCII")
+}
+
+/// Monotonic counter mixed into every mint attempt so two candidates
+/// generated inside the same process, even at the same OS-clock nanosecond,
+/// never collide with each other (§3.1 minting rule #3).
+static MINT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// One mint candidate (§3.1 minting rule #3): `h = fnv1a64(now_nanos ^
+/// process_counter ^ rel_path_bytes ^ line)`, `h % 36^6`, base36 zero-padded
+/// to 6 chars, prefixed `t-`. `attempt` folds into the mix too (rule #4: up
+/// to 16 retries on a collision), so a retry always produces a different
+/// candidate even within the same nanosecond.
+fn mint_task_id(rel_path: &str, line: usize, attempt: u64) -> String {
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let counter = MINT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut buf = Vec::with_capacity(rel_path.len() + 32);
+    buf.extend_from_slice(&now_nanos.to_le_bytes());
+    buf.extend_from_slice(&counter.to_le_bytes());
+    buf.extend_from_slice(&attempt.to_le_bytes());
+    buf.extend_from_slice(rel_path.as_bytes());
+    buf.extend_from_slice(&(line as u64).to_le_bytes());
+    let h = fnv1a64(&buf);
+    format!("t-{}", base36_6(h % 36u64.pow(6)))
+}
+
+/// `(is_whitespace, text)` runs covering the whole line — the basis for
+/// [`splice_checklist_tags`]'s byte-exact non-tag preservation. Only
+/// space/tab count as whitespace here (matches [`leading_whitespace`]).
+fn word_segments(line: &str) -> Vec<(bool, &str)> {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let is_ws = |b: u8| b == b' ' || b == b'\t';
+    let mut segs = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let ws = is_ws(bytes[i]);
+        let start = i;
+        while i < n && is_ws(bytes[i]) == ws {
+            i += 1;
+        }
+        segs.push((ws, &line[start..i]));
+    }
+    segs
+}
+
+/// Splices the `#tag` word-run of a checklist line to exactly `new_tags`
+/// (each rendered `#<tag>`), preserving every other word and every run of
+/// whitespace byte-exact. The new run lands where the first old tag word
+/// was; when the line had no tag words at all, the new run is appended at
+/// the end. Used by [`task_id_ensure`]/[`task_depends_add`]/
+/// [`task_depends_remove`] via [`write_reserved_tags`] — the only three
+/// writers required to touch nothing but the tag run (§3.1 minting rule
+/// #5).
+fn splice_checklist_tags(line: &str, new_tags: &[String]) -> String {
+    let segs = word_segments(line);
+    let tag_positions: Vec<usize> = segs
+        .iter()
+        .enumerate()
+        .filter(|(_, (ws, text))| !ws && text.starts_with('#'))
+        .map(|(i, _)| i)
+        .collect();
+    let new_words: Vec<String> = new_tags.iter().map(|t| format!("#{t}")).collect();
+
+    if tag_positions.is_empty() {
+        if new_words.is_empty() {
+            return line.to_string();
+        }
+        let mut out = line.to_string();
+        for w in &new_words {
+            out.push(' ');
+            out.push_str(w);
+        }
+        return out;
+    }
+
+    let first = tag_positions[0];
+    let mut remove = vec![false; segs.len()];
+    for &idx in &tag_positions {
+        remove[idx] = true;
+        if idx > 0 && segs[idx - 1].0 {
+            remove[idx - 1] = true;
+        }
+    }
+
+    let mut out = String::new();
+    let mut inserted = false;
+    for (i, (_, text)) in segs.iter().enumerate() {
+        if remove[i] {
+            if i == first && !new_words.is_empty() {
+                if !out.is_empty() && !out.ends_with(' ') && !out.ends_with('\t') {
+                    out.push(' ');
+                }
+                out.push_str(&new_words.join(" "));
+                inserted = true;
+            }
+            continue;
+        }
+        out.push_str(text);
+    }
+    if !inserted && !new_words.is_empty() {
+        for w in &new_words {
+            out.push(' ');
+            out.push_str(w);
+        }
+    }
+    out
+}
+
+/// Rewrites ONLY the Tags cell (table) / `#tag` word-run (checklist) of the
+/// line at `idx`, composing it from `task_id`/`depends_on`/`user_tags` in
+/// the frozen order (§3.1 R4). Every other byte of the line — including
+/// every unmapped table cell — is untouched. Table rows require a mapped
+/// Tags column; the caller is expected to have already checked that (§3.1
+/// minting rule #2) — here, a missing mapping just means [`set_cell`]
+/// silently keeps the row unchanged, which would hide a real bug, so this
+/// still re-derives the map itself and treats a stale/moved row as the
+/// usual rescan error.
+fn write_reserved_tags(
+    lines: &[String],
+    idx: usize,
+    source: &TaskSource,
+    task_id: Option<&str>,
+    depends_on: &[String],
+    user_tags: &[String],
+) -> Result<String, String> {
+    let composed = compose_reserved_and_user_tags(task_id, depends_on, user_tags);
+    match source {
+        TaskSource::Checklist => Ok(splice_checklist_tags(&lines[idx], &composed)),
+        TaskSource::Table => {
+            let str_lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+            let map = table_at(&str_lines, idx).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+            let (leading, trailing, mut cells) =
+                table_row_cells_raw(&lines[idx]).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+            let joined = if composed.is_empty() { None } else { Some(composed.join(", ")) };
+            set_cell(&mut cells, map.tags, joined.as_deref());
+            let mut out = String::new();
+            if leading {
+                out.push('|');
+            }
+            out.push_str(&cells.join("|"));
+            if trailing {
+                out.push('|');
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// BFS from `target`, following each task's own `depends_on` edges
+/// (resolved through unique, non-duplicated ids only), looking for
+/// `own_id`. `None` if unreachable. `Some(path)` otherwise: the concrete
+/// cycle that adding `own_id needs:target` would close, `own_id` first and
+/// last (D4's convention). Neighbor expansion is sorted byte-order so the
+/// result is deterministic even when more than one path exists (same
+/// "smallest-id-first, stable tie-break" discipline as [`find_task_cycle`]).
+fn would_create_cycle(board: &[TaskItem], own_id: &str, target: &str) -> Option<Vec<String>> {
+    let mut rep_of: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, t) in board.iter().enumerate() {
+        if let Some(id) = t.task_id.as_deref() {
+            rep_of.entry(id).or_insert(i);
+        }
+    }
+
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
+    visited.insert(target);
+    queue.push_back(target);
+
+    while let Some(cur) = queue.pop_front() {
+        if cur == own_id {
+            let mut path: Vec<&str> = vec![cur];
+            let mut node = cur;
+            while let Some(&p) = parent.get(node) {
+                path.push(p);
+                node = p;
+            }
+            path.reverse();
+            let mut cycle: Vec<String> = vec![own_id.to_string()];
+            cycle.extend(path.into_iter().map(str::to_string));
+            return Some(cycle);
+        }
+        if let Some(&idx) = rep_of.get(cur) {
+            let mut deps: Vec<&str> = board[idx].depends_on.iter().map(String::as_str).collect();
+            deps.sort();
+            for d in deps {
+                if rep_of.contains_key(d) && visited.insert(d) {
+                    parent.insert(d, cur);
+                    queue.push_back(d);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Kahn's algorithm over the task-dependency graph — same technique as
+/// `compile.rs`'s `total_order`/`find_cycle` and `lint.rs`'s `check_cycle`
+/// (D4: "the identical deterministic walk"), applied to a third type
+/// (`TaskItem`) over a third relation ("needs", not "imports"/"sequence").
+/// An edge `i needs j` puts `j` before `i` — same "target established
+/// first" direction `compile.rs` uses for `imports`/`overrides`. Tie-break
+/// is pure byte-order on the id string (task ids have no `readOrder`
+/// analogue). Returns `None` when the graph is acyclic, else one concrete
+/// cycle (first id repeated last), found by walking predecessors from the
+/// smallest-id residual node — mirrors `compile.rs`'s `find_cycle` and,
+/// like it and `lint.rs`'s sibling, reports at most one cycle per call even
+/// when the graph contains several disjoint ones (not something either
+/// prior implementation does either — see the memory note filed for this
+/// lane before generalizing).
+fn find_task_cycle(node_ids: &[&str], out_edges: &BTreeMap<&str, Vec<&str>>) -> Option<Vec<String>> {
+    let n = node_ids.len();
+    let idx_of: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+    let mut indeg = vec![0usize; n];
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, &id) in node_ids.iter().enumerate() {
+        if let Some(deps) = out_edges.get(id) {
+            for &d in deps {
+                let j = idx_of[d];
+                succ[j].push(i);
+                pred[i].push(j);
+                indeg[i] += 1;
+            }
+        }
+    }
+
+    let mut ready: BinaryHeap<Reverse<(String, usize)>> = BinaryHeap::new();
+    for i in 0..n {
+        if indeg[i] == 0 {
+            ready.push(Reverse((node_ids[i].to_string(), i)));
+        }
+    }
+    let mut order = Vec::with_capacity(n);
+    while let Some(Reverse((_, i))) = ready.pop() {
+        order.push(i);
+        for &v in &succ[i] {
+            indeg[v] -= 1;
+            if indeg[v] == 0 {
+                ready.push(Reverse((node_ids[v].to_string(), v)));
+            }
+        }
+    }
+    if order.len() == n {
+        return None;
+    }
+
+    let mut in_residual = vec![true; n];
+    for &i in &order {
+        in_residual[i] = false;
+    }
+    let start = (0..n).filter(|&i| in_residual[i]).min_by(|&a, &b| node_ids[a].cmp(node_ids[b])).expect(
+        "residual is non-empty when a cycle exists",
+    );
+    let mut path = vec![start];
+    loop {
+        let cur = *path.last().expect("path never empty");
+        let prev = pred[cur]
+            .iter()
+            .copied()
+            .filter(|&p| in_residual[p])
+            .min_by(|&a, &b| node_ids[a].cmp(node_ids[b]))
+            .expect("residual nodes keep a residual predecessor");
+        if let Some(hit) = path.iter().position(|&x| x == prev) {
+            let mut cycle = vec![prev];
+            cycle.extend(path[hit + 1..].iter().rev().copied());
+            cycle.push(prev);
+            return Some(cycle.into_iter().map(|i| node_ids[i].to_string()).collect());
+        }
+        path.push(prev);
+    }
+}
+
+/// Builds the task DAG report (§3.3) and, aligned by index, a `blocked`
+/// flag per input task. Duplicated ids (§3.1: "reported, never repaired")
+/// use the first-scan-order occurrence as the graph's representative for
+/// that id — same first-wins convention this file already uses for
+/// convention-path resolution; the duplicate is still reported in
+/// `duplicate_ids` and any *other* task's `needs:` on that id is rejected
+/// by [`task_depends_add`] outright, so this representative choice is never
+/// load-bearing for a *new* edge, only for `blocked`/cycle reporting on
+/// pre-existing files.
+fn compute_dag(tasks: &[TaskItem]) -> (TaskDag, Vec<bool>) {
+    let mut by_id: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, t) in tasks.iter().enumerate() {
+        if let Some(id) = t.task_id.as_deref() {
+            by_id.entry(id).or_default().push(i);
+        }
+    }
+    let duplicate_ids: Vec<String> =
+        by_id.iter().filter(|(_, idxs)| idxs.len() > 1).map(|(id, _)| id.to_string()).collect();
+    let rep_of: BTreeMap<&str, usize> = by_id.iter().map(|(id, idxs)| (*id, idxs[0])).collect();
+
+    let mut unresolved: Vec<UnresolvedDep> = Vec::new();
+    let mut out_edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (&id, &rep_idx) in &rep_of {
+        let mut outs: Vec<&str> = Vec::new();
+        for dep in &tasks[rep_idx].depends_on {
+            if by_id.contains_key(dep.as_str()) {
+                outs.push(dep.as_str());
+            } else {
+                unresolved.push(UnresolvedDep { task_id: id.to_string(), depends_on: dep.clone() });
+            }
+        }
+        outs.sort();
+        outs.dedup();
+        out_edges.insert(id, outs);
+    }
+    // Tasks with no id of their own were never a `rep_of` key above, so
+    // their own `depends_on` was never checked for unresolved targets. O1
+    // (§3.1 R6): `UnresolvedDep.task_id` is documented as the stable id,
+    // and `TaskItem.id` (the volatile `"<relPath>#<line>"` locator) must
+    // never be substituted into it — so an id-less task's unresolved
+    // `needs:` is simply omitted here rather than reported under a locator
+    // masquerading as a stable id. It is still visible on the task itself
+    // via `TaskItem.depends_on`; only the board-wide `dag.unresolved`
+    // summary — which the UI renders as "<taskId> needs <dependsOn>" —
+    // requires a real id to key on.
+    unresolved.sort_by(|a, b| (a.task_id.as_str(), a.depends_on.as_str()).cmp(&(b.task_id.as_str(), b.depends_on.as_str())));
+
+    let node_ids: Vec<&str> = rep_of.keys().copied().collect(); // BTreeMap: already byte-sorted
+    let cycles: Vec<Vec<String>> = find_task_cycle(&node_ids, &out_edges).into_iter().collect();
+    let cycle_ids: HashSet<&str> = cycles.iter().flatten().map(String::as_str).collect();
+
+    let mut blocked = vec![false; tasks.len()];
+    for (i, t) in tasks.iter().enumerate() {
+        let mut is_blocked = false;
+        for dep in &t.depends_on {
+            if let Some(&rep_idx) = rep_of.get(dep.as_str()) {
+                let dep_status = tasks[rep_idx].status.as_deref().unwrap_or("new");
+                if dep_status != "done" {
+                    is_blocked = true;
+                }
+            }
+            // Unresolved dependency: does NOT block (D1) — a typo must not
+            // deadlock the board.
+        }
+        if let Some(id) = t.task_id.as_deref() {
+            if cycle_ids.contains(id) {
+                is_blocked = true; // D2: every task in a reported cycle is blocked.
+            }
+        }
+        blocked[i] = is_blocked;
+    }
+
+    (TaskDag { cycles, duplicate_ids, unresolved }, blocked)
 }
 
 // ---------------------------------------------------------------------
@@ -1145,23 +1769,40 @@ fn write_task_fields(
 // ---------------------------------------------------------------------
 
 /// Scans the five convention files (contract §3; WO02 §2.3 adds
-/// `BUGS.md`). Always reports exactly 5 entries in convention order; a
-/// missing file reports its default (root-level) location with `exists:
-/// false` and no tasks. Unreadable files are treated as empty — tolerant,
-/// never errors past a bad `root`.
+/// `BUGS.md`). Always reports exactly 5 entries in convention order.
+/// Unreadable files are treated as empty — tolerant, never errors past a
+/// bad `root`. Also computes the task DAG (WO06 §3.3) and stamps every
+/// returned [`TaskItem`]'s `blocked` field — the one place that happens,
+/// since only a whole-board scan can see cross-file dependencies.
+///
+/// **O2 fix**: a missing file no longer reports a bare root-level
+/// `relPath`. It reports `<home><name>`, where `home` is the directory of
+/// the existing convention file whose name comes first in
+/// [`CONVENTION_NAMES`] order (deterministic, no majority vote), or
+/// `"docs/tasks/"` — Cowtext's own documented layout — when no convention
+/// file exists at all.
 #[tauri::command]
 pub fn tasks_scan(root: String) -> Result<TasksScan, String> {
     let root_path = checked_root(&root)?;
+
+    // First pass: where does each convention file actually live, if it
+    // exists at all? Needed up front because O2's `home` choice depends on
+    // ALL five names' existence, not just the ones seen so far.
+    let found_dirs: Vec<Option<&str>> = CONVENTION_NAMES
+        .iter()
+        .map(|name| {
+            CONVENTION_DIRS.iter().find(|dir| root_path.join(format!("{dir}{name}")).is_file()).copied()
+        })
+        .collect();
+    let home = found_dirs.iter().copied().flatten().next().unwrap_or("docs/tasks/");
+
     let mut files = Vec::with_capacity(CONVENTION_NAMES.len());
     let mut tasks = Vec::new();
 
-    for name in CONVENTION_NAMES {
-        let found = convention_candidates(name)
-            .into_iter()
-            .find(|cand| root_path.join(cand).is_file());
-
-        match found {
-            Some(rel) => {
+    for (name, found_dir) in CONVENTION_NAMES.iter().zip(found_dirs.iter()) {
+        match found_dir {
+            Some(dir) => {
+                let rel = format!("{dir}{name}");
                 let path = root_path.join(&rel);
                 let content = fs::read_to_string(&path).unwrap_or_default();
                 let mut file_tasks = parse_tasks(&rel, &content);
@@ -1173,14 +1814,18 @@ pub fn tasks_scan(root: String) -> Result<TasksScan, String> {
                 tasks.append(&mut file_tasks);
             }
             None => files.push(TaskFileInfo {
-                rel_path: name.to_string(),
+                rel_path: format!("{home}{name}"),
                 exists: false,
                 task_count: 0,
             }),
         }
     }
 
-    Ok(TasksScan { files, tasks })
+    let (dag, blocked_flags) = compute_dag(&tasks);
+    let tasks: Vec<TaskItem> =
+        tasks.into_iter().zip(blocked_flags).map(|(t, blocked)| TaskItem { blocked, ..t }).collect();
+
+    Ok(TasksScan { files, tasks, dag })
 }
 
 /// Toggles a checklist task's done state (contract §3). Errors with the
@@ -1280,6 +1925,9 @@ pub fn task_move(
         &item.tags,
         item.agent.as_deref(),
         item.priority.as_deref(),
+        item.status.as_deref().unwrap_or("new"),
+        item.task_id.as_deref(),
+        &item.depends_on,
     );
 
     // Write target first.
@@ -1315,10 +1963,21 @@ pub fn task_move(
 /// map, unmapped cells preserved byte-exact. `patch.name` clearing to
 /// empty is an error; every other field treats `None` (JSON `null` or an
 /// absent key) as "clear". Stale-line guard identical to [`task_toggle`].
-/// Returns the updated item with `section`/`when` recomputed.
+/// **WO06 §3.1 R3**: `patch.tags` may never carry a reserved `id:`/`needs:`
+/// token — rejected up front, before any file IO, so a UI bug can never
+/// smuggle one in. Reserved tokens are always re-emitted from the current
+/// parsed item, never from `patch` (R4). Returns the updated item with
+/// `section`/`when` recomputed.
 #[tauri::command]
 pub fn task_update(root: String, rel_path: String, line: usize, patch: TaskPatch) -> Result<TaskItem, String> {
     ensure_convention_path(&rel_path)?;
+    if let Some(tags) = &patch.tags {
+        for tag in tags {
+            if tag.starts_with("id:") || tag.starts_with("needs:") {
+                return Err(format!("reserved tag prefix in patch.tags: {tag}"));
+            }
+        }
+    }
     let root_path = checked_root(&root)?;
     let path = resolve_within_root(&root_path, &rel_path)?;
     let content = fs::read_to_string(&path).map_err(|e| format!("{rel_path}: {e}"))?;
@@ -1341,9 +2000,11 @@ pub fn task_update(root: String, rel_path: String, line: usize, patch: TaskPatch
     let new_line = match current.source {
         TaskSource::Checklist => {
             let indent = leading_whitespace(&lines[idx]);
-            regenerate_checklist_line(&indent, name, &patch)
+            regenerate_checklist_line(&indent, name, &patch, current.task_id.as_deref(), &current.depends_on)
         }
-        TaskSource::Table => regenerate_table_row(&lines, idx, name, &patch)?,
+        TaskSource::Table => {
+            regenerate_table_row(&lines, idx, name, &patch, current.task_id.as_deref(), &current.depends_on)?
+        }
     };
     lines[idx] = new_line;
     let new_content = lines.join("\n");
@@ -1361,4 +2022,194 @@ pub fn task_update(root: String, rel_path: String, line: usize, patch: TaskPatch
             .find(|t| t.line == line)
             .ok_or_else(|| "Failed to parse updated task".to_string()),
     }
+}
+
+// ── WO06 task DAG commands (Lane G1) ────────────────────────────────────
+
+/// Re-parses the just-rewritten line at `idx` and returns it, dispatching
+/// on `source` exactly like every other single-line mutation command in
+/// this file ([`task_toggle`]/[`task_update`]).
+fn reparse_single_line(rel_path: &str, new_content: &str, idx: usize, line: usize, source: &TaskSource) -> Result<TaskItem, String> {
+    match source {
+        TaskSource::Checklist => {
+            let updated_lines: Vec<&str> = new_content.split('\n').collect();
+            let section = nearest_section(&updated_lines, line);
+            parse_checklist_line(rel_path, line, updated_lines[idx], section)
+                .ok_or_else(|| "Failed to parse updated task".to_string())
+        }
+        TaskSource::Table => parse_tasks(rel_path, new_content)
+            .into_iter()
+            .find(|t| t.line == line)
+            .ok_or_else(|| "Failed to parse updated task".to_string()),
+    }
+}
+
+/// A table row's header must map a Tags column before any reserved token
+/// can be written into it (§3.1 minting rule #2) — there is no column to
+/// invent one into, and restructuring a user's table would violate
+/// byte-exact cell preservation elsewhere in this file.
+fn require_tags_column(lines: &[String], idx: usize, rel_path: &str, line: usize, source: &TaskSource) -> Result<(), String> {
+    if *source != TaskSource::Table {
+        return Ok(());
+    }
+    let str_lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    let map = table_at(&str_lines, idx).ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+    if map.tags.is_none() {
+        return Err(format!(
+            "{rel_path}#{line}: this table has no Tags column — add one, or move the task to a canonical grid"
+        ));
+    }
+    Ok(())
+}
+
+/// Mints a stable task id for the task at `relPath#line` (§3.1). Idempotent
+/// — a task that already has an `id:` token is returned unchanged, no
+/// write. Table rows whose header maps no Tags column are rejected rather
+/// than silently doing nothing. The write touches only the Tags cell / tag
+/// run (`write_reserved_tags`) — every other byte of the line, and every
+/// other cell of a table row, is untouched.
+#[tauri::command]
+pub fn task_id_ensure(root: String, rel_path: String, line: usize) -> Result<TaskItem, String> {
+    ensure_convention_path(&rel_path)?;
+    let root_path = checked_root(&root)?;
+    let path = resolve_within_root(&root_path, &rel_path)?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("{rel_path}: {e}"))?;
+
+    let current = parse_tasks(&rel_path, &content)
+        .into_iter()
+        .find(|t| t.line == line)
+        .ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+
+    if current.task_id.is_some() {
+        return Ok(current);
+    }
+
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    let idx = line - 1;
+    require_tags_column(&lines, idx, &rel_path, line, &current.source)?;
+
+    let existing_ids = all_existing_task_ids(&root_path);
+    let mut minted: Option<String> = None;
+    for attempt in 0..16u64 {
+        let candidate = mint_task_id(&rel_path, line, attempt);
+        if !existing_ids.contains(&candidate) {
+            minted = Some(candidate);
+            break;
+        }
+    }
+    let minted = minted.ok_or_else(|| "could not mint a unique task id".to_string())?;
+
+    let new_line =
+        write_reserved_tags(&lines, idx, &current.source, Some(&minted), &current.depends_on, &current.tags)?;
+    lines[idx] = new_line;
+    let new_content = lines.join("\n");
+    write_atomic(&path, &new_content)?;
+
+    reparse_single_line(&rel_path, &new_content, idx, line, &current.source)
+}
+
+/// Adds a `needs:<dependsOn>` edge to the task at `relPath#line` (§3.3 D3).
+/// Rejects, with four distinct messages: a self-dependency, an id that
+/// matches no task on the board, an id that is assigned to more than one
+/// task (ambiguous target), or an edge that would close a dependency cycle
+/// (error message carries the concrete would-be cycle path, same
+/// first-repeated-last convention as `dag.cycles`). Adding an edge that is
+/// already present is an idempotent no-op success. The write touches only
+/// the Tags cell / tag run, same as [`task_id_ensure`].
+#[tauri::command]
+pub fn task_depends_add(root: String, rel_path: String, line: usize, depends_on: String) -> Result<TaskItem, String> {
+    ensure_convention_path(&rel_path)?;
+    let depends_on = depends_on.trim().to_string();
+    if !is_valid_task_id_str(&depends_on) {
+        return Err(format!("{depends_on}: not a valid task id"));
+    }
+
+    let root_path = checked_root(&root)?;
+    let path = resolve_within_root(&root_path, &rel_path)?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("{rel_path}: {e}"))?;
+
+    let current = parse_tasks(&rel_path, &content)
+        .into_iter()
+        .find(|t| t.line == line)
+        .ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+
+    if current.task_id.as_deref() == Some(depends_on.as_str()) {
+        return Err(format!("a task cannot depend on itself: {depends_on}"));
+    }
+    if current.depends_on.iter().any(|d| d == &depends_on) {
+        return Ok(current);
+    }
+
+    let board = scan_all_task_items(&root_path);
+    let mut occurrences: HashMap<&str, usize> = HashMap::new();
+    for t in &board {
+        if let Some(id) = t.task_id.as_deref() {
+            *occurrences.entry(id).or_insert(0) += 1;
+        }
+    }
+    match occurrences.get(depends_on.as_str()).copied() {
+        None | Some(0) => return Err(format!("{depends_on}: no task has this id")),
+        Some(1) => {}
+        Some(_) => {
+            return Err(format!(
+                "{depends_on}: this id is assigned to more than one task — resolve the duplicate first"
+            ))
+        }
+    }
+
+    if let Some(own_id) = current.task_id.as_deref() {
+        if let Some(cycle_path) = would_create_cycle(&board, own_id, &depends_on) {
+            return Err(format!("adding needs:{depends_on} would create a cycle: {}", cycle_path.join(" -> ")));
+        }
+    }
+
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    let idx = line - 1;
+    require_tags_column(&lines, idx, &rel_path, line, &current.source)?;
+
+    let mut new_depends_on = current.depends_on.clone();
+    new_depends_on.push(depends_on);
+    let new_line =
+        write_reserved_tags(&lines, idx, &current.source, current.task_id.as_deref(), &new_depends_on, &current.tags)?;
+    lines[idx] = new_line;
+    let new_content = lines.join("\n");
+    write_atomic(&path, &new_content)?;
+
+    reparse_single_line(&rel_path, &new_content, idx, line, &current.source)
+}
+
+/// Removes a `needs:<dependsOn>` edge from the task at `relPath#line`.
+/// Removing an edge that isn't present is a no-op success (contract §7).
+/// Never rejects on cycle/self/unknown/duplicate grounds — removing an edge
+/// cannot create a cycle, and a dangling/duplicated target is exactly the
+/// kind of stale reference this command should still be able to clean up.
+#[tauri::command]
+pub fn task_depends_remove(root: String, rel_path: String, line: usize, depends_on: String) -> Result<TaskItem, String> {
+    ensure_convention_path(&rel_path)?;
+    let depends_on = depends_on.trim().to_string();
+
+    let root_path = checked_root(&root)?;
+    let path = resolve_within_root(&root_path, &rel_path)?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("{rel_path}: {e}"))?;
+
+    let current = parse_tasks(&rel_path, &content)
+        .into_iter()
+        .find(|t| t.line == line)
+        .ok_or_else(|| "Task moved on disk — rescan".to_string())?;
+
+    if !current.depends_on.iter().any(|d| d == &depends_on) {
+        return Ok(current);
+    }
+
+    let new_depends_on: Vec<String> = current.depends_on.iter().filter(|d| **d != depends_on).cloned().collect();
+
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    let idx = line - 1;
+    let new_line =
+        write_reserved_tags(&lines, idx, &current.source, current.task_id.as_deref(), &new_depends_on, &current.tags)?;
+    lines[idx] = new_line;
+    let new_content = lines.join("\n");
+    write_atomic(&path, &new_content)?;
+
+    reparse_single_line(&rel_path, &new_content, idx, line, &current.source)
 }

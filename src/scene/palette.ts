@@ -34,10 +34,25 @@ export const PALETTE = {
   orchid: 0xc58bc9, // Q — book spines
 } as const;
 
-/** Role-hue accents (contents only, never structure — ART_DIRECTION rule). */
+/** Role-hue accents (contents only, never structure — ART_DIRECTION rule).
+ *  Only `rules`/`agent`/`invariant`/`trap` are actually consulted today —
+ *  they're the four roles `propForRole` (sceneGraph.ts) routes to
+ *  `makeCabinet`, the one maker that varies by `ROLE_ACCENT[role]`.
+ *  `makeBookshelf`/`makeCrate` ignore role entirely, so the other entries
+ *  below are declared for completeness but currently dead code (WO03
+ *  tradeoff, see tech-barn agent-memory `wo03-role-schema-v3-props`). */
 export const ROLE_ACCENT: Record<string, number> = {
   rules: PALETTE.straw,
   agent: PALETTE.clay,
+  // WO06 B1 fix — invariant/trap previously fell back to PALETTE.straw
+  // (rules' colour) via `ROLE_ACCENT[role] ?? PALETTE.straw`, making three
+  // cabinet-routed roles visually identical. Reuse two of the palette's
+  // already-established decorative "book spine" hues (iris/orchid) rather
+  // than add a 30th Barnlight colour — both are otherwise dead entries
+  // below (task/workflow/reference), so this creates no on-screen clash:
+  // nothing currently renders those dead keys.
+  invariant: PALETTE.iris,
+  trap: PALETTE.orchid,
   architecture: PALETTE.screen,
   reference: PALETTE.orchid,
   task: PALETTE.iris,

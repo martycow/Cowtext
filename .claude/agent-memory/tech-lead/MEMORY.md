@@ -1,0 +1,2 @@
+- [Contract failure modes](contract-failure-modes.md) — the six seam-defect classes every Cowtext contract must close up front, from the WO02/WO03/WO06 audits
+- [Work-order cadence](cowtext-work-order-cadence.md) — contract → Stage 0 seams → lanes → audit → fix round → gates → docs close-out, and why Stage 0 exists

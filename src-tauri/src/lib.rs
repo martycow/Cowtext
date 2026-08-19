@@ -21,6 +21,8 @@ mod preset;
 pub mod project;
 mod sessions;
 mod settings;
+mod taskctx;
+mod tasklinks;
 mod tasks;
 mod watcher;
 mod worktree;
@@ -100,7 +102,16 @@ pub fn run() {
             sessions::agent_session_list,
             lint::lint_run,
             import::import_scan,
-            import::import_apply
+            import::import_apply,
+            tasks::task_id_ensure,
+            tasks::task_depends_add,
+            tasks::task_depends_remove,
+            tasklinks::tasklinks_read,
+            tasklinks::tasklink_set,
+            tasklinks::tasklink_delete,
+            taskctx::task_context_preview,
+            taskctx::task_context_write,
+            handoff::handoff_node_propose
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

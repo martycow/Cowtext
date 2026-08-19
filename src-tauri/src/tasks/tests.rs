@@ -124,17 +124,41 @@ fn tasks_scan_discovery_order_root_before_docs_before_docs_tasks() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// WO06 O2: an empty project (no convention file exists anywhere) reports
+// every missing file under "docs/tasks/" — Cowtext's own documented
+// layout — not a bare root-level name. Pre-WO06 this asserted the bare
+// name; that was exactly O2's bug (a file created here landed at the repo
+// root).
 #[test]
-fn tasks_scan_missing_files_report_default_root_location() {
+fn tasks_scan_missing_files_report_docs_tasks_home_when_nothing_exists() {
     let dir = temp_project("scan-missing");
     let scan = tasks_scan(dir.to_string_lossy().into_owned()).unwrap();
     assert_eq!(scan.files.len(), 5);
     for (f, name) in scan.files.iter().zip(CONVENTION_NAMES.iter()) {
         assert!(!f.exists);
         assert_eq!(f.task_count, 0);
-        assert_eq!(&f.rel_path, name);
+        assert_eq!(f.rel_path, format!("docs/tasks/{name}"));
     }
     assert!(scan.tasks.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// WO06 O2 / Gate 13: a missing file co-locates with whichever convention
+// file already exists, first-in-CONVENTION_NAMES-order — NOT "docs/tasks/"
+// unconditionally, and NOT the root.
+#[test]
+fn tasks_scan_missing_file_co_locates_with_first_existing_convention_file() {
+    let dir = temp_project("scan-colocate");
+    fs::create_dir_all(dir.join("docs/tasks")).unwrap();
+    fs::write(dir.join("docs/tasks/TASKS.md"), "- [ ] a\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root).unwrap();
+    // BUGS.md (index 4) is missing; TASKS.md (index 0, first in
+    // CONVENTION_NAMES order) is the only file that exists, at docs/tasks/.
+    let bugs = scan.files.iter().find(|f| f.rel_path.ends_with("BUGS.md")).unwrap();
+    assert!(!bugs.exists);
+    assert_eq!(bugs.rel_path, "docs/tasks/BUGS.md");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -824,5 +848,761 @@ fn task_update_cleared_name_errors() {
     assert_eq!(err, "Task name cannot be empty");
     let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
     assert_eq!(on_disk, raw);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 §3.1 — reserved tag namespace: lifting on read
+// =============================================================================
+
+#[test]
+fn reserved_tokens_lifted_from_table_tags_cell() {
+    let content = "| Name | Tags |\n| --- | --- |\n| Task | id:t-abc123, needs:t-def456, backend |\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id.as_deref(), Some("t-abc123"));
+    assert_eq!(tasks[0].depends_on, vec!["t-def456".to_string()]);
+    assert_eq!(tasks[0].tags, vec!["backend".to_string()]);
+}
+
+#[test]
+fn reserved_tokens_lifted_from_checklist_hash_tokens() {
+    let content = "- [ ] Task #id:t-abc123 #needs:t-def456 #backend\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id.as_deref(), Some("t-abc123"));
+    assert_eq!(tasks[0].depends_on, vec!["t-def456".to_string()]);
+    assert_eq!(tasks[0].tags, vec!["backend".to_string()]);
+}
+
+// R5: "nothing else is an id" — a malformed id:/needs:-shaped word is left
+// as an ordinary user tag, not silently dropped.
+#[test]
+fn malformed_reserved_shaped_token_is_left_as_ordinary_tag() {
+    let content = "- [ ] Task #id:not-an-id #needs:also-bad\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks[0].task_id, None);
+    assert!(tasks[0].depends_on.is_empty());
+    assert_eq!(tasks[0].tags, vec!["id:not-an-id".to_string(), "needs:also-bad".to_string()]);
+}
+
+// Gate 10 (task-corpus regression), narrow form: every task parsed from
+// content with no reserved-shaped tokens at all reports `taskId: null`,
+// `dependsOn: []`, `blocked: false` — the two new fields default empty and
+// every existing field is untouched.
+#[test]
+fn plain_existing_style_tasks_default_task_id_and_depends_on_empty() {
+    let content = "| Name | Tags | Priority |\n| --- | --- | --- |\n| Ship it | backend, urgent | P1 |\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks[0].task_id, None);
+    assert!(tasks[0].depends_on.is_empty());
+    assert!(!tasks[0].blocked);
+    assert_eq!(tasks[0].tags, vec!["backend".to_string(), "urgent".to_string()]);
+}
+
+// Gate 10, the real thing: every task in THIS repo's own five convention
+// files parses with `taskId: null`, `dependsOn: []` today — WO06 landing
+// must not silently mint or misparse anything already on disk. (If a real
+// id ever gets minted into one of these files down the line, this test's
+// job is done and it should be narrowed or removed — that is expected
+// product evolution, not a regression.)
+#[test]
+fn real_repo_task_corpus_has_no_reserved_tokens_yet() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let scan = tasks_scan(repo_root.to_string_lossy().into_owned()).unwrap();
+    for t in &scan.tasks {
+        assert_eq!(t.task_id, None, "unexpected task_id on {}#{}", t.rel_path, t.line);
+        assert!(t.depends_on.is_empty(), "unexpected depends_on on {}#{}", t.rel_path, t.line);
+    }
+}
+
+// =============================================================================
+// WO06 §3.1 — task_id_ensure (minting)
+// =============================================================================
+
+fn assert_valid_task_id(id: &str) {
+    assert_eq!(id.len(), 8, "id {id} should be 8 chars");
+    assert!(id.starts_with("t-"), "id {id} should start with t-");
+    assert!(
+        id[2..].chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()),
+        "id {id} suffix should be base36 lower-case"
+    );
+}
+
+#[test]
+fn task_id_ensure_mints_and_is_idempotent() {
+    let dir = temp_project("id-ensure-checklist");
+    fs::write(dir.join("TASKS.md"), "- [ ] Ship it\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let first = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = first.task_id.clone().unwrap();
+    assert_valid_task_id(&id);
+    let after_first = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(after_first, format!("- [ ] Ship it #id:{id}\n"));
+
+    // Idempotent: already has an id, unchanged, no second write.
+    let second = task_id_ensure(root, "TASKS.md".to_string(), 1).unwrap();
+    assert_eq!(second.task_id.as_deref(), Some(id.as_str()));
+    let after_second = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(after_second, after_first);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_id_ensure_table_row_without_tags_column_errors() {
+    let dir = temp_project("id-ensure-no-tags-col");
+    fs::write(dir.join("TASKS.md"), "| Name |\n| --- |\n| Task A |\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = task_id_ensure(root, "TASKS.md".to_string(), 3).unwrap_err();
+    assert!(err.contains("no Tags column"), "unexpected error: {err}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_id_ensure_table_row_preserves_unmapped_cells_byte_exact() {
+    let dir = temp_project("id-ensure-table-unmapped");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Notes | Tags |\n| --- | --- | --- |\n| Task A |   keep me exactly  | existing |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_id_ensure(root, "TASKS.md".to_string(), 3).unwrap();
+    let id = item.task_id.clone().unwrap();
+    assert_eq!(item.tags, vec!["existing".to_string()]);
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        format!("| Name | Notes | Tags |\n| --- | --- | --- |\n| Task A |   keep me exactly  | id:{id}, existing |\n")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// No pre-existing tag words: the minted id is appended at the true end of
+// the checklist line (documented judgment call — not spliced in ahead of
+// `@agent`/priority, since there's no tag-run position to splice into).
+#[test]
+fn task_id_ensure_checklist_appends_at_end_when_no_existing_tags() {
+    let dir = temp_project("id-ensure-checklist-no-tags");
+    fs::write(dir.join("TASKS.md"), "- [ ] Ship it @tech-general !high\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_id_ensure(root, "TASKS.md".to_string(), 1).unwrap();
+    let id = item.task_id.clone().unwrap();
+    assert_eq!(item.agent.as_deref(), Some("tech-general"));
+    assert_eq!(item.priority.as_deref(), Some("high"));
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] Ship it @tech-general !high #id:{id}\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// Existing tag words: the minted id splices in at the tag run's position,
+// preserving every other word (including the checkbox and `@agent`) byte-
+// exact.
+#[test]
+fn task_id_ensure_checklist_splices_at_existing_tag_run_position() {
+    let dir = temp_project("id-ensure-checklist-splice");
+    fs::write(dir.join("TASKS.md"), "- [ ] Ship it #backend @tech-general\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_id_ensure(root, "TASKS.md".to_string(), 1).unwrap();
+    let id = item.task_id.clone().unwrap();
+    assert_eq!(item.tags, vec!["backend".to_string()]);
+    assert_eq!(item.agent.as_deref(), Some("tech-general"));
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] Ship it #id:{id} #backend @tech-general\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 §3.3 D3 — task_depends_add: four distinct rejections + idempotent add
+// =============================================================================
+
+#[test]
+fn task_depends_add_rejects_malformed_id() {
+    let dir = temp_project("depends-add-malformed");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = task_depends_add(root, "TASKS.md".to_string(), 1, "not-an-id".to_string()).unwrap_err();
+    assert_eq!(err, "not-an-id: not a valid task id");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_add_rejects_self_dependency() {
+    let dir = temp_project("depends-add-self");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = item.task_id.unwrap();
+    let err = task_depends_add(root, "TASKS.md".to_string(), 1, id.clone()).unwrap_err();
+    assert_eq!(err, format!("a task cannot depend on itself: {id}"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_add_rejects_unknown_id() {
+    let dir = temp_project("depends-add-unknown");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let err = task_depends_add(root, "TASKS.md".to_string(), 1, "t-zzzzzz".to_string()).unwrap_err();
+    assert_eq!(err, "t-zzzzzz: no task has this id");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_add_rejects_duplicated_id() {
+    let dir = temp_project("depends-add-duplicate");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Tags |\n| --- | --- |\n\
+         | Row1 | id:t-dupdup |\n\
+         | Row2 | id:t-dupdup |\n\
+         | Row3 | |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = task_depends_add(root, "TASKS.md".to_string(), 5, "t-dupdup".to_string()).unwrap_err();
+    assert_eq!(err, "t-dupdup: this id is assigned to more than one task — resolve the duplicate first");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_add_rejects_cycle_with_ordered_path() {
+    let dir = temp_project("depends-add-cycle");
+    fs::write(dir.join("TASKS.md"), "- [ ] Task A\n- [ ] Task B\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let a = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let a_id = a.task_id.unwrap();
+    let b = task_id_ensure(root.clone(), "TASKS.md".to_string(), 2).unwrap();
+    let b_id = b.task_id.unwrap();
+
+    // A needs B.
+    task_depends_add(root.clone(), "TASKS.md".to_string(), 1, b_id.clone()).unwrap();
+    // B needs A would close the cycle.
+    let err = task_depends_add(root, "TASKS.md".to_string(), 2, a_id.clone()).unwrap_err();
+    assert_eq!(err, format!("adding needs:{a_id} would create a cycle: {b_id} -> {a_id} -> {b_id}"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_add_is_idempotent_when_already_present() {
+    let dir = temp_project("depends-add-idempotent");
+    fs::write(dir.join("TASKS.md"), "- [ ] Task A\n- [ ] Task B\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let b = task_id_ensure(root.clone(), "TASKS.md".to_string(), 2).unwrap();
+    let b_id = b.task_id.unwrap();
+
+    task_depends_add(root.clone(), "TASKS.md".to_string(), 1, b_id.clone()).unwrap();
+    let after_first = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    let again = task_depends_add(root, "TASKS.md".to_string(), 1, b_id.clone()).unwrap();
+    assert_eq!(again.depends_on, vec![b_id]);
+    let after_second = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(after_first, after_second);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 §7 — task_depends_remove
+// =============================================================================
+
+#[test]
+fn task_depends_remove_is_noop_for_absent_dep() {
+    let dir = temp_project("depends-remove-noop");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let before = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    let after = task_depends_remove(root, "TASKS.md".to_string(), 1, "t-zzzzzz".to_string()).unwrap();
+    assert_eq!(after.task_id, item.task_id);
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, before);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn task_depends_remove_removes_and_preserves_other_tags() {
+    let dir = temp_project("depends-remove-ok");
+    fs::write(dir.join("TASKS.md"), "- [ ] Task A #backend\n- [ ] Task B\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let a = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let a_id = a.task_id.unwrap();
+    let b = task_id_ensure(root.clone(), "TASKS.md".to_string(), 2).unwrap();
+    let b_id = b.task_id.unwrap();
+    task_depends_add(root.clone(), "TASKS.md".to_string(), 1, b_id.clone()).unwrap();
+
+    let removed = task_depends_remove(root, "TASKS.md".to_string(), 1, b_id.clone()).unwrap();
+    assert!(removed.depends_on.is_empty());
+    assert_eq!(removed.tags, vec!["backend".to_string()]);
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] Task A #id:{a_id} #backend\n- [ ] Task B #id:{b_id}\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 §3.3 — tasks_scan: dag (cycles/duplicates/unresolved) + blocked
+// =============================================================================
+
+// Gate 5: a fixture file hand-authored with `A needs:B, B needs:A` still
+// scans successfully (never fatal — D2) and reports the cycle in
+// `dag.cycles`, with a deterministic node order across 100 repeated runs.
+#[test]
+fn tasks_scan_reports_hand_authored_cycle_deterministically() {
+    let dir = temp_project("scan-cycle");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Tags |\n| --- | --- |\n\
+         | Task A | id:t-aaaaaa, needs:t-bbbbbb |\n\
+         | Task B | id:t-bbbbbb, needs:t-aaaaaa |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let mut first: Option<Vec<Vec<String>>> = None;
+    for _ in 0..100 {
+        let scan = tasks_scan(root.clone()).unwrap();
+        assert_eq!(scan.dag.cycles.len(), 1);
+        let cycle = &scan.dag.cycles[0];
+        assert_eq!(cycle.first(), cycle.last());
+        assert_eq!(cycle.len(), 3);
+        match &first {
+            None => first = Some(scan.dag.cycles.clone()),
+            Some(prev) => assert_eq!(prev, &scan.dag.cycles, "cycle report not deterministic across runs"),
+        }
+        for t in &scan.tasks {
+            assert!(t.blocked, "{} should be blocked (in cycle)", t.name);
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tasks_scan_duplicate_ids_reported() {
+    let dir = temp_project("scan-duplicate");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Tags |\n| --- | --- |\n| Row1 | id:t-dupdup |\n| Row2 | id:t-dupdup |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root).unwrap();
+    assert_eq!(scan.dag.duplicate_ids, vec!["t-dupdup".to_string()]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// D1: an unresolved dependency (typo, or a target that was never minted)
+// is reported but never blocks — a typo must not deadlock the board.
+#[test]
+fn tasks_scan_unresolved_dependency_reported_but_not_blocking() {
+    let dir = temp_project("scan-unresolved");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo #id:t-cccccc #needs:t-zzzzzz\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root).unwrap();
+    assert_eq!(scan.dag.unresolved.len(), 1);
+    assert_eq!(scan.dag.unresolved[0].task_id, "t-cccccc");
+    assert_eq!(scan.dag.unresolved[0].depends_on, "t-zzzzzz");
+    assert!(scan.dag.cycles.is_empty());
+    assert!(!scan.tasks[0].blocked);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// O1 fix (§3.1 R6): a task with NO `id:` of its own must never be reported
+// in `dag.unresolved` under its volatile `TaskItem.id` locator (that field
+// is documented as a stable id and the UI renders it as one) — it is
+// simply omitted, even though its own `depends_on` still resolves the
+// dangling target correctly.
+#[test]
+fn tasks_scan_omits_unresolved_dep_for_task_with_no_stable_id() {
+    let dir = temp_project("scan-unresolved-idless");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo #needs:t-zzzzzz\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root).unwrap();
+    assert!(scan.tasks[0].task_id.is_none(), "fixture must stay id-less");
+    assert_eq!(scan.tasks[0].depends_on, vec!["t-zzzzzz".to_string()]);
+    assert!(
+        scan.dag.unresolved.is_empty(),
+        "an id-less task's unresolved needs: must not surface under a locator: {:?}",
+        scan.dag.unresolved
+    );
+    assert!(!scan.tasks[0].blocked, "unresolved never blocks (D1)");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// O1: an id-less task's unresolved dep is omitted even alongside a
+// same-scan task that DOES carry a stable id — the two must not interact.
+#[test]
+fn tasks_scan_unresolved_mixes_stable_and_idless_tasks_correctly() {
+    let dir = temp_project("scan-unresolved-mixed");
+    fs::write(
+        dir.join("TASKS.md"),
+        "- [ ] Has id #id:t-aaaaaa #needs:t-zzzzzz\n- [ ] No id #needs:t-yyyyyy\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root).unwrap();
+    assert_eq!(scan.dag.unresolved.len(), 1, "only the stable-id task's unresolved dep is reported");
+    assert_eq!(scan.dag.unresolved[0].task_id, "t-aaaaaa");
+    assert_eq!(scan.dag.unresolved[0].depends_on, "t-zzzzzz");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// D1: blocked reflects the dependency's live status, flipping to false the
+// moment the dependency is marked done.
+#[test]
+fn tasks_scan_blocked_reflects_dependency_status_and_clears_when_done() {
+    let dir = temp_project("scan-blocked-status");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Status | Tags |\n| --- | --- | --- |\n\
+         | Dep | new | id:t-depdep |\n\
+         | Main | new | needs:t-depdep |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root.clone()).unwrap();
+    let main = scan.tasks.iter().find(|t| t.name == "Main").unwrap();
+    assert!(main.blocked);
+
+    // Mark the dependency done, then rescan.
+    let patch = TaskPatch { name: Some("Dep".to_string()), status: Some("done".to_string()), ..Default::default() };
+    task_update(root.clone(), "TASKS.md".to_string(), 3, patch).unwrap();
+
+    let scan2 = tasks_scan(root).unwrap();
+    let main2 = scan2.tasks.iter().find(|t| t.name == "Main").unwrap();
+    assert!(!main2.blocked);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 §3.1 R3/R4 — TaskPatch validation + reserved-token round-trip
+// through a full task_update patch (Gate 11)
+// =============================================================================
+
+#[test]
+fn task_update_rejects_reserved_prefix_in_patch_tags() {
+    let dir = temp_project("update-reserved-rejected");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let patch = TaskPatch {
+        name: Some("Solo".to_string()),
+        tags: Some(vec!["id:t-aaaaaa".to_string()]),
+        ..Default::default()
+    };
+    let err = task_update(root.clone(), "TASKS.md".to_string(), 1, patch).unwrap_err();
+    assert_eq!(err, "reserved tag prefix in patch.tags: id:t-aaaaaa");
+
+    let patch2 = TaskPatch {
+        name: Some("Solo".to_string()),
+        tags: Some(vec!["needs:t-bbbbbb".to_string()]),
+        ..Default::default()
+    };
+    let err2 = task_update(root, "TASKS.md".to_string(), 1, patch2).unwrap_err();
+    assert_eq!(err2, "reserved tag prefix in patch.tags: needs:t-bbbbbb");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gate11_reserved_tokens_survive_full_ui_patch_table_row() {
+    let dir = temp_project("gate11-table");
+    fs::write(dir.join("BACKLOG.md"), "| Name | Tags |\n| --- | --- |\n| Dep task | |\n| Main task | |\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let dep = task_id_ensure(root.clone(), "BACKLOG.md".to_string(), 3).unwrap();
+    let dep_id = dep.task_id.unwrap();
+    let main = task_id_ensure(root.clone(), "BACKLOG.md".to_string(), 4).unwrap();
+    let main_id = main.task_id.unwrap();
+    let added = task_depends_add(root.clone(), "BACKLOG.md".to_string(), 4, dep_id.clone()).unwrap();
+    assert_eq!(added.depends_on, vec![dep_id.clone()]);
+
+    let patch = TaskPatch {
+        name: Some("Main task renamed".to_string()),
+        tags: Some(vec!["backend".to_string()]),
+        ..Default::default()
+    };
+    let updated = task_update(root, "BACKLOG.md".to_string(), 4, patch).unwrap();
+    assert_eq!(updated.task_id.as_deref(), Some(main_id.as_str()));
+    assert_eq!(updated.depends_on, vec![dep_id.clone()]);
+    assert_eq!(updated.tags, vec!["backend".to_string()]);
+
+    let on_disk = fs::read_to_string(dir.join("BACKLOG.md")).unwrap();
+    assert!(
+        on_disk.contains(&format!("id:{main_id}, needs:{dep_id}, backend")),
+        "on disk: {on_disk}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gate11_reserved_tokens_survive_full_ui_patch_checklist_line() {
+    let dir = temp_project("gate11-checklist");
+    fs::write(dir.join("TASKS.md"), "- [ ] Dep task\n- [ ] Main task\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let dep = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let dep_id = dep.task_id.unwrap();
+    let main = task_id_ensure(root.clone(), "TASKS.md".to_string(), 2).unwrap();
+    let main_id = main.task_id.unwrap();
+    task_depends_add(root.clone(), "TASKS.md".to_string(), 2, dep_id.clone()).unwrap();
+
+    let patch = TaskPatch {
+        name: Some("Main renamed".to_string()),
+        tags: Some(vec!["ux".to_string()]),
+        agent: Some("tech-ui".to_string()),
+        priority: Some("high".to_string()),
+        ..Default::default()
+    };
+    let updated = task_update(root, "TASKS.md".to_string(), 2, patch).unwrap();
+    assert_eq!(updated.task_id.as_deref(), Some(main_id.as_str()));
+    assert_eq!(updated.depends_on, vec![dep_id.clone()]);
+    assert_eq!(updated.tags, vec!["ux".to_string()]);
+    assert_eq!(updated.agent.as_deref(), Some("tech-ui"));
+    assert_eq!(updated.priority.as_deref(), Some("high"));
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    let expected_line = format!("- [ ] Main renamed #id:{main_id} #needs:{dep_id} #ux @tech-ui !high\n");
+    assert!(on_disk.ends_with(&expected_line), "on disk: {on_disk}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// D7 fix regression — minting into a boundary-less/early-period checklist
+// line must not leak the reserved token into name/description, and a
+// mint -> update -> update round-trip must stay stable (no growth).
+// =============================================================================
+
+#[test]
+fn d7_mint_into_boundary_less_checklist_line_stays_stable_across_updates() {
+    let dir = temp_project("d7-boundary-less");
+    fs::write(dir.join("TASKS.md"), "- [ ] Wire the hooks server\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = minted.task_id.clone().unwrap();
+    assert_eq!(minted.name, "Wire the hooks server", "D7: minted token must not leak into name");
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] Wire the hooks server #id:{id}\n"));
+
+    // UI round-trip #1: TaskPanel prefills from `minted.name` and saves it back.
+    let patch = TaskPatch { name: Some(minted.name.clone()), ..Default::default() };
+    let updated = task_update(root.clone(), "TASKS.md".to_string(), 1, patch).unwrap();
+    assert_eq!(updated.name, "Wire the hooks server");
+    assert_eq!(updated.task_id.as_deref(), Some(id.as_str()));
+    let on_disk2 = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk2, format!("- [ ] Wire the hooks server #id:{id}\n"), "no duplication after save #1");
+
+    // UI round-trip #2: same again — must stay stable, not grow a second copy.
+    let patch2 = TaskPatch { name: Some(updated.name.clone()), ..Default::default() };
+    let updated2 = task_update(root, "TASKS.md".to_string(), 1, patch2).unwrap();
+    assert_eq!(updated2.name, "Wire the hooks server");
+    let on_disk3 = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk3, format!("- [ ] Wire the hooks server #id:{id}\n"), "no duplication after save #2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn d7_mint_into_checklist_line_with_early_period_keeps_token_out_of_description() {
+    let dir = temp_project("d7-early-period");
+    fs::write(dir.join("TASKS.md"), "- [ ] v1.2 release notes\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = minted.task_id.clone().unwrap();
+    assert_eq!(minted.name, "v1");
+    assert_eq!(
+        minted.description.as_deref(),
+        Some("2 release notes"),
+        "D7: minted token must not leak into description"
+    );
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] v1.2 release notes #id:{id}\n"));
+
+    let patch = TaskPatch {
+        name: Some(minted.name.clone()),
+        description: minted.description.clone(),
+        ..Default::default()
+    };
+    let updated = task_update(root, "TASKS.md".to_string(), 1, patch).unwrap();
+    assert_eq!(updated.description.as_deref(), Some("2 release notes"));
+    let on_disk2 = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk2,
+        format!("- [ ] v1 — 2 release notes #id:{id}\n"),
+        "single copy of the token, description clean"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 O2 — missing convention file co-locates, never lands at repo root
+// =============================================================================
+
+#[test]
+fn o2_creates_missing_file_colocated_with_existing_convention_file() {
+    let dir = temp_project("o2-colocate");
+    fs::create_dir_all(dir.join("docs/tasks")).unwrap();
+    fs::write(dir.join("docs/tasks/TASKS.md"), "- [ ] a\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root.clone()).unwrap();
+    let bugs_rel = scan.files.iter().find(|f| f.rel_path.ends_with("BUGS.md")).unwrap().rel_path.clone();
+    assert_eq!(bugs_rel, "docs/tasks/BUGS.md");
+
+    let item = task_append(root, bugs_rel, "new bug".to_string()).unwrap();
+    assert_eq!(item.rel_path, "docs/tasks/BUGS.md");
+    let on_disk = fs::read_to_string(dir.join("docs/tasks/BUGS.md")).unwrap();
+    assert!(on_disk.contains("new bug"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn o2_creates_missing_file_at_docs_tasks_when_project_is_empty() {
+    let dir = temp_project("o2-empty");
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root.clone()).unwrap();
+    let bugs_rel = scan.files.iter().find(|f| f.rel_path.ends_with("BUGS.md")).unwrap().rel_path.clone();
+    assert_eq!(bugs_rel, "docs/tasks/BUGS.md");
+
+    let item = task_append(root, bugs_rel, "first bug".to_string()).unwrap();
+    assert_eq!(item.rel_path, "docs/tasks/BUGS.md");
+    let on_disk = fs::read_to_string(dir.join("docs/tasks/BUGS.md")).unwrap();
+    assert!(on_disk.contains("first bug"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// WO06 O3 — task_move preserves status (not hardcoded "new") + reserved
+// tokens, across all four source/target shape combinations (Gate 14/11)
+// =============================================================================
+
+#[test]
+fn o3_done_table_row_moved_into_table_target_preserves_status_and_id() {
+    let dir = temp_project("o3-table-table");
+    fs::write(dir.join("SPRINT.md"), "| Name | Status | Tags |\n| --- | --- | --- |\n| Old | new | keep |\n").unwrap();
+    fs::write(dir.join("BACKLOG.md"), "| Name | Status | Tags |\n| --- | --- | --- |\n| Ship it | done | |\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "BACKLOG.md".to_string(), 3).unwrap();
+    let id = minted.task_id.unwrap();
+
+    let moved = task_move(root, "BACKLOG.md".to_string(), 3, "SPRINT.md".to_string()).unwrap();
+    assert_eq!(moved.status.as_deref(), Some("done"));
+    assert!(moved.done);
+    assert_eq!(moved.task_id.as_deref(), Some(id.as_str()));
+
+    let on_disk = fs::read_to_string(dir.join("SPRINT.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        format!("| Name | Status | Tags |\n| --- | --- | --- |\n| Old | new | keep |\n| Ship it | done | id:{id} |\n")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn o3_done_table_row_moved_into_checklist_target_preserves_status_and_id() {
+    let dir = temp_project("o3-table-checklist");
+    fs::write(dir.join("BACKLOG.md"), "| Name | Status | Tags |\n| --- | --- | --- |\n| Ship it | done | |\n").unwrap();
+    fs::write(dir.join("TASKS.md"), "- [ ] already here\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "BACKLOG.md".to_string(), 3).unwrap();
+    let id = minted.task_id.unwrap();
+
+    let moved = task_move(root, "BACKLOG.md".to_string(), 3, "TASKS.md".to_string()).unwrap();
+    assert_eq!(moved.status.as_deref(), Some("done"));
+    assert!(moved.done);
+    assert_eq!(moved.task_id.as_deref(), Some(id.as_str()));
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] already here\n- [x] Ship it #id:{id}\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// D7 FIX (was: a checklist source with no dash/period boundary swallowed
+// its trailing `#id:…` token into `name` verbatim, since `split_name_desc`
+// ran on text that still contained it). `parse_checklist_line` now strips
+// well-formed reserved tokens out of the prose BEFORE the boundary search
+// (`strip_reserved_tokens`), so `task_move`'s reparse-then-recompose path
+// carries a clean `name` and the target line is written once, not doubled.
+#[test]
+fn o3_checklist_row_moved_into_table_target_preserves_id() {
+    let dir = temp_project("o3-checklist-table");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo\n").unwrap();
+    fs::write(dir.join("BACKLOG.md"), "| Name | Tags |\n| --- | --- |\n| Old | keep |\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = minted.task_id.unwrap();
+    assert_eq!(minted.name, "Solo", "D7: the minted token must not leak into name");
+
+    let moved = task_move(root, "TASKS.md".to_string(), 1, "BACKLOG.md".to_string()).unwrap();
+    assert_eq!(moved.task_id.as_deref(), Some(id.as_str()));
+    assert_eq!(moved.name, "Solo");
+
+    let on_disk = fs::read_to_string(dir.join("BACKLOG.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        format!("| Name | Tags |\n| --- | --- |\n| Old | keep |\n| Solo | id:{id} |\n")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// D7 FIX (was: the same swallow-into-`name` caveat as above, compounded by
+// `compose_checklist_text` re-appending the separately-extracted `task_id`
+// as its own `#id:…` token — a checklist-to-checklist move of a freshly-
+// minted, no-boundary source used to visibly double the token text).
+#[test]
+fn o3_checklist_row_moved_into_checklist_target_preserves_id() {
+    let dir = temp_project("o3-checklist-checklist");
+    fs::write(dir.join("TASKS.md"), "- [ ] Solo2\n").unwrap();
+    fs::write(dir.join("SPRINT.md"), "- [ ] already\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let minted = task_id_ensure(root.clone(), "TASKS.md".to_string(), 1).unwrap();
+    let id = minted.task_id.unwrap();
+    assert_eq!(minted.name, "Solo2", "D7: the minted token must not leak into name");
+
+    let moved = task_move(root, "TASKS.md".to_string(), 1, "SPRINT.md".to_string()).unwrap();
+    assert_eq!(moved.task_id.as_deref(), Some(id.as_str()));
+    assert_eq!(moved.name, "Solo2");
+
+    let on_disk = fs::read_to_string(dir.join("SPRINT.md")).unwrap();
+    assert_eq!(on_disk, format!("- [ ] already\n- [ ] Solo2 #id:{id}\n"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// Gate 14, the literal example: a `done` row moved from TASKS.md to
+// BACKLOG.md (both tableless checklist files) arrives `done`, not `new`.
+#[test]
+fn o3_done_checklist_row_moved_arrives_done() {
+    let dir = temp_project("o3-checklist-done");
+    fs::write(dir.join("TASKS.md"), "- [x] Finished thing\n").unwrap();
+    fs::write(dir.join("BACKLOG.md"), "- [ ] already here\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let moved = task_move(root, "TASKS.md".to_string(), 1, "BACKLOG.md".to_string()).unwrap();
+    assert_eq!(moved.status.as_deref(), Some("done"));
+    assert!(moved.done);
+    let on_disk = fs::read_to_string(dir.join("BACKLOG.md")).unwrap();
+    assert_eq!(on_disk, "- [ ] already here\n- [x] Finished thing\n");
     let _ = fs::remove_dir_all(&dir);
 }

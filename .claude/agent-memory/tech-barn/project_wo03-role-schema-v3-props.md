@@ -34,3 +34,11 @@ a final design intent. Six roles sharing 3 undifferentiated shapes is a
 known readability debt, flagged for a follow-up art pass rather than solved
 here. See [[feedback_eslint-unused-params]] for the general "flag, don't
 silently absorb, cross-lane constraints" pattern this lane follows.
+
+**UPDATE (WO06 B1, see [[wo06-b1-mission-control]]):** the specific
+`invariant`/`trap`-look-like-`rules` gap is closed — `ROLE_ACCENT` now has
+real entries for both (reused the dead `iris`/`orchid` keys). The broader
+"6 roles, 3 undifferentiated shapes" debt (architecture/reference/glossary/
+skill/style all render as the same bookshelf; task/workflow/command/snippet
+all render as the same crate) is still open — `makeBookshelf`/`makeCrate`
+still take no role param at all.

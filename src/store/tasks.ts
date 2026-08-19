@@ -8,17 +8,25 @@
 import { create } from "zustand";
 import {
   taskAppend,
+  taskDependsAdd,
+  taskDependsRemove,
+  taskIdEnsure,
   taskMove,
   tasksScan,
   taskToggle,
   taskUpdate,
+  type TaskDag,
   type TaskFileInfo,
   type TaskItem,
   type TaskPatch,
 } from "../tasks/api";
 
 // UI convenience: the board imports its wire types from the store.
-export type { TaskFileInfo, TaskItem, TaskPatch, TaskSource } from "../tasks/api";
+export type { TaskDag, TaskFileInfo, TaskItem, TaskPatch, TaskSource, UnresolvedDep } from "../tasks/api";
+
+/** Empty DAG — used before the first scan lands and as a defensive fallback
+ *  if a scan response predates WO06 G1 (backend not yet carrying `dag`). */
+const EMPTY_DAG: TaskDag = { cycles: [], duplicateIds: [], unresolved: [] };
 
 // ── Status model (contract Rev 2 R2) ───────────────────────────────────
 
@@ -133,6 +141,8 @@ interface TasksState {
   error: string | null;
   files: TaskFileInfo[];
   tasks: TaskItem[];
+  /** Cross-file DAG derivation from the most recent scan (WO06 §3.3). */
+  dag: TaskDag;
   /** null = all agents; "producer" additionally matches agent === null. */
   agentFilter: string | null;
   /** Task shown in the Inspector's Properties panel (Rev 2 R4). */
@@ -144,8 +154,21 @@ interface TasksState {
   setStatus(item: TaskItem, status: TaskStatus): Promise<string | null>;
   setAgentFilter(agent: string | null): void;
   toggle(item: TaskItem, done: boolean): Promise<string | null>;
+  /** O1 fix: routes to `toggle` (checklist primitive) for checklist rows,
+   *  and to a full-field `update` for table rows — `task_toggle` genuinely
+   *  refuses table rows server-side. Carries every editable field so an
+   *  omitted cell (esp. `phase`) is never silently cleared. */
+  toggleAny(item: TaskItem, done: boolean): Promise<string | null>;
   append(relPath: string, text: string): Promise<string | null>;
   move(item: TaskItem, toRelPath: string): Promise<string | null>;
+  /** Idempotent: no-op if `item` already carries a stable id. */
+  ensureId(item: TaskItem): Promise<TaskItem | string>;
+  /** Mints a stable id for `item` and `target` if either is missing one,
+   *  then links `item` to `target` via `needs:`. Reloads afterward — blocked
+   *  state and dag are cross-file derivations a single-file return can't
+   *  carry (WO06 §8). */
+  addDependency(item: TaskItem, target: TaskItem): Promise<string | null>;
+  removeDependency(item: TaskItem, dependsOnId: string): Promise<string | null>;
 }
 
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +192,7 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   error: null,
   files: [],
   tasks: [],
+  dag: EMPTY_DAG,
   agentFilter: null,
   selected: null,
 
@@ -187,7 +211,7 @@ export const useTasksStore = create<TasksState>((set, get) => ({
           : (scan.tasks.find((t) => t.id === prev.id) ??
              scan.tasks.find((t) => t.relPath === prev.relPath && t.name === prev.name) ??
              null);
-      set({ files: scan.files, tasks: scan.tasks, loading: false, selected });
+      set({ files: scan.files, tasks: scan.tasks, dag: scan.dag ?? EMPTY_DAG, loading: false, selected });
     } catch (e) {
       if (get().root !== root) return;
       set({ error: String(e), loading: false });
@@ -207,6 +231,10 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         tasks: st.tasks.map((t) => (t.id === item.id ? updated : t)),
         selected: st.selected?.id === item.id ? updated : st.selected,
       }));
+      // WO06 §8 / audit D8: a single-file return can't carry `blocked`/`dag`
+      // (cross-file derivations) — reload so any task that depends on this
+      // one re-evaluates instead of showing a stale Blocked badge.
+      await get().load(root);
       return null;
     } catch (e) {
       void get().load(root);
@@ -224,10 +252,106 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     try {
       const updated = await taskToggle(root, item.relPath, item.line, done);
       set((st) => ({ tasks: st.tasks.map((t) => (t.id === item.id ? updated : t)) }));
+      // WO06 §8 / audit D8: recompute cross-file `blocked`/`dag` state — a
+      // dependent task's Blocked badge must clear the instant this one is
+      // marked done, not only after the fs watcher's 500ms debounce fires.
+      await get().load(root);
       return null;
     } catch (e) {
       // Stale line etc. — a rescan resolves it.
       void get().load(root);
+      return String(e);
+    }
+  },
+
+  // O1 fix (WO06 §11): a checklist row can complete through task_toggle's
+  // marker-only surgery, but a table row has no marker — task_toggle
+  // genuinely refuses it server-side. Routing a table row through the same
+  // full-field patch the Inspector's TaskPanel already uses means every
+  // mapped cell (name/description/tags/priority/phase/agent) is re-sent
+  // explicitly; omitting one (esp. `phase`) would clear it, since an absent
+  // TaskPatch key means "clear this field", same trap set_cell documents.
+  toggleAny: async (item, done) => {
+    if (item.source === "checklist") return get().toggle(item, done);
+    return get().update(item, {
+      name: item.name,
+      description: item.description,
+      tags: item.tags,
+      priority: item.priority,
+      phase: item.phase,
+      agent: item.agent,
+      status: done ? "done" : "new",
+      done,
+    });
+  },
+
+  ensureId: async (item) => {
+    if (item.taskId !== null) return item;
+    const root = get().root;
+    if (root === null) return "No project open";
+    try {
+      const updated = await taskIdEnsure(root, item.relPath, item.line);
+      set((st) => ({
+        tasks: st.tasks.map((t) => (t.id === item.id ? updated : t)),
+        selected: st.selected?.id === item.id ? updated : st.selected,
+      }));
+      // WO06 §8 / audit D8: minting an id can resolve a previously-unresolved
+      // `needs:` reference elsewhere in the corpus (dag.unresolved shrinks) —
+      // reload so that clears immediately rather than waiting on the watcher.
+      await get().load(root);
+      return updated;
+    } catch (e) {
+      return String(e);
+    }
+  },
+
+  addDependency: async (item, target) => {
+    const root = get().root;
+    if (root === null) return "No project open";
+    try {
+      // Both ends need a stable id before a `needs:` token can name either
+      // of them — mint on demand (WO06 §3.1: "ids appear only when the user
+      // first links a task to something").
+      let self = item;
+      if (self.taskId === null) {
+        const ensured = await get().ensureId(self);
+        if (typeof ensured === "string") throw new Error(ensured);
+        self = ensured;
+      }
+      let dep = target;
+      if (dep.taskId === null) {
+        const ensured = await get().ensureId(dep);
+        if (typeof ensured === "string") throw new Error(ensured);
+        dep = ensured;
+      }
+      if (dep.taskId === null) throw new Error("could not mint an id for the dependency target");
+      const updated = await taskDependsAdd(root, self.relPath, self.line, dep.taskId);
+      set((st) => ({
+        tasks: st.tasks.map((t) => (t.id === self.id ? updated : t)),
+        selected: st.selected?.id === self.id ? updated : st.selected,
+      }));
+      // blocked / dag are cross-file derivations only tasks_scan computes.
+      await get().load(root);
+      return null;
+    } catch (e) {
+      await get().load(root);
+      return String(e);
+    }
+  },
+
+  removeDependency: async (item, dependsOnId) => {
+    const root = get().root;
+    if (root === null) return "No project open";
+    try {
+      const updated = await taskDependsRemove(root, item.relPath, item.line, dependsOnId);
+      set((st) => ({
+        tasks: st.tasks.map((t) => (t.id === item.id ? updated : t)),
+        selected: st.selected?.id === item.id ? updated : st.selected,
+      }));
+      await get().load(root);
+      return null;
+    } catch (e) {
+      await get().load(root);
       return String(e);
     }
   },

@@ -43,6 +43,12 @@ import {
   type TaskStatus,
 } from "../store/tasks";
 import { TagPicker } from "../tasks/TagPicker";
+// WO06 audit D1/F1 fix: §10.1 reserves TaskPanel for task-graph editing;
+// mounting TaskLinksPanel here is the tech-lead-ruled fix for the
+// differentiator's other missing entry point (node attach / parent goal /
+// per-task ceiling, plus its own "Preview context…" launch of the frozen
+// §10.3 TaskContextModal) — U2's component, U1's mount.
+import { TaskLinksPanel } from "../tasklinks/TaskLinksPanel";
 import { useSessionsStore } from "../store/sessions";
 import { AgentPanel } from "../sessions/AgentPanel";
 import { CodeMirrorEditor, type AtMentionHandlers } from "./CodeMirrorEditor";
@@ -1319,6 +1325,7 @@ function TaskPanel({ root }: { root: string }) {
           )}
         </div>
       </div>
+      <TaskLinksPanel root={root} taskId={item.taskId} taskName={item.name} />
     </div>
   );
 }

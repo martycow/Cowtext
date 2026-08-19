@@ -17,7 +17,9 @@ import {
 // ── Wire shape — mirrors src-tauri AgentEvent 1:1 (contract §5) ───────
 
 export type SessionStatus = "idle" | "working" | "waiting";
-export type AgentEventKind = "status" | "tool" | "text" | "usage" | "exit" | "error";
+// WO06 §5.4 — "budget" is the one new kind; no field added/removed on
+// AgentEvent itself, `usage`/`text` already exist and carry it.
+export type AgentEventKind = "status" | "tool" | "text" | "usage" | "exit" | "error" | "budget";
 
 export interface Usage {
   inputTokens: number;
@@ -80,6 +82,35 @@ export interface Session {
   queue: string[]; // prompts typed while busy, drained on idle
   lastError: string | null;
   startedMs: number;
+  /** Captured from the stream's `system/init` line — the durable id
+   *  `tasklinks.json`'s `sessionIds` key on (WO06 §3.2 L3). Was silently
+   *  dropped by `sessionFromInfo` pre-WO06 even though `SessionInfo` already
+   *  carried it; restored here as part of the WO06 budget/linkage work. */
+  claudeSessionId: string | null;
+  /** WO06 §4.3 — set only for sessions spawned via `spawnForTask`; null for
+   *  every session spawned the pre-WO06 way through `spawn`. */
+  taskId: string | null;
+  /** Effective ceiling this session was spawned with, `null` = unlimited
+   *  (WO06 §5.1/§8). */
+  tokenCeiling: number | null;
+  /** WO06 §8 `SessionInfo.tokensUsed` mirror — Rust's own authoritative
+   *  cumulative accumulator (`SessionEntry.tokens_used`, folded once per
+   *  turn by `end_turn`), the correct denominator for the budget gauge.
+   *  Deliberately a SEPARATE field from `usage.totalTokens` even though the
+   *  two normally track together turn-for-turn: `usage.totalTokens` is a
+   *  pure per-`usage`-event sum with no other meaning, while a `budget`
+   *  event's `usage.totalTokens` is `spent` — an already-cumulative
+   *  snapshot, not a delta (`sessions.rs` `budget_event` doc comment). Fold
+   *  that into `usage.totalTokens` (which only ever knows how to add) and
+   *  the ceiling stop double-counts every token accrued before it (D4).
+   *  `tokensUsed` therefore adds per `usage` event, same as `usage
+   *  .totalTokens`, but is ASSIGNED (never added) on a `budget` event. */
+  tokensUsed: number;
+  /** `"budget"` once a `budget`-kind event has been observed for this
+   *  session — the signal that distinguishes a budget hard-stop from an
+   *  ordinary exit/crash in the UI (WO06 §5.5). Reset to `null` on restart:
+   *  "a restart is a new budget" (contract §5.5). */
+  stopReason: "budget" | null;
 }
 
 export interface SessionsState {
@@ -89,6 +120,21 @@ export interface SessionsState {
   opError: string | null; // last operation error, cleared on the next op
 
   spawn(root: string, agentFileName: string | null, name: string, cwd: string): Promise<string | null>;
+  /** WO06 §4.3 — spawns WITH a pre-compiled task context and an effective
+   *  ceiling. Kept as a sibling of `spawn` (not an overload) so the pre-WO06
+   *  4-arg call site above is untouched and its behaviour stays byte-for-byte
+   *  identical (contract §1.14). Resolves the new session's Cowtext-side id
+   *  on success, so the caller can record it against the task's tasklinks
+   *  entry. */
+  spawnForTask(
+    root: string,
+    agentFileName: string | null,
+    name: string,
+    cwd: string,
+    taskId: string,
+    taskContext: string,
+    tokenCeiling: number | null,
+  ): Promise<{ id: string } | { error: string }>;
   send(id: string, prompt: string): Promise<string | null>;
   kill(id: string): Promise<string | null>;
   restart(id: string): Promise<string | null>;
@@ -120,6 +166,11 @@ function sessionFromInfo(info: SessionInfo): Session {
     queue: [],
     lastError: null,
     startedMs: Date.now(),
+    claudeSessionId: info.claudeSessionId,
+    taskId: null,
+    tokenCeiling: info.tokenCeiling,
+    tokensUsed: info.tokensUsed,
+    stopReason: null,
   };
 }
 
@@ -149,6 +200,32 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       const msg = String(e);
       set({ opError: msg });
       return msg;
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  spawnForTask: async (root, agentFileName, name, cwd, taskId, taskContext, tokenCeiling) => {
+    const s = get();
+    if (s.busy) return { error: "Busy" };
+    if (s.sessions.filter((x) => x.alive).length >= MAX_SESSIONS) {
+      return { error: `agent limit reached (${MAX_SESSIONS})` };
+    }
+    set({ busy: true, opError: null });
+    try {
+      const info = await agentSessionSpawn(root, agentFileName, name, cwd, taskId, taskContext, tokenCeiling);
+      set((st) => ({
+        sessions: [
+          ...st.sessions,
+          { ...sessionFromInfo(info), status: "working", taskId, tokenCeiling },
+        ],
+        selectedId: info.id,
+      }));
+      return { id: info.id };
+    } catch (e) {
+      const msg = String(e);
+      set({ opError: msg });
+      return { error: msg };
     } finally {
       set({ busy: false });
     }
@@ -217,6 +294,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
                 currentTool: null,
                 queue: [],
                 lastError: null,
+                // "a restart is a new budget" (contract §5.5) — usage totals
+                // are NOT reset here (the registry's `tokens_used` reset and
+                // this store's usage total are two separate accumulators;
+                // resetting usage client-side would desync from the next
+                // real `usage` event's deltas), only the stop signal is.
+                stopReason: null,
                 transcript: pushTranscript(x.transcript, {
                   kind: "status",
                   text: "— restarted —",
@@ -299,6 +382,13 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
               // the last known value in place rather than clearing it.
               costUsd: u.costUsd ?? session.usage.costUsd,
             },
+            // A normal `usage` event's `totalTokens` is that turn's own
+            // delta (sessions.rs: "the result line's usage is the turn's
+            // authoritative total") — same accumulation as `usage
+            // .totalTokens` above, kept in lockstep with Rust's own
+            // per-turn fold (`end_turn`: `tokens_used += turn_tokens`) so
+            // the budget gauge climbs live, not just at the stop (D4/D5).
+            tokensUsed: session.tokensUsed + u.totalTokens,
           };
           break;
         }
@@ -307,6 +397,46 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
             ...session,
             lastError: e.text ?? null,
             transcript: pushTranscript(session.transcript, { kind: "error", text: e.text ?? "", ts: e.ts }),
+          };
+          break;
+        }
+        case "budget": {
+          // WO06 §5.3/§5.4 — backend emits `budget` then `exit`, in that
+          // order, from inside the same generation-fenced Stop path; `exit`
+          // (below) is what actually flips `alive`. This case only records
+          // the stop reason (so the UI can tell budget apart from a crash)
+          // and folds in the usage this event carries — the same shape as
+          // the "usage" case, not summed twice: it IS this turn's usage
+          // event, budget just piggy-backs on it.
+          const u = e.usage;
+          next = {
+            ...session,
+            stopReason: "budget",
+            usage:
+              u === undefined
+                ? session.usage
+                : {
+                    inputTokens: session.usage.inputTokens + u.inputTokens,
+                    outputTokens: session.usage.outputTokens + u.outputTokens,
+                    totalTokens: session.usage.totalTokens + u.totalTokens,
+                    turns: session.usage.turns + 1,
+                    costUsd: u.costUsd ?? session.usage.costUsd,
+                  },
+            // D4 fix: a `budget` event's `usage.totalTokens` is `spent` —
+            // Rust's already-cumulative total at the moment it crossed the
+            // ceiling (`sessions.rs` `budget_event`), NOT a per-line delta.
+            // ASSIGN it to `tokensUsed`, never add — adding double-counts
+            // every token this session had already accrued before the stop
+            // (verified failure: ceiling 200000, turn 1 leaves tokensUsed
+            // at 150000 via the `usage` case above, turn 2's stop carries
+            // totalTokens=210000; assigning yields 210000, adding would
+            // have yielded 360000 / 180%).
+            tokensUsed: u === undefined ? session.tokensUsed : u.totalTokens,
+            transcript: pushTranscript(session.transcript, {
+              kind: "error",
+              text: e.text ?? "token ceiling reached — session stopped",
+              ts: e.ts,
+            }),
           };
           break;
         }

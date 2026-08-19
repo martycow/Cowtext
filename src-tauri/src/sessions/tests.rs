@@ -11,7 +11,7 @@ fn register_rejects_non_repo() {
     let reg = RegistryCore::default();
     let check = WorktreeInfo { path: "/tmp/x".to_string(), is_repo: false, is_worktree: false, branch: None };
     let err = reg
-        .register(&check, "root".to_string(), None, "Agent".to_string())
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, None)
         .unwrap_err();
     assert!(err.contains("not a git repository"), "{err}");
 }
@@ -21,7 +21,7 @@ fn register_rejects_empty_name() {
     let reg = RegistryCore::default();
     let check = wt("/tmp/proj-empty");
     let err = reg
-        .register(&check, "root".to_string(), None, "   ".to_string())
+        .register(&check, "root".to_string(), None, "   ".to_string(), None, None, None)
         .unwrap_err();
     assert!(err.contains("Name is required"), "{err}");
 }
@@ -30,9 +30,9 @@ fn register_rejects_empty_name() {
 fn register_rejects_duplicate_alive_cwd() {
     let reg = RegistryCore::default();
     let check = wt("/tmp/proj-a");
-    reg.register(&check, "root".to_string(), None, "Agent A".to_string()).unwrap();
+    reg.register(&check, "root".to_string(), None, "Agent A".to_string(), None, None, None).unwrap();
     let err = reg
-        .register(&check, "root".to_string(), None, "Agent B".to_string())
+        .register(&check, "root".to_string(), None, "Agent B".to_string(), None, None, None)
         .unwrap_err();
     assert!(err.contains("already running"), "{err}");
 }
@@ -41,12 +41,12 @@ fn register_rejects_duplicate_alive_cwd() {
 fn register_allows_reuse_of_a_dead_sessions_cwd() {
     let reg = RegistryCore::default();
     let check = wt("/tmp/proj-b");
-    let (info, _, _) = reg.register(&check, "root".to_string(), None, "Agent A".to_string()).unwrap();
+    let (info, _, _) = reg.register(&check, "root".to_string(), None, "Agent A".to_string(), None, None, None).unwrap();
     {
         let mut guard = reg.inner.lock().unwrap();
         guard.get_mut(&info.id).unwrap().info.alive = false;
     }
-    let result = reg.register(&check, "root".to_string(), None, "Agent B".to_string());
+    let result = reg.register(&check, "root".to_string(), None, "Agent B".to_string(), None, None, None);
     assert!(result.is_ok(), "a dead session must not hold its folder");
 }
 
@@ -55,11 +55,11 @@ fn register_rejects_over_max_sessions() {
     let reg = RegistryCore::default();
     for i in 0..MAX_SESSIONS {
         let check = wt(&format!("/tmp/proj-{i}"));
-        reg.register(&check, "root".to_string(), None, format!("Agent {i}")).unwrap();
+        reg.register(&check, "root".to_string(), None, format!("Agent {i}"), None, None, None).unwrap();
     }
     let check = wt("/tmp/proj-overflow");
     let err = reg
-        .register(&check, "root".to_string(), None, "Overflow".to_string())
+        .register(&check, "root".to_string(), None, "Overflow".to_string(), None, None, None)
         .unwrap_err();
     assert!(err.contains("agent limit reached (4)"), "{err}");
 }
@@ -71,12 +71,110 @@ fn list_is_in_registration_order() {
     for i in 0..3 {
         let check = wt(&format!("/tmp/proj-order-{i}"));
         let (info, _, _) = reg
-            .register(&check, "root".to_string(), None, format!("Agent {i}"))
+            .register(&check, "root".to_string(), None, format!("Agent {i}"), None, None, None)
             .unwrap();
         ids.push(info.id);
     }
     let listed: Vec<String> = reg.list().into_iter().map(|s| s.id).collect();
     assert_eq!(listed, ids);
+}
+
+// ── register(): §4.3 spawn guard + §5.1 ceiling normalization ──────────
+
+#[test]
+fn register_rejects_task_id_with_no_task_context() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-taskguard-none");
+    let err = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), Some("t-abc123".to_string()), None, None)
+        .unwrap_err();
+    assert!(err.contains("task context"), "{err}");
+}
+
+#[test]
+fn register_rejects_task_id_with_whitespace_only_task_context() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-taskguard-blank");
+    let err = reg
+        .register(
+            &check,
+            "root".to_string(),
+            None,
+            "Agent".to_string(),
+            Some("t-abc123".to_string()),
+            Some("   ".to_string()),
+            None,
+        )
+        .unwrap_err();
+    assert!(err.contains("task context"), "{err}");
+}
+
+#[test]
+fn register_rejects_task_id_guard_before_mutating_the_registry() {
+    // The spawn guard must behave like every other guardrail in `register`:
+    // `Err` never mutates. A rejected task-session registration must not
+    // consume a MAX_SESSIONS slot or leave a half-registered entry behind.
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-taskguard-nomutate");
+    let _ = reg.register(&check, "root".to_string(), None, "Agent".to_string(), Some("t-abc123".to_string()), None, None);
+    assert!(reg.list().is_empty(), "a rejected spawn must register nothing");
+}
+
+#[test]
+fn register_allows_task_id_with_nonempty_task_context_and_injects_it() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-taskguard-ok");
+    let (info, prompt, _agent_file_error) = reg
+        .register(
+            &check,
+            "root".to_string(),
+            None,
+            "Agent".to_string(),
+            Some("t-abc123".to_string()),
+            Some("the compiled subgraph body".to_string()),
+            Some(5000),
+        )
+        .unwrap();
+    assert_eq!(info.token_ceiling, Some(5000));
+    assert!(prompt.contains("--- BEGIN TASK CONTEXT (Cowtext, task t-abc123) ---"));
+    assert!(prompt.contains("the compiled subgraph body"));
+    assert!(prompt.contains("--- END TASK CONTEXT ---"));
+}
+
+#[test]
+fn register_without_a_task_id_never_needs_a_task_context() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-notask");
+    let result = reg.register(&check, "root".to_string(), None, "Agent".to_string(), None, None, None);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn register_normalizes_zero_ceiling_to_unlimited() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-zeroceiling");
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, Some(0))
+        .unwrap();
+    assert_eq!(info.token_ceiling, None, "Some(0) from the caller must normalize to unlimited (contract §5.1)");
+}
+
+#[test]
+fn register_absent_ceiling_stays_unlimited() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-noceiling");
+    let (info, _, _) = reg.register(&check, "root".to_string(), None, "Agent".to_string(), None, None, None).unwrap();
+    assert_eq!(info.token_ceiling, None);
+}
+
+#[test]
+fn register_preserves_a_nonzero_ceiling() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-realceiling");
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, Some(200_000))
+        .unwrap();
+    assert_eq!(info.token_ceiling, Some(200_000));
 }
 
 // ── generation_current: probe-race defect fix guard (contract §6.2) ────
@@ -86,7 +184,7 @@ fn generation_current_true_only_for_the_live_generation_of_a_known_alive_entry()
     let reg = RegistryCore::default();
     let check = wt("/tmp/proj-gen");
     let (info, _, _) = reg
-        .register(&check, "root".to_string(), None, "Agent".to_string())
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, None)
         .unwrap();
 
     assert!(generation_current(&reg.inner, &info.id, 0));
@@ -105,7 +203,7 @@ fn generation_current_goes_stale_the_instant_kill_lands_even_before_any_child_pi
     let reg = RegistryCore::default();
     let check = wt("/tmp/proj-gen-race");
     let (info, _, _) = reg
-        .register(&check, "root".to_string(), None, "Agent".to_string())
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, None)
         .unwrap();
     let captured_generation = 0; // what run_turn captured at spawn time
 
@@ -133,7 +231,7 @@ fn build_boot_prompt_includes_agent_file_body_when_present() {
     fs::create_dir_all(&agents_dir).unwrap();
     fs::write(agents_dir.join("tech-ui.md"), "You review UI diffs.").unwrap();
 
-    let (prompt, error) = build_boot_prompt(&root.to_string_lossy(), Some("tech-ui.md"), "UI Agent", "/tmp/proj");
+    let (prompt, error) = build_boot_prompt(&root.to_string_lossy(), Some("tech-ui.md"), "UI Agent", "/tmp/proj", None, None);
     assert!(error.is_none());
     assert!(prompt.contains("You review UI diffs."));
     assert!(prompt.contains("Your role definition follows:"));
@@ -143,7 +241,7 @@ fn build_boot_prompt_includes_agent_file_body_when_present() {
 #[test]
 fn build_boot_prompt_reports_non_fatal_error_for_missing_agent_file() {
     let root = temp_root("noagentfile");
-    let (prompt, error) = build_boot_prompt(&root.to_string_lossy(), Some("missing.md"), "Agent", "/tmp/proj");
+    let (prompt, error) = build_boot_prompt(&root.to_string_lossy(), Some("missing.md"), "Agent", "/tmp/proj", None, None);
     assert!(error.unwrap().contains("could not be read"));
     assert!(prompt.contains("Reply with ONE short line"));
 }
@@ -151,7 +249,7 @@ fn build_boot_prompt_reports_non_fatal_error_for_missing_agent_file() {
 #[test]
 fn build_boot_prompt_rejects_path_escaping_agent_file_name() {
     let root = temp_root("escape");
-    let (_, error) = build_boot_prompt(&root.to_string_lossy(), Some("../escape.md"), "Agent", "/tmp/proj");
+    let (_, error) = build_boot_prompt(&root.to_string_lossy(), Some("../escape.md"), "Agent", "/tmp/proj", None, None);
     assert!(error.unwrap().contains("could not be read"));
 }
 
@@ -170,6 +268,62 @@ fn truncate_at_char_boundary_never_splits_a_multibyte_char() {
     let truncated = truncate_at_char_boundary(&s, 6);
     assert!(s.starts_with(truncated));
     assert!(truncated.len() <= 6);
+}
+
+// ── build_boot_prompt: task-context injection (contract §4.3) ──────────
+
+#[test]
+fn build_boot_prompt_inserts_task_context_after_agent_body_and_before_tail() {
+    let root = temp_root("taskctx-order");
+    let agents_dir = root.join(".claude").join("agents");
+    fs::create_dir_all(&agents_dir).unwrap();
+    fs::write(agents_dir.join("tech-ui.md"), "You review UI diffs.").unwrap();
+
+    let (prompt, error) = build_boot_prompt(
+        &root.to_string_lossy(),
+        Some("tech-ui.md"),
+        "UI Agent",
+        "/tmp/proj",
+        Some("t-abc123"),
+        Some("CONTEXT BODY HERE"),
+    );
+    assert!(error.is_none());
+    let agent_pos = prompt.find("You review UI diffs.").unwrap();
+    let ctx_pos = prompt.find("CONTEXT BODY HERE").unwrap();
+    let tail_pos = prompt.find("Reply with ONE short line").unwrap();
+    assert!(agent_pos < ctx_pos, "task context must come after the agent-file body");
+    assert!(ctx_pos < tail_pos, "task context must come before BOOT_PROMPT_TAIL");
+    assert!(prompt.contains("--- BEGIN TASK CONTEXT (Cowtext, task t-abc123) ---"));
+    assert!(prompt.contains("--- END TASK CONTEXT ---"));
+}
+
+#[test]
+fn build_boot_prompt_omits_task_context_block_when_absent() {
+    let root = temp_root("taskctx-absent");
+    let (prompt, _) = build_boot_prompt(&root.to_string_lossy(), None, "Agent", "/tmp/proj", None, None);
+    assert!(!prompt.contains("BEGIN TASK CONTEXT"));
+    assert!(!prompt.contains("END TASK CONTEXT"));
+}
+
+#[test]
+fn build_boot_prompt_truncates_task_context_at_max_bytes_with_a_notice() {
+    let root = temp_root("taskctx-trunc");
+    let huge = "x".repeat(crate::taskctx::TASK_CONTEXT_MAX_BYTES + 500);
+    let (prompt, _) = build_boot_prompt(&root.to_string_lossy(), None, "Agent", "/tmp/proj", Some("t-abc123"), Some(&huge));
+    assert!(
+        prompt.contains(&format!("[truncated at {} bytes", crate::taskctx::TASK_CONTEXT_MAX_BYTES)),
+        "must carry the truncation notice"
+    );
+    assert!(!prompt.contains(&huge), "the full untruncated body must not appear");
+}
+
+#[test]
+fn build_boot_prompt_does_not_truncate_a_task_context_under_the_cap() {
+    let root = temp_root("taskctx-notrunc");
+    let small = "short task context body";
+    let (prompt, _) = build_boot_prompt(&root.to_string_lossy(), None, "Agent", "/tmp/proj", Some("t-abc123"), Some(small));
+    assert!(prompt.contains(small));
+    assert!(!prompt.contains("truncated at"));
 }
 
 // ── map_line: one case per §5.1 row, pure and spawn-free ────────────────
@@ -254,6 +408,50 @@ fn map_line_assistant_usage_all_zero_emits_nothing() {
     let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#;
     let mapped = map_line("as0", line, 1000);
     assert!(mapped.events.is_empty());
+}
+
+// ── observed_usage: budget accounting only (WO06 §5.2) ──────────────────
+
+#[test]
+fn map_line_assistant_usage_populates_observed_usage_without_emitting_an_event() {
+    // This is what makes the hard-stop mid-turn rather than end-of-turn
+    // (§5.2): the assistant streaming line already carries usage today, it
+    // is only the *emitted* event that stays suppressed.
+    let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2}}}"#;
+    let mapped = map_line("as0", line, 1000);
+    assert!(mapped.events.is_empty(), "the emitted stream must stay unchanged");
+    let usage = mapped.observed_usage.expect("observed_usage must be populated for budget accounting");
+    assert_eq!(usage.total_tokens, 18);
+}
+
+#[test]
+fn map_line_assistant_zero_usage_observed_usage_is_none() {
+    let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#;
+    let mapped = map_line("as0", line, 1000);
+    assert!(mapped.observed_usage.is_none());
+}
+
+#[test]
+fn map_line_result_success_observed_usage_matches_the_emitted_usage_event() {
+    let line = r#"{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":3,"output_tokens":4}}"#;
+    let mapped = map_line("as0", line, 1000);
+    let emitted = mapped.events.iter().find(|e| e.kind == AgentEventKind::Usage).expect("usage event");
+    assert_eq!(mapped.observed_usage.as_ref().map(|u| u.total_tokens), emitted.usage.as_ref().map(|u| u.total_tokens));
+    assert_eq!(mapped.observed_usage.as_ref().map(|u| u.total_tokens), Some(7));
+}
+
+#[test]
+fn map_line_lines_with_no_usage_have_no_observed_usage() {
+    for line in [
+        r#"{"type":"system","subtype":"init","session_id":"sess-123"}"#,
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_delta"}}"#,
+        "not json at all",
+    ] {
+        let mapped = map_line("as0", line, 1000);
+        assert!(mapped.observed_usage.is_none(), "{line}");
+    }
 }
 
 #[test]
@@ -387,6 +585,289 @@ fn check_help_output_fails_on_missing_format_value() {
     assert!(err.contains("stream-json"), "{err}");
 }
 
+// ── charge: the atomic hard-stop primitive (contract §5.3, Gate 6) ─────
+
+fn registered_with_ceiling(reg: &RegistryCore, tag: &str, ceiling: Option<u64>) -> SessionInfo {
+    let check = wt(&format!("/tmp/proj-charge-{tag}"));
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, ceiling)
+        .unwrap();
+    info
+}
+
+#[test]
+fn charge_under_ceiling_returns_ok_and_leaves_the_session_alive() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "under", Some(1000));
+    assert_eq!(charge(&reg.inner, &info.id, 0, 500), ChargeVerdict::Ok);
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert!(entry.info.alive);
+    assert!(entry.busy);
+    assert_eq!(entry.turn_tokens, 500);
+    assert_eq!(entry.tokens_used, 0);
+}
+
+#[test]
+fn charge_exactly_at_ceiling_stops() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "exact", Some(1000));
+    let verdict = charge(&reg.inner, &info.id, 0, 1000);
+    assert_eq!(verdict, ChargeVerdict::Stop { pid: None, spent: 1000, ceiling: 1000 });
+}
+
+#[test]
+fn charge_over_ceiling_stops() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "over", Some(1000));
+    let verdict = charge(&reg.inner, &info.id, 0, 1500);
+    assert_eq!(verdict, ChargeVerdict::Stop { pid: None, spent: 1500, ceiling: 1000 });
+}
+
+#[test]
+fn charge_stale_generation_returns_stale_and_mutates_nothing() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "stalegen", Some(1000));
+    // 5 was never a generation this session reached — a turn task racing a
+    // kill/restart it doesn't know about yet.
+    assert_eq!(charge(&reg.inner, &info.id, 5, 999), ChargeVerdict::Stale);
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.turn_tokens, 0, "a stale charge must not touch turn_tokens");
+    assert_eq!(entry.generation, 0);
+    assert!(entry.info.alive);
+}
+
+#[test]
+fn charge_on_unknown_id_returns_stale() {
+    let reg = RegistryCore::default();
+    assert_eq!(charge(&reg.inner, "no-such-id", 0, 999), ChargeVerdict::Stale);
+}
+
+#[test]
+fn charge_stops_exactly_once_a_second_charge_on_the_captured_generation_is_stale() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "once", Some(100));
+    let captured_generation = 0;
+
+    let first = charge(&reg.inner, &info.id, captured_generation, 150);
+    assert_eq!(first, ChargeVerdict::Stop { pid: None, spent: 150, ceiling: 100 });
+
+    let second = charge(&reg.inner, &info.id, captured_generation, 999);
+    assert_eq!(
+        second,
+        ChargeVerdict::Stale,
+        "a second charge on the same captured generation must be Stale — exactly one Stop per session"
+    );
+
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.generation, 1, "generation must have advanced by exactly one Stop, not two");
+    assert_eq!(entry.tokens_used, 150, "the second, stale charge must not have re-mutated tokens_used");
+}
+
+#[test]
+fn charge_stop_folds_spend_into_tokens_used_and_the_wire_copy_and_clears_turn_tokens() {
+    // "usage accounting is correct at the boundary": since `finish_turn`
+    // never runs on a budget stop (§5.3 step 3), `charge`'s Stop branch is
+    // the only place the final spend can be folded — this proves it is.
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "foldstop", Some(1000));
+    let verdict = charge(&reg.inner, &info.id, 0, 1200);
+    assert_eq!(verdict, ChargeVerdict::Stop { pid: None, spent: 1200, ceiling: 1000 });
+
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.tokens_used, 1200);
+    assert_eq!(entry.turn_tokens, 0);
+    assert_eq!(entry.info.tokens_used, 1200, "the wire-visible SessionInfo copy must also be folded");
+    assert!(!entry.info.alive);
+    assert!(!entry.busy);
+}
+
+#[test]
+fn charge_stop_takes_the_recorded_child_pid() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "takespid", Some(10));
+    {
+        let mut guard = reg.inner.lock().unwrap();
+        guard.get_mut(&info.id).unwrap().child_pid = Some(4242);
+    }
+    let verdict = charge(&reg.inner, &info.id, 0, 50);
+    assert_eq!(verdict, ChargeVerdict::Stop { pid: Some(4242), spent: 50, ceiling: 10 });
+    let guard = reg.inner.lock().unwrap();
+    assert_eq!(guard.get(&info.id).unwrap().child_pid, None, "child_pid must be taken, not merely read");
+}
+
+#[test]
+fn charge_zero_ceiling_is_unlimited() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "zero", Some(0));
+    assert_eq!(charge(&reg.inner, &info.id, 0, u64::MAX / 2), ChargeVerdict::Ok);
+}
+
+#[test]
+fn charge_absent_ceiling_is_unlimited() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "absent", None);
+    assert_eq!(charge(&reg.inner, &info.id, 0, u64::MAX / 2), ChargeVerdict::Ok);
+}
+
+#[test]
+fn charge_turn_tokens_is_monotonically_non_decreasing_within_a_turn() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "monotone", Some(10_000));
+    assert_eq!(charge(&reg.inner, &info.id, 0, 100), ChargeVerdict::Ok);
+    // A lower reading must never regress turn_tokens (§5.2 named assumption).
+    assert_eq!(charge(&reg.inner, &info.id, 0, 80), ChargeVerdict::Ok);
+    {
+        let guard = reg.inner.lock().unwrap();
+        assert_eq!(guard.get(&info.id).unwrap().turn_tokens, 100);
+    }
+    assert_eq!(charge(&reg.inner, &info.id, 0, 250), ChargeVerdict::Ok);
+    let guard = reg.inner.lock().unwrap();
+    assert_eq!(guard.get(&info.id).unwrap().turn_tokens, 250);
+}
+
+#[test]
+fn restart_after_a_budget_stop_clears_tokens_used_so_the_new_turn_is_not_re_stopped() {
+    // Regression for D3 (WO06 audit): begin_restart used to bump generation
+    // without resetting tokens_used, so the very first charge on the new
+    // generation still saw `spent >= ceiling` from the stopped turn and
+    // stopped again immediately — restart was permanently broken after the
+    // first stop, burning a real paid turn on every press. Contract §5.5.2:
+    // "restart resets tokens_used to 0 — a restart is a new budget."
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "restart-after-stop", Some(1000));
+
+    // Drive the session to a Stop, exactly as `run_turn` would.
+    let stop = charge(&reg.inner, &info.id, 0, 1200);
+    assert_eq!(stop, ChargeVerdict::Stop { pid: None, spent: 1200, ceiling: 1000 });
+    {
+        let guard = reg.inner.lock().unwrap();
+        let entry = guard.get(&info.id).unwrap();
+        assert_eq!(entry.tokens_used, 1200);
+        assert!(!entry.info.alive);
+    }
+
+    // User presses Restart. `charge`'s Stop branch already bumped the
+    // generation once (0 -> 1); begin_restart bumps it again (1 -> 2).
+    let (restarted_info, _pid, _prompt, new_generation) = reg.begin_restart(&info.id).unwrap();
+    assert_eq!(new_generation, 2, "restart must bump the generation fence past the Stop's own bump");
+    assert_eq!(restarted_info.tokens_used, 0, "the wire-visible copy must reset too");
+    {
+        let guard = reg.inner.lock().unwrap();
+        let entry = guard.get(&info.id).unwrap();
+        assert_eq!(entry.tokens_used, 0);
+        assert_eq!(entry.turn_tokens, 0);
+        assert!(entry.info.alive);
+    }
+
+    // The new turn's first (small) usage line must NOT immediately re-stop
+    // the session — this is the actual regression.
+    let after_restart = charge(&reg.inner, &info.id, new_generation, 50);
+    assert_eq!(after_restart, ChargeVerdict::Ok, "a fresh budget must not re-stop on the first small charge");
+}
+
+// ── end_turn / two-turn accumulator fixture (contract §5.2) ────────────
+
+#[test]
+fn end_turn_folds_turn_tokens_into_tokens_used_and_clears_busy_and_child_pid() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "endturn", Some(10_000));
+    assert_eq!(charge(&reg.inner, &info.id, 0, 300), ChargeVerdict::Ok);
+    {
+        let mut guard = reg.inner.lock().unwrap();
+        guard.get_mut(&info.id).unwrap().child_pid = Some(777);
+    }
+    assert!(end_turn(&reg.inner, &info.id, 0));
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.tokens_used, 300);
+    assert_eq!(entry.turn_tokens, 0);
+    assert_eq!(entry.info.tokens_used, 300);
+    assert!(!entry.busy);
+    assert_eq!(entry.child_pid, None);
+}
+
+#[test]
+fn end_turn_on_a_stale_generation_returns_false_and_mutates_nothing() {
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "endturnstale", Some(10_000));
+    assert_eq!(charge(&reg.inner, &info.id, 0, 300), ChargeVerdict::Ok);
+    assert!(!end_turn(&reg.inner, &info.id, 7));
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.tokens_used, 0, "a stale end_turn must not fold anything");
+    assert_eq!(entry.turn_tokens, 300);
+}
+
+#[test]
+fn two_turn_accumulator_folds_tokens_used_between_turns() {
+    // §5.2's named assumption, pinned end-to-end: within a turn, observed
+    // totals are non-decreasing; between turns, the fold accumulates.
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "twoturn", Some(10_000));
+
+    // Turn 1: two lines, second higher than the first.
+    assert_eq!(charge(&reg.inner, &info.id, 0, 100), ChargeVerdict::Ok);
+    assert_eq!(charge(&reg.inner, &info.id, 0, 300), ChargeVerdict::Ok);
+    assert!(end_turn(&reg.inner, &info.id, 0));
+    {
+        let guard = reg.inner.lock().unwrap();
+        let entry = guard.get(&info.id).unwrap();
+        assert_eq!(entry.tokens_used, 300);
+        assert_eq!(entry.turn_tokens, 0);
+    }
+
+    // Turn 2 (same generation — no kill/restart happened): starts fresh at
+    // turn_tokens=0 and folds on top of turn 1's total.
+    assert_eq!(charge(&reg.inner, &info.id, 0, 150), ChargeVerdict::Ok);
+    {
+        let guard = reg.inner.lock().unwrap();
+        let entry = guard.get(&info.id).unwrap();
+        assert_eq!(entry.tokens_used, 300, "turn 2 must not be folded until it ends");
+        assert_eq!(entry.turn_tokens, 150);
+    }
+    assert!(end_turn(&reg.inner, &info.id, 0));
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert_eq!(entry.tokens_used, 450, "300 (turn 1) + 150 (turn 2)");
+    assert_eq!(entry.info.tokens_used, 450);
+}
+
+// ── format_thousands / budget_event: wire-shape helpers (contract §5.4) ─
+
+#[test]
+fn format_thousands_groups_by_three() {
+    assert_eq!(format_thousands(0), "0");
+    assert_eq!(format_thousands(999), "999");
+    assert_eq!(format_thousands(1000), "1,000");
+    assert_eq!(format_thousands(200_000), "200,000");
+    assert_eq!(format_thousands(1_234_567), "1,234,567");
+}
+
+#[test]
+fn budget_event_text_matches_the_contract_example() {
+    let ev = budget_event("as2", None, 200_431, 200_000, 1755);
+    assert_eq!(ev.kind, AgentEventKind::Budget);
+    assert_eq!(ev.id, "as2");
+    assert_eq!(ev.text.as_deref(), Some("token ceiling 200,000 reached — session stopped"));
+    let usage = ev.usage.as_ref().expect("budget event must carry usage");
+    assert_eq!(usage.total_tokens, 200_431);
+}
+
+#[test]
+fn budget_event_carries_the_triggering_lines_input_output_and_cost_but_spent_as_total() {
+    let line_usage = Usage { input_tokens: 40, output_tokens: 12, total_tokens: 52, context_window: None, cost_usd: Some(0.01) };
+    let ev = budget_event("as1", Some(&line_usage), 9999, 5000, 1);
+    let usage = ev.usage.unwrap();
+    assert_eq!(usage.input_tokens, 40);
+    assert_eq!(usage.output_tokens, 12);
+    assert_eq!(usage.cost_usd, Some(0.01));
+    assert_eq!(usage.total_tokens, 9999, "total_tokens is the accumulated spend, not the triggering line's own total");
+}
+
 // ── kill_tree: process-tree kill of a long-running dummy child (§6.5) ──
 
 #[cfg(windows)]
@@ -468,4 +949,51 @@ async fn kill_tree_of_an_already_dead_pid_reports_failure_not_a_panic() {
     // that into a best-effort `kind:"error"` event, never a crash.
     let result = kill_tree(u32::MAX - 1).await;
     let _ = result; // either Ok (nothing to do) or Err — both are acceptable, no panic
+}
+
+// ── Integration: a real child is tree-killed by the Stop path (Gate 6) ──
+
+#[tokio::test]
+async fn a_budget_stop_verdict_tree_kills_a_real_dummy_child() {
+    // Reuses the exact seam `kill_tree_terminates_a_long_running_dummy_child`
+    // uses above — no fake `claude`, no real claude either — to prove the
+    // pid `charge`'s `Stop` verdict hands back is the one that actually gets
+    // torn down, exactly as `run_turn`'s Stop branch does it.
+    let reg = RegistryCore::default();
+    let info = registered_with_ceiling(&reg, "treekill", Some(10));
+
+    let mut child = spawn_dummy();
+    let pid = child.id().expect("dummy child must have a pid");
+    assert!(pid_alive(pid), "dummy child should be alive right after spawn");
+    {
+        let mut guard = reg.inner.lock().unwrap();
+        guard.get_mut(&info.id).unwrap().child_pid = Some(pid);
+    }
+
+    let verdict = charge(&reg.inner, &info.id, 0, 50);
+    let ChargeVerdict::Stop { pid: stop_pid, spent, ceiling } = verdict else {
+        panic!("expected Stop, got {verdict:?}");
+    };
+    assert_eq!(stop_pid, Some(pid));
+    assert_eq!((spent, ceiling), (50, 10));
+
+    kill_tree(stop_pid.unwrap()).await.expect("kill_tree should succeed");
+
+    for _ in 0..20 {
+        if !pid_alive(pid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!pid_alive(pid), "the dummy child named by the Stop verdict's pid should be gone");
+
+    // And the registry itself reflects a single, clean stop.
+    let guard = reg.inner.lock().unwrap();
+    let entry = guard.get(&info.id).unwrap();
+    assert!(!entry.info.alive);
+    assert!(!entry.busy);
+    assert_eq!(entry.child_pid, None);
+    drop(guard);
+
+    let _ = child.try_wait();
 }

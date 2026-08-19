@@ -172,3 +172,229 @@ fn write_rejects_bad_root() {
     let err = handoff_write("Z:/no/such/dir".to_string(), headed("x")).unwrap_err();
     assert!(err.starts_with("Not a directory: "));
 }
+
+// ── Handoff → node (§6, D2/F3 regression) ───────────────────────────────
+
+fn session_input() -> HandoffSessionInput {
+    HandoffSessionInput {
+        id: "as1".to_string(),
+        name: "Cedar".to_string(),
+        agent_file_name: Some("cedar-default.md".to_string()),
+        cwd: "/repo/worktrees/cedar".to_string(),
+        claude_session_id: Some("9f3c1234-uuid".to_string()),
+        tokens_used: 42_000,
+    }
+}
+
+/// D2/F3: `handoff_node_propose` (command 63/63) was still the literal
+/// Stage-0 stub, unconditionally returning
+/// `Err("handoff_node_propose: not implemented (WO06 Stage-0 stub)")`. This
+/// is the regression test the audit prescribed: a normal call must succeed,
+/// and — belt and braces — the stub's exact wording must never again appear
+/// anywhere a caller could observe.
+#[test]
+fn handoff_node_propose_is_no_longer_the_stage0_stub() {
+    let dir = temp_project("propose-not-stub");
+    let result = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "Did the thing.".to_string(),
+    );
+    let proposal = result.expect("handoff_node_propose must succeed for valid input");
+    assert!(!proposal.title.contains("Stage-0 stub"));
+    assert!(!proposal.content.contains("Stage-0 stub"));
+}
+
+#[test]
+fn handoff_node_propose_fills_every_frozen_field() {
+    let dir = temp_project("propose-fields");
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "Finished the migration.\nSecond line ignored for the brief.".to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(proposal.title, "Handoff — Cedar — t-abc123");
+    assert_eq!(proposal.role, "reference");
+    assert!(proposal.rel_path.starts_with("context/handoff/"));
+    assert!(proposal.rel_path.ends_with(".md"));
+    assert_eq!(proposal.brief, "Finished the migration.");
+    assert!(proposal.brief.chars().count() <= 120);
+
+    // meta (§6): exactly these six keys, frozen values.
+    assert_eq!(proposal.meta.get("source").map(String::as_str), Some("handoff"));
+    assert_eq!(
+        proposal.meta.get("session").map(String::as_str),
+        Some("9f3c1234-uuid"),
+        "claudeSessionId must win over the as<N> id"
+    );
+    assert_eq!(proposal.meta.get("agent").map(String::as_str), Some("cedar-default"));
+    assert_eq!(proposal.meta.get("task").map(String::as_str), Some("t-abc123"));
+    assert_eq!(proposal.meta.get("tokens").map(String::as_str), Some("42000"));
+    assert!(proposal.meta.contains_key("producedAt"));
+    assert_eq!(proposal.meta.len(), 6);
+
+    // content: provenance block + summary, LF, trailing newline.
+    assert!(proposal.content.starts_with("# Handoff — Cedar — t-abc123"));
+    assert!(proposal.content.contains("Finished the migration."));
+    assert!(proposal.content.ends_with('\n'));
+    assert!(!proposal.content.contains('\r'));
+
+    assert_eq!(proposal.anchor_node_id, None, "no tasklinks.json on disk yet");
+}
+
+#[test]
+fn handoff_node_propose_falls_back_to_session_id_without_claude_session_id() {
+    let dir = temp_project("propose-fallback-session");
+    let mut session = session_input();
+    session.claude_session_id = None;
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session,
+        None,
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(proposal.meta.get("session").map(String::as_str), Some("as1"));
+    assert_eq!(proposal.meta.get("task").map(String::as_str), Some(""));
+    // No taskId ⇒ the title's ident falls back to the same session label.
+    assert_eq!(proposal.title, "Handoff — Cedar — as1");
+}
+
+#[test]
+fn handoff_node_propose_blank_summary_gets_a_fallback_brief_and_note() {
+    let dir = temp_project("propose-blank-summary");
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        None,
+        "   \n  ".to_string(),
+    )
+    .unwrap();
+    assert!(!proposal.brief.is_empty());
+    assert!(proposal.content.contains("(no summary provided)"));
+}
+
+#[test]
+fn handoff_node_propose_no_agent_file_yields_empty_meta_agent() {
+    let dir = temp_project("propose-no-agent");
+    let mut session = session_input();
+    session.agent_file_name = None;
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session,
+        None,
+        "summary".to_string(),
+    )
+    .unwrap();
+    assert_eq!(proposal.meta.get("agent").map(String::as_str), Some(""));
+    assert!(proposal.content.contains("**Agent:** (none)"));
+}
+
+#[test]
+fn handoff_node_propose_rel_path_is_collision_free() {
+    let dir = temp_project("propose-collision");
+    let first = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "one".to_string(),
+    )
+    .unwrap();
+    let full_path = dir.join(&first.rel_path);
+    std::fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+    std::fs::write(&full_path, "existing node\n").unwrap();
+
+    let second = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "two".to_string(),
+    )
+    .unwrap();
+    assert_ne!(first.rel_path, second.rel_path);
+    assert!(second.rel_path.ends_with("-2.md"), "{}", second.rel_path);
+}
+
+#[test]
+fn handoff_node_propose_resolves_anchor_from_tasklinks() {
+    let dir = temp_project("propose-anchor");
+    std::fs::create_dir_all(dir.join(".cowtext")).unwrap();
+    std::fs::write(
+        dir.join(".cowtext/tasklinks.json"),
+        serde_json::json!({
+            "version": 1,
+            "links": [
+                { "taskId": "t-abc123", "nodeIds": ["zzz", "aaa", "mmm"], "sessionIds": [] }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "summary".to_string(),
+    )
+    .unwrap();
+    // Byte-order smallest of ["zzz", "aaa", "mmm"] is "aaa".
+    assert_eq!(proposal.anchor_node_id.as_deref(), Some("aaa"));
+}
+
+#[test]
+fn handoff_node_propose_anchor_is_none_when_tasklinks_corrupt() {
+    let dir = temp_project("propose-anchor-corrupt");
+    std::fs::create_dir_all(dir.join(".cowtext")).unwrap();
+    std::fs::write(dir.join(".cowtext/tasklinks.json"), "not json").unwrap();
+
+    let proposal = handoff_node_propose(
+        dir.to_string_lossy().into_owned(),
+        session_input(),
+        Some("t-abc123".to_string()),
+        "summary".to_string(),
+    )
+    .unwrap();
+    assert_eq!(proposal.anchor_node_id, None);
+}
+
+#[test]
+fn handoff_node_propose_rejects_bad_root() {
+    let err = handoff_node_propose(
+        "Z:/no/such/dir".to_string(),
+        session_input(),
+        None,
+        "summary".to_string(),
+    )
+    .unwrap_err();
+    assert!(err.starts_with("Not a directory: "));
+}
+
+// ── ISO-8601 timestamp helper ────────────────────────────────────────────
+
+#[test]
+fn iso8601_utc_now_matches_the_expected_shape() {
+    let ts = iso8601_utc_now();
+    assert_eq!(ts.len(), 20, "{ts}");
+    assert!(ts.ends_with('Z'), "{ts}");
+    let bytes = ts.as_bytes();
+    assert_eq!(bytes[4], b'-');
+    assert_eq!(bytes[7], b'-');
+    assert_eq!(bytes[10], b'T');
+    assert_eq!(bytes[13], b':');
+    assert_eq!(bytes[16], b':');
+}
+
+#[test]
+fn civil_from_days_known_anchors() {
+    assert_eq!(civil_from_days(0), (1970, 1, 1));
+    assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+    assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+    // Leap day: 2024 is a leap year.
+    assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+}

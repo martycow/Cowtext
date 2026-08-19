@@ -20,6 +20,9 @@ export interface SessionInfo {
   root: string;
   alive: boolean;
   claudeSessionId: string | null; // captured from the stream's system/init line
+  // WO06 §7.1/§8 — appended last.
+  tokensUsed: number;
+  tokenCeiling: number | null;
 }
 
 export function worktreeCheck(path: string): Promise<WorktreeInfo> {
@@ -30,13 +33,29 @@ export function worktreeAdd(repoPath: string, newPath: string, branch: string): 
   return invoke<WorktreeInfo>("worktree_add", { repoPath, newPath, branch });
 }
 
+/** WO06 §7.1 — three appended optional args, all `null` ⇒ behaviour
+ *  byte-identical to pre-WO06 (contract §1.14). Defaulted (not just typed
+ *  optional) so an existing 4-arg call site keeps compiling unchanged while
+ *  still sending explicit `null`s on the wire, per the contract's own
+ *  "callers always pass explicit null" precedent. */
 export function agentSessionSpawn(
   root: string,
   agentFileName: string | null,
   name: string,
   cwd: string,
+  taskId: string | null = null,
+  taskContext: string | null = null,
+  tokenCeiling: number | null = null,
 ): Promise<SessionInfo> {
-  return invoke<SessionInfo>("agent_session_spawn", { root, agentFileName, name, cwd });
+  return invoke<SessionInfo>("agent_session_spawn", {
+    root,
+    agentFileName,
+    name,
+    cwd,
+    taskId,
+    taskContext,
+    tokenCeiling,
+  });
 }
 
 export function agentSessionSend(id: string, prompt: string): Promise<void> {

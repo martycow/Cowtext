@@ -24,6 +24,33 @@ export interface TaskItem {
   section: string | null;
   /** First time token in the line (ISO date / Q1-Q4 / Phase N); scan-only. */
   when: string | null;
+  /** Stable task id lifted out of the Tags cell (WO06 §3.1). null until minted
+   *  via `task_id_ensure`. */
+  taskId: string | null;
+  /** Stable ids this task depends on, lifted from `needs:` tokens. Order as
+   *  written (WO06 §3.1). */
+  dependsOn: string[];
+  /** Scan-only: true if any dependency resolves to a task whose status !=
+   *  "done". Always false from single-file commands — only `tasks_scan`
+   *  computes it (WO06 §3.3 D1). */
+  blocked: boolean;
+}
+
+/** One dependency edge that names a taskId no scanned task carries
+ *  (WO06 §3.3 — TaskDag.unresolved). A typo must not deadlock the board, so
+ *  this is reported, not treated as blocking. */
+export interface UnresolvedDep {
+  taskId: string;
+  dependsOn: string;
+}
+
+/** Cross-file DAG derivation, appended to TasksScan (WO06 §3.3). Cycles are
+ *  reported, never fatal — tasks_scan always succeeds. */
+export interface TaskDag {
+  /** Each entry is a task-id cycle path with the first id repeated last. */
+  cycles: string[][];
+  duplicateIds: string[];
+  unresolved: UnresolvedDep[];
 }
 
 /** Editable field set for task_update — send only the keys to change;
@@ -48,6 +75,7 @@ export interface TaskFileInfo {
 export interface TasksScan {
   files: TaskFileInfo[]; // always 5, convention order TASKS/SPRINT/BACKLOG/ROADMAP/BUGS
   tasks: TaskItem[];
+  dag: TaskDag;
 }
 
 export function tasksScan(root: string): Promise<TasksScan> {
@@ -83,4 +111,34 @@ export function taskMove(
   toRelPath: string,
 ): Promise<TaskItem> {
   return invoke<TaskItem>("task_move", { root, fromRelPath, line, toRelPath });
+}
+
+/** Mint (or return, idempotently) this task's stable id (WO06 §3.1, command
+ *  55). No-op write if the line already carries an `id:` token. */
+export function taskIdEnsure(root: string, relPath: string, line: number): Promise<TaskItem> {
+  return invoke<TaskItem>("task_id_ensure", { root, relPath, line });
+}
+
+/** Add a `needs:<dependsOn>` dependency to this task (command 56). Rejects
+ *  (distinct messages) a would-be cycle, a self-dependency, an unknown id,
+ *  or an id present in `TaskDag.duplicateIds`. Both this task and the target
+ *  must already carry a stable id — mint with `taskIdEnsure` first. */
+export function taskDependsAdd(
+  root: string,
+  relPath: string,
+  line: number,
+  dependsOn: string,
+): Promise<TaskItem> {
+  return invoke<TaskItem>("task_depends_add", { root, relPath, line, dependsOn });
+}
+
+/** Remove a `needs:<dependsOn>` dependency from this task (command 57).
+ *  Removing an absent dependency is a no-op success. */
+export function taskDependsRemove(
+  root: string,
+  relPath: string,
+  line: number,
+  dependsOn: string,
+): Promise<TaskItem> {
+  return invoke<TaskItem>("task_depends_remove", { root, relPath, line, dependsOn });
 }

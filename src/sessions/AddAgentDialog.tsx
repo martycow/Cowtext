@@ -24,9 +24,32 @@ function slugify(s: string): string {
   return slug === "" ? "agent" : slug;
 }
 
-export function AddAgentDialog({ root, onClose }: { root: string; onClose: () => void }) {
+/** WO06 §4.3 — when `taskId`/`taskContext` are supplied (from
+ *  `TaskContextModal`'s Launch button), the dialog spawns THROUGH
+ *  `spawnForTask` instead of `spawn`, so the session boots with the
+ *  pre-compiled subgraph body and the effective ceiling already resolved by
+ *  the caller. All four are optional and default to the pre-WO06 shape, so
+ *  every existing call site (RosterBar's plain "Add agent") is unaffected. */
+export function AddAgentDialog({
+  root,
+  onClose,
+  taskId = null,
+  taskContext = null,
+  tokenCeiling = null,
+  onSpawned,
+}: {
+  root: string;
+  onClose: () => void;
+  taskId?: string | null;
+  taskContext?: string | null;
+  tokenCeiling?: number | null;
+  /** Fires after a successful spawn, Cowtext-side session id — only ever
+   *  used by the task-launch flow. */
+  onSpawned?: (sessionId: string) => void;
+}) {
   const agents = useAgentsStore((s) => s.agents);
   const sessions = useSessionsStore((s) => s.sessions);
+  const forTask = taskId !== null && taskContext !== null;
 
   const [agentFileName, setAgentFileName] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -138,6 +161,21 @@ export function AddAgentDialog({ root, onClose }: { root: string; onClose: () =>
     if (!canAdd || cwd === null) return;
     setSpawning(true);
     setSpawnError(null);
+    if (forTask && taskId !== null && taskContext !== null) {
+      void useSessionsStore
+        .getState()
+        .spawnForTask(root, agentFileName, trimmedName, cwd, taskId, taskContext, tokenCeiling)
+        .then((result) => {
+          setSpawning(false);
+          if ("error" in result) {
+            setSpawnError(result.error);
+            return;
+          }
+          onSpawned?.(result.id);
+          onClose();
+        });
+      return;
+    }
     void useSessionsStore
       .getState()
       .spawn(root, agentFileName, trimmedName, cwd)
@@ -170,7 +208,7 @@ export function AddAgentDialog({ root, onClose }: { root: string; onClose: () =>
         className="flex max-h-[80vh] w-[480px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
-          <span className="text-[15px] font-semibold">Add agent</span>
+          <span className="text-[15px] font-semibold">{forTask ? "Launch for task" : "Add agent"}</span>
           <div className="min-w-0 flex-1" />
           <button
             onClick={onClose}
@@ -316,7 +354,9 @@ export function AddAgentDialog({ root, onClose }: { root: string; onClose: () =>
 
         <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">
           <span className="min-w-0 flex-1 truncate text-sm text-content-secondary">
-            spawns a real Claude Code session in that folder
+            {forTask
+              ? "spawns a real Claude Code session with the task's context injected"
+              : "spawns a real Claude Code session in that folder"}
           </span>
           <button
             ref={cancelRef}
@@ -331,7 +371,7 @@ export function AddAgentDialog({ root, onClose }: { root: string; onClose: () =>
             disabled={!canAdd}
             className="flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
           >
-            {spawning ? "· · ·" : "Add"}
+            {spawning ? "· · ·" : forTask ? "Launch" : "Add"}
           </button>
         </div>
       </div>

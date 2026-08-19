@@ -1,0 +1,4 @@
+- [WO06 U2-linkage zone](project_wo06_u2_linkage_zone.md) — dispatch zone vs. WO06_CONTRACT.md §10 grid mismatch, what was granted/inferred/ratified (audit D9), fix-round D4/D6 patterns.
+- [Ambiguous zone boundaries](feedback_ambiguous_zone_boundaries.md) — rule of thumb for dispatch-vs-contract zone conflicts: dispatch wins, frozen cross-lane interfaces still honored, additive-and-flagged for undeclared-but-coupled files.
+- [WO06 U1 fix round: D1/D8/O4](project_wo06_u1_fixround_d1_d8_o4.md) — mount points for the unreachable differentiator, store-reload discipline, the blur-close-vs-disabled-button trap in DependsPicker.
+- [No frontend test runner](feedback_no_frontend_test_runner.md) — package.json has no test script/framework; state that plainly for TS-only regression-test asks, don't add a new dep or fake a test.

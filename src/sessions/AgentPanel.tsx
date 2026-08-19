@@ -10,6 +10,7 @@ import { AgentAvatar } from "../agents/AgentAvatar";
 import { selectReducedMotion, useSettingsStore } from "../store/settings";
 import { useSessionsStore, type SessionStatus } from "../store/sessions";
 import { CONTEXT_WINDOW_TOKENS, ctxPercent } from "../store/tokens";
+import { BudgetBar } from "./BudgetGauge";
 
 const STATUS_BADGE: Record<SessionStatus, string> = {
   idle: "border-border bg-surface-2 text-content-secondary",
@@ -78,6 +79,8 @@ export function AgentPanel() {
 
   if (session === undefined) return null;
 
+  const budgetStopped = session.stopReason === "budget";
+
   const onSend = () => {
     const text = draft.trim();
     if (text === "") return;
@@ -121,12 +124,16 @@ export function AgentPanel() {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-content">{session.name}</p>
           <span
-            className={`mt-0.5 inline-flex h-[17px] items-center gap-1 rounded-sm border px-1 font-mono text-micro ${STATUS_BADGE[session.status]}`}
+            className={`mt-0.5 inline-flex h-[17px] items-center gap-1 rounded-sm border px-1 font-mono text-micro ${
+              budgetStopped ? "border-danger bg-danger-surface text-danger-text" : STATUS_BADGE[session.status]
+            }`}
           >
-            {session.status === "working" && !reducedMotion && (
+            {session.status === "working" && !budgetStopped && !reducedMotion && (
               <span className="h-[5px] w-[5px] animate-blink bg-amber" />
             )}
-            {session.status}
+            {/* A budget stop is a distinct terminal state from a plain exit
+                or crash (WO06 §5.5) — never just "idle" once it fires. */}
+            {budgetStopped ? "stopped: token ceiling reached" : session.status}
           </span>
         </div>
         <button
@@ -159,6 +166,12 @@ export function AgentPanel() {
             ? "no usage yet"
             : `≈${session.usage.totalTokens} tok · ${ctxPercent(session.usage.totalTokens)}% of ${CONTEXT_WINDOW_TOKENS / 1000}k · ${formatCost(session.usage.costUsd)}`}
         </p>
+        {session.tokenCeiling !== null && (
+          <div className="mt-1.5">
+            {/* D4: `tokensUsed`, not `usage.totalTokens` — see store/sessions.ts */}
+            <BudgetBar tokensUsed={session.tokensUsed} ceiling={session.tokenCeiling} stopped={budgetStopped} />
+          </div>
+        )}
       </div>
 
       <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-1.5 font-mono text-2xs">
@@ -229,6 +242,11 @@ export function AgentPanel() {
           >
             Kill
           </button>
+        )}
+        {budgetStopped && restartError === null && killError === null && (
+          <p className="min-w-0 flex-1 truncate font-mono text-2xs text-content-muted">
+            restart resets the token budget
+          </p>
         )}
         {(restartError !== null || killError !== null) && (
           <p className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">

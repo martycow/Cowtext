@@ -77,6 +77,9 @@ pub enum AgentEventKind {
     Usage,
     Exit,
     Error,
+    /// WO06 §5.4: a token-ceiling hard-stop. Emitted UNGATED (see
+    /// `charge`/`Stop`) — no other field on `AgentEvent` changes shape.
+    Budget,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -129,6 +132,12 @@ pub struct SessionInfo {
     pub root: String,
     pub alive: bool,
     pub claude_session_id: Option<String>,
+    // WO06 §5.2 (appended last, §9.3 seam): the folded total across finished
+    // turns (and, on a budget `Stop`, the spend at the moment of the stop —
+    // see `charge`). `token_ceiling` is the effective, already-normalized
+    // ceiling (`Some(0)` from the caller reads as `None`, contract §5.1).
+    pub tokens_used: u64,
+    pub token_ceiling: Option<u64>,
 }
 
 // ── Registry ─────────────────────────────────────────────────────────
@@ -143,6 +152,25 @@ struct SessionEntry {
     generation: u64,
     /// Kept for restart-without-a-captured-session-id.
     boot_prompt: String,
+    /// WO06 §5.2: folded total across finished turns. Folded in by
+    /// `end_turn` (normal end of turn) or by `charge`'s `Stop` branch
+    /// (budget hard-stop, which never runs `end_turn`/`finish_turn`).
+    tokens_used: u64,
+    /// WO06 §5.2: running max of `observed_usage.totalTokens` seen so far
+    /// THIS turn (the "named assumption": non-decreasing within a turn).
+    /// Reset to 0 whenever a turn ends, by whichever of the two paths above
+    /// ends it.
+    turn_tokens: u64,
+    /// WO06 §5.1: effective per-session ceiling, already normalized so
+    /// `Some(0)` from a caller is stored as `None` (unlimited) — `charge`
+    /// never has to re-check for zero.
+    token_ceiling: Option<u64>,
+    /// WO06 §4.3/§5.1: the task this session was spawned for, if any.
+    /// Reserved for future task-scoped session queries — no WO06 G3 command
+    /// reads it back out (`SessionInfo` does not carry a `taskId`, §8), so
+    /// it is write-only within this work order.
+    #[allow(dead_code)]
+    task_id: Option<String>,
 }
 
 /// AppHandle-free half of the registry: the guardrails and bookkeeping
@@ -165,18 +193,26 @@ struct RegistryCore {
 
 impl RegistryCore {
     /// Registers a new session under the guardrails (§3): duplicate alive
-    /// cwd, `MAX_SESSIONS`. `check` is the caller's already-computed
+    /// cwd, `MAX_SESSIONS`, and (§4.3) a `taskId` with no compiled task
+    /// context. `check` is the caller's already-computed
     /// `worktree_check(cwd)` — passed in rather than recomputed here so the
     /// guardrails are unit-testable without a git fixture. `Err` never
     /// mutates the registry. Returns the registered info, the boot prompt
     /// for the first turn, and a non-fatal "agent file could not be read"
     /// message when applicable.
+    ///
+    /// `token_ceiling` is the *raw* caller value (`None`/`Some(0)` both mean
+    /// unlimited, contract §5.1) — normalized to `None` before it is stored.
+    #[allow(clippy::too_many_arguments)] // contract §7.1 froze agent_session_spawn's 3 appended params; this is where they land.
     fn register(
         &self,
         check: &WorktreeInfo,
         root: String,
         agent_file_name: Option<String>,
         name: String,
+        task_id: Option<String>,
+        task_context: Option<String>,
+        token_ceiling: Option<u64>,
     ) -> Result<(SessionInfo, String, Option<String>), String> {
         if !check.is_repo {
             return Err(format!("{} is not a git repository", check.path));
@@ -184,6 +220,13 @@ impl RegistryCore {
         let name_trimmed = name.trim();
         if name_trimmed.is_empty() {
             return Err("Name is required".to_string());
+        }
+        let task_context_nonempty = task_context.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+        if task_id.is_some() && !task_context_nonempty {
+            return Err(
+                "a task session needs a compiled task context — call task_context_preview first"
+                    .to_string(),
+            );
         }
         let key = cwd_dup_key(&check.path);
 
@@ -203,9 +246,16 @@ impl RegistryCore {
             }
         }
 
-        let (boot_prompt, agent_file_error) =
-            build_boot_prompt(&root, agent_file_name.as_deref(), name_trimmed, &check.path);
+        let (boot_prompt, agent_file_error) = build_boot_prompt(
+            &root,
+            agent_file_name.as_deref(),
+            name_trimmed,
+            &check.path,
+            task_id.as_deref(),
+            task_context.as_deref(),
+        );
         let id = format!("as{}", self.next.fetch_add(1, Ordering::Relaxed));
+        let effective_ceiling = token_ceiling.filter(|&c| c > 0);
         let info = SessionInfo {
             id: id.clone(),
             name: name_trimmed.to_string(),
@@ -214,6 +264,8 @@ impl RegistryCore {
             root,
             alive: true,
             claude_session_id: None,
+            tokens_used: 0,
+            token_ceiling: effective_ceiling,
         };
         let entry = SessionEntry {
             info: info.clone(),
@@ -221,6 +273,10 @@ impl RegistryCore {
             child_pid: None,
             generation: 0,
             boot_prompt: boot_prompt.clone(),
+            tokens_used: 0,
+            turn_tokens: 0,
+            token_ceiling: effective_ceiling,
+            task_id,
         };
         {
             let mut guard = self
@@ -287,6 +343,14 @@ impl RegistryCore {
         entry.generation += 1;
         entry.info.alive = true;
         entry.busy = true;
+        // §5.5.2: "restart resets tokens_used to 0 — a restart is a new
+        // budget." Without this, a session that stopped at/over its ceiling
+        // stays stopped forever: the very next `charge` call would see the
+        // same stale `spent >= ceiling` and stop it again before a single
+        // token of real output, burning a paid turn on every Restart press.
+        entry.tokens_used = 0;
+        entry.turn_tokens = 0;
+        entry.info.tokens_used = 0;
         let prompt = match &entry.info.claude_session_id {
             Some(_) => RESTART_PROMPT.to_string(),
             None => entry.boot_prompt.clone(),
@@ -352,15 +416,26 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Builds the boot prompt (contract §6.3). Returns the prompt plus a
-/// non-fatal "agent file could not be read" message to emit once the
-/// session is registered — an unreadable/invalid agent file never blocks
-/// the boot turn.
+/// Builds the boot prompt (contract §6.3, task-context injection §4.3).
+/// Returns the prompt plus a non-fatal "agent file could not be read"
+/// message to emit once the session is registered — an unreadable/invalid
+/// agent file never blocks the boot turn.
+///
+/// When both `task_id` and `task_context` are present, the already-compiled
+/// task context body is inserted after the agent-file body and before
+/// [`BOOT_PROMPT_TAIL`], wrapped in a delimited block and truncated at
+/// `taskctx::TASK_CONTEXT_MAX_BYTES` (§4.3) — the frontend pre-compiles this
+/// body via `task_context_preview`; nothing here calls `compile_preview`
+/// itself (that would pull a `compile.rs`/`taskctx.rs` dependency into this
+/// HOT file, which the contract's build-order explicitly avoids, §4.3's
+/// "Why the frontend pre-compiles" note).
 fn build_boot_prompt(
     root: &str,
     agent_file_name: Option<&str>,
     name: &str,
     cwd: &str,
+    task_id: Option<&str>,
+    task_context: Option<&str>,
 ) -> (String, Option<String>) {
     let head = BOOT_PROMPT_HEAD.replace("{name}", name).replace("{cwd}", cwd);
     let mut middle = String::new();
@@ -382,7 +457,22 @@ fn build_boot_prompt(
             error = Some(format!("agent file {file_name} could not be read"));
         }
     }
-    let prompt = format!("{head}{middle}\n\n{BOOT_PROMPT_TAIL}");
+    let mut task_block = String::new();
+    if let (Some(tid), Some(ctx)) = (task_id, task_context) {
+        let max_bytes = crate::taskctx::TASK_CONTEXT_MAX_BYTES;
+        let truncated = truncate_at_char_boundary(ctx, max_bytes);
+        let body = if truncated.len() < ctx.len() {
+            format!(
+                "{truncated}\n[truncated at {max_bytes} bytes — open the task context in Cowtext for the full text]"
+            )
+        } else {
+            truncated.to_string()
+        };
+        task_block = format!(
+            "\n\n--- BEGIN TASK CONTEXT (Cowtext, task {tid}) ---\n{body}\n--- END TASK CONTEXT ---"
+        );
+    }
+    let prompt = format!("{head}{middle}{task_block}\n\n{BOOT_PROMPT_TAIL}");
     (prompt, error)
 }
 
@@ -396,6 +486,11 @@ struct MappedLine {
     events: Vec<AgentEvent>,
     claude_session_id: Option<String>,
     turn_ended: bool,
+    /// Usage observed on this line, for budget accounting ONLY. Populated from
+    /// BOTH the assistant-message usage block and the terminal `result` line.
+    /// Never turned into an `agent://event` — the emitted stream is unchanged
+    /// (see `map_line_assistant_usage_never_emits_a_usage_event`).
+    observed_usage: Option<Usage>,
 }
 
 fn text_event(id: &str, text: String, ts: u64) -> AgentEvent {
@@ -404,6 +499,49 @@ fn text_event(id: &str, text: String, ts: u64) -> AgentEvent {
 
 fn status_event(id: &str, status: SessionStatus, ts: u64) -> AgentEvent {
     AgentEvent { id: id.to_string(), kind: AgentEventKind::Status, status: Some(status), tool: None, text: None, usage: None, ts }
+}
+
+/// Formats a token count with thousands separators (`200000` -> `"200,000"`),
+/// matching the `budget` event's example text (contract §5.4). No new
+/// dependency: plain digit-grouping over the decimal string.
+fn format_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + bytes.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
+/// The `budget` event (contract §5.4): emitted UNGATED by `run_turn` — the
+/// `Stop` that produced it already bumped the generation inside `charge`'s
+/// own lock, so `emit_gated` would silently swallow it. `line_usage` is the
+/// `observed_usage` of the line that crossed the ceiling — its
+/// `input`/`output`/`cost` breakdown is carried through for fidelity, but
+/// `total_tokens` is deliberately `spent` (the accumulated total that
+/// crossed `ceiling`), not that one line's own total, since those two only
+/// coincide for a single-line turn.
+fn budget_event(id: &str, line_usage: Option<&Usage>, spent: u64, ceiling: u64, ts: u64) -> AgentEvent {
+    let usage = Usage {
+        input_tokens: line_usage.map(|u| u.input_tokens).unwrap_or(0),
+        output_tokens: line_usage.map(|u| u.output_tokens).unwrap_or(0),
+        total_tokens: spent,
+        context_window: None,
+        cost_usd: line_usage.and_then(|u| u.cost_usd),
+    };
+    AgentEvent {
+        id: id.to_string(),
+        kind: AgentEventKind::Budget,
+        status: None,
+        tool: None,
+        text: Some(format!("token ceiling {} reached — session stopped", format_thousands(ceiling))),
+        usage: Some(usage),
+        ts,
+    }
 }
 
 /// `inputTokens = input_tokens`, `outputTokens = output_tokens`,
@@ -437,6 +575,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                 events: vec![text_event(id, trimmed.to_string(), ts)],
                 claude_session_id: None,
                 turn_ended: false,
+                observed_usage: None,
             };
         }
     };
@@ -444,6 +583,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
     let mut events = Vec::new();
     let mut claude_session_id = None;
     let mut turn_ended = false;
+    let mut observed_usage = None;
 
     let type_ = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match type_ {
@@ -485,6 +625,12 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                         }
                     }
                 }
+                // WO06 §5.2: read for budget accounting ONLY — never turned
+                // into an event (see the comment block below for why the
+                // *emitted* stream still ignores this same field).
+                if let Some(u) = message.get("usage") {
+                    observed_usage = map_usage(u, None);
+                }
                 // NOT mapped to a `kind:"usage"` event, deliberately (defect
                 // fix, live-CLI-verified against a throwaway git worktree
                 // with `claude -p --output-format stream-json --verbose`):
@@ -520,7 +666,13 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                 // thread it into `map_usage` so the emitted `Usage` carries
                 // both. Absent field -> `None` -> wire `null`, tolerated.
                 let cost_usd = value.get("total_cost_usd").and_then(serde_json::Value::as_f64);
-                if let Some(usage) = value.get("usage").and_then(|u| map_usage(u, cost_usd)) {
+                let result_usage = value.get("usage").and_then(|u| map_usage(u, cost_usd));
+                // WO06 §5.2: the terminal result line is the other of the
+                // two lines budget accounting reads (the assistant branch
+                // above is the first) — carried whether or not it ends up
+                // non-`None` below, same tolerance as the emitted event.
+                observed_usage = result_usage.clone();
+                if let Some(usage) = result_usage {
                     events.push(AgentEvent { id: id.to_string(), kind: AgentEventKind::Usage, status: None, tool: None, text: None, usage: Some(usage), ts });
                 }
                 events.push(status_event(id, SessionStatus::Idle, ts));
@@ -539,7 +691,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
         _ => {}
     }
 
-    MappedLine { events, claude_session_id, turn_ended }
+    MappedLine { events, claude_session_id, turn_ended, observed_usage }
 }
 
 // ── Binary resolution + CLI probe ──────────────────────────────────────
@@ -666,25 +818,38 @@ fn clamp_tail(t: &mut String) {
     }
 }
 
-/// Clears `busy`/`child_pid` (gated on `generation`) and, when `error_msg`
-/// is set, emits the exit-path `error` then `status:"waiting"` pair
-/// (contract §5.1's abnormal-exit rows).
-fn finish_turn(app: &AppHandle, inner: &Registry, id: &str, generation: u64, error_msg: Option<String>) {
-    let matched = {
-        let mut guard = match inner.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        match guard.get_mut(id) {
-            Some(entry) if entry.generation == generation => {
-                entry.busy = false;
-                entry.child_pid = None;
-                true
-            }
-            _ => false,
-        }
+/// AppHandle-free end-of-turn bookkeeping (WO06 §5.2): clears `busy`/
+/// `child_pid` and folds this turn's accounted usage
+/// (`tokens_used += turn_tokens; turn_tokens = 0`) into the running total,
+/// gated on `generation` exactly like every other registry mutation inside
+/// a turn. Factored out of [`finish_turn`] — which needs a real
+/// `AppHandle` and so cannot be exercised directly by `sessions/tests.rs`
+/// (see the `RegistryCore` doc comment) — so the fold itself stays
+/// unit-testable. Returns whether the entry matched (i.e. whether
+/// `finish_turn`'s caller should proceed to emit the abnormal-exit pair).
+fn end_turn(inner: &Registry, id: &str, generation: u64) -> bool {
+    let mut guard = match inner.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
     };
-    if !matched {
+    match guard.get_mut(id) {
+        Some(entry) if entry.generation == generation => {
+            entry.busy = false;
+            entry.child_pid = None;
+            entry.tokens_used += entry.turn_tokens;
+            entry.turn_tokens = 0;
+            entry.info.tokens_used = entry.tokens_used;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Clears `busy`/`child_pid`, folds usage (via [`end_turn`]) and, when
+/// `error_msg` is set, emits the exit-path `error` then `status:"waiting"`
+/// pair (contract §5.1's abnormal-exit rows).
+fn finish_turn(app: &AppHandle, inner: &Registry, id: &str, generation: u64, error_msg: Option<String>) {
+    if !end_turn(inner, id, generation) {
         return;
     }
     if let Some(msg) = error_msg {
@@ -692,6 +857,72 @@ fn finish_turn(app: &AppHandle, inner: &Registry, id: &str, generation: u64, err
         let _ = app.emit(AGENT_EVENT, &AgentEvent { id: id.to_string(), kind: AgentEventKind::Error, status: None, tool: None, text: Some(msg), usage: None, ts });
         let _ = app.emit(AGENT_EVENT, &AgentEvent { id: id.to_string(), kind: AgentEventKind::Status, status: Some(SessionStatus::Waiting), tool: None, text: None, usage: None, ts });
     }
+}
+
+/// WO06 §5.3 — the atomic hard-stop primitive. "Atomic" means concretely:
+/// the charge, the ceiling comparison, and (on overrun) the generation bump
+/// that fences off every later mutation/emit of this turn all happen inside
+/// **one** critical section over the registry mutex, so two racing charges
+/// from the same turn can never both observe `spent >= ceiling` and both
+/// produce a `Stop` — the second always sees the bumped generation and
+/// reads `Stale`.
+///
+/// Implemented as a free function taking `&Registry` — like
+/// `generation_current`/`emit_gated`/`end_turn` above — rather than a
+/// `&self` method on [`RegistryCore`], for a concrete reason: [`run_turn`]
+/// only ever carries the cloned `Registry` handle (never a whole
+/// `RegistryCore`, which also carries the spawn-id counter that a turn task
+/// has no business touching). A `&self` wrapper would only ever be called
+/// from `#[cfg(test)]` code, which is genuine dead code under a plain
+/// `cargo clippy -- -D warnings` (no `--all-targets`) build — the exact
+/// "infra ahead of its consumer" trap this crate has hit before. This one
+/// function is the entire implementation, exercised directly by both
+/// `run_turn` and `sessions/tests.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChargeVerdict {
+    Ok,
+    Stale,
+    Stop { pid: Option<u32>, spent: u64, ceiling: u64 },
+}
+
+fn charge(inner: &Registry, id: &str, generation: u64, observed_total: u64) -> ChargeVerdict {
+    let mut guard = match inner.lock() {
+        // A poisoned lock can mutate nothing — `Stale` (not a fourth
+        // variant) is the correct read: no charge was recorded, no stop
+        // happened, exactly as if this turn had already gone stale.
+        Ok(g) => g,
+        Err(_) => return ChargeVerdict::Stale,
+    };
+    let Some(entry) = guard.get_mut(id) else {
+        return ChargeVerdict::Stale;
+    };
+    if entry.generation != generation {
+        return ChargeVerdict::Stale;
+    }
+    entry.turn_tokens = entry.turn_tokens.max(observed_total);
+    let spent = entry.tokens_used + entry.turn_tokens;
+    let ceiling = match entry.token_ceiling {
+        Some(c) if c > 0 => c,
+        _ => return ChargeVerdict::Ok,
+    };
+    if spent < ceiling {
+        return ChargeVerdict::Ok;
+    }
+    // Overrun: the generation bump below is the fence (see doc comment) —
+    // every later `generation_current`/`emit_gated`/`end_turn` check for
+    // this turn instantly reads stale, so this is the only `Stop` this
+    // session's generation can ever produce.
+    entry.generation += 1;
+    entry.info.alive = false;
+    entry.busy = false;
+    let pid = entry.child_pid.take();
+    // Fold now: `finish_turn`/`end_turn` never run for a budget stop (§5.3
+    // step 3 — `run_turn` returns immediately instead), so this is the only
+    // place a `Stop`'s spend is folded into the durable, wire-visible total.
+    entry.tokens_used = spent;
+    entry.turn_tokens = 0;
+    entry.info.tokens_used = spent;
+    ChargeVerdict::Stop { pid, spent, ceiling }
 }
 
 /// The one chokepoint every turn (boot, send, restart) runs through (§2.3 —
@@ -825,6 +1056,28 @@ async fn run_turn(
                     }
                 }
             }
+
+            // WO06 §5.3: charge before emitting this line's own events — a
+            // budget stop preempts the very line that crossed the ceiling
+            // (the `budget`+`exit` pair below stands in for it).
+            if let Some(usage) = &mapped.observed_usage {
+                if let ChargeVerdict::Stop { pid, spent, ceiling } = charge(&inner, &id, generation, usage.total_tokens) {
+                    let stop_ts = now_millis();
+                    // Ungated: `charge`'s Stop branch already bumped the
+                    // generation inside its own lock, so `emit_gated` would
+                    // silently swallow both of these (§5.3 step 1).
+                    let _ = app.emit(AGENT_EVENT, &budget_event(&id, Some(usage), spent, ceiling, stop_ts));
+                    let _ = app.emit(
+                        AGENT_EVENT,
+                        &AgentEvent { id: id.clone(), kind: AgentEventKind::Exit, status: None, tool: None, text: Some("budget".to_string()), usage: None, ts: stop_ts },
+                    );
+                    if let Some(pid) = pid {
+                        let _ = kill_tree(pid).await;
+                    }
+                    return; // no finish_turn: generation-gated, would no-op (§5.3 step 3)
+                }
+            }
+
             for ev in mapped.events {
                 emit_gated(&app, &inner, &id, generation, ev);
             }
@@ -973,6 +1226,11 @@ pub fn kill_all(registry: &SessionRegistry) {
 
 // ── Commands (contract §4) ──────────────────────────────────────────────
 
+// WO06 Stage-0 seam (§7.1): the contract freezes this exact nine-parameter
+// signature (three params appended for §4.3/§5.1); narrowing it back under
+// 8 would mean bundling unrelated args into a struct the contract does not
+// specify. Allowed narrowly rather than reshaping a frozen wire contract.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn agent_session_spawn(
     app: AppHandle,
@@ -981,10 +1239,14 @@ pub async fn agent_session_spawn(
     agent_file_name: Option<String>,
     name: String,
     cwd: String,
+    task_id: Option<String>,        // WO06 §4.3 — the task this session is scoped to, if any.
+    task_context: Option<String>,   // WO06 §4.3 — already-compiled subgraph body, from `task_context_preview`.
+    token_ceiling: Option<u64>,     // WO06 §5.1 — `None`/`Some(0)` = unlimited.
 ) -> Result<SessionInfo, String> {
     let _ = state.app.set(app.clone());
     let check = crate::worktree::worktree_check(cwd)?;
-    let (info, boot_prompt, agent_file_error) = state.core.register(&check, root, agent_file_name, name)?;
+    let (info, boot_prompt, agent_file_error) =
+        state.core.register(&check, root, agent_file_name, name, task_id, task_context, token_ceiling)?;
 
     if let Some(err) = agent_file_error {
         let ts = now_millis();

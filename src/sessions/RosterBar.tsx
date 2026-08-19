@@ -11,6 +11,8 @@ import { selectReducedMotion, useSettingsStore } from "../store/settings";
 import { MAX_SESSIONS, useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
 import { ctxPercent } from "../store/tokens";
 import { AddAgentDialog } from "./AddAgentDialog";
+import { BudgetStrip } from "./BudgetGauge";
+import { budgetPct } from "./budget";
 
 /** N5: amber at/above 80% of the 200k window — static amber = warning,
  *  never mixed with the accent fill below it. */
@@ -49,15 +51,24 @@ function RosterCard({
   const selectSession = useSessionsStore((s) => s.selectSession);
   const dismiss = useSessionsStore((s) => s.dismiss);
   const pct = ctxPercent(session.usage.totalTokens);
+  const budgeted = session.tokenCeiling !== null;
+  // D4: the budget denominator is `tokensUsed` (Rust's authoritative
+  // accumulator), never `usage.totalTokens` — a `budget` event's usage
+  // block carries an already-cumulative total, and summing it into
+  // `usage.totalTokens` double-counts the moment a session stops.
+  const bpct = budgetPct(session.tokensUsed, session.tokenCeiling);
+  const budgetStopped = session.stopReason === "budget";
   return (
     <div
       onClick={() => selectSession(session.id)}
-      title={`${session.name} — ${session.status}${
-        session.currentTool !== null ? `: ${session.currentTool}` : ""
-      }${session.usage.turns > 0 ? ` · ${pct}% of ctx` : ""}`}
+      title={`${session.name} — ${
+        budgetStopped ? "stopped: token ceiling reached" : session.status
+      }${session.currentTool !== null ? `: ${session.currentTool}` : ""}${
+        budgeted && bpct !== null ? ` · ${bpct}% of budget` : session.usage.turns > 0 ? ` · ${pct}% of ctx` : ""
+      }`}
       className={`relative flex h-[30px] w-[172px] flex-none cursor-default items-center gap-1.5 overflow-hidden rounded border px-1.5 transition-colors duration-fast ${
         selected ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2 hover:border-border-strong"
-      } ${!session.alive ? "opacity-60" : ""}`}
+      } ${!session.alive ? "opacity-60" : ""} ${budgetStopped ? "border-l-[3px] border-l-danger" : ""}`}
     >
       <AgentAvatar seed={session.name} size={11} />
       <span className="min-w-0 flex-1 truncate text-xs text-content">{session.name}</span>
@@ -71,27 +82,38 @@ function RosterCard({
           <StatusDot status={session.status} reducedMotion={reducedMotion} />
         </>
       ) : (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            dismiss(session.id);
-          }}
-          title="Dismiss"
-          className="grid h-4 w-4 flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
-        >
-          <X size={11} strokeWidth={1.5} />
-        </button>
+        <>
+          {budgetStopped && (
+            <span className="flex-none font-mono text-micro text-danger-text">budget</span>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              dismiss(session.id);
+            }}
+            title="Dismiss"
+            className="grid h-4 w-4 flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+          >
+            <X size={11} strokeWidth={1.5} />
+          </button>
+        </>
       )}
       {/* N5 ctx bar — thin strip under the status dot, accent fill, amber
-          once the session is heavy in its context window. */}
-      {session.alive && (
+          once the session is heavy in its context window. A task-bound
+          session with a ceiling shows its budget instead (WO06 §5.5): a
+          different, more relevant denominator, never both at once. */}
+      {session.alive && (budgeted ? (
+        // O8 fix: pass the stop state already computed above — the border
+        // and badge showed it, the strip must match.
+        <BudgetStrip tokensUsed={session.tokensUsed} ceiling={session.tokenCeiling} stopped={budgetStopped} />
+      ) : (
         <div className="absolute inset-x-0 bottom-0 h-[2px] bg-surface-1">
           <div
             className={`h-full ${pct >= CTX_WARN_PCT ? "bg-amber" : "bg-accent"}`}
             style={{ width: `${Math.min(100, pct)}%` }}
           />
         </div>
-      )}
+      ))}
     </div>
   );
 }

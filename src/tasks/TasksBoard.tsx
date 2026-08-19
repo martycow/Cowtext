@@ -15,7 +15,7 @@
 // visible. Segment choice is local state, deliberately not persisted.
 
 import { useEffect, useState } from "react";
-import { MoreVertical, Plus } from "lucide-react";
+import { Layers, Loader2, MoreVertical, Plus } from "lucide-react";
 import {
   normalizePriority,
   PRIORITY_LABELS,
@@ -23,6 +23,7 @@ import {
   TASK_STATUSES,
   statusOf,
   useTasksStore,
+  type TaskDag,
   type TaskStatus,
 } from "../store/tasks";
 import type { TaskFileInfo, TaskItem } from "../tasks/api";
@@ -34,6 +35,21 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import { NewTaskDialog } from "./NewTaskDialog";
+import { DependsPicker } from "./DependsPicker";
+// WO06 audit D1/F1 fix: the differentiator (§2.1/§4) had no reachable UI
+// entry point. TaskContextModal's call-site signature is frozen by
+// WO06_CONTRACT.md §10.3 — U1 mounts it from the board card, unchanged.
+import { TaskContextModal } from "../taskctx/TaskContextModal";
+
+/** Bound store actions threaded down to every card (WO06 §11 U1 — deps
+ *  editing lives on the board, not the Inspector, which is out of this
+ *  lane's zone). Both reload the scan on success since `blocked`/`dag` are
+ *  cross-file derivations a single-file return can't carry. */
+type DepsActions = {
+  allTasks: TaskItem[];
+  onAddDependency: (item: TaskItem, target: TaskItem) => Promise<string | null>;
+  onRemoveDependency: (item: TaskItem, dependsOnId: string) => Promise<string | null>;
+};
 
 const STATUS_ORDER = TASK_STATUSES;
 
@@ -102,6 +118,63 @@ function WhenChip({ when }: { when: string | null }) {
   );
 }
 
+/** Every dependency this task names that resolves to a scanned task whose
+ *  status isn't "done" yet — i.e. what's actually holding it up. An
+ *  unresolved dependency (typo) never blocks (WO06 §3.3 D1), so it's
+ *  excluded here on purpose. */
+function blockingDeps(task: TaskItem, allTasks: TaskItem[]): TaskItem[] {
+  return task.dependsOn
+    .map((id) => allTasks.find((t) => t.taskId === id))
+    .filter((t): t is TaskItem => t !== undefined && statusOf(t) !== "done");
+}
+
+/** Static (non-pulsing) warning-amber — "blocked" is a system state, not a
+ *  live agent action, so it must never read as the moving amber that means
+ *  "the cow is doing something" (design-tokens skill: static amber = warning). */
+function BlockedBadge({ task, allTasks }: { task: TaskItem; allTasks: TaskItem[] }) {
+  const blockers = blockingDeps(task, allTasks);
+  const title = blockers.length > 0 ? `Blocked by: ${blockers.map((b) => b.name).join(", ")}` : "Blocked";
+  return (
+    <span
+      title={title}
+      className="flex-none rounded-sm border border-amber-border bg-warning-surface px-1 font-mono text-micro text-warning-text"
+    >
+      Blocked
+    </span>
+  );
+}
+
+function formatCyclePath(path: string[]): string {
+  return path.join(" → ");
+}
+
+/** Board-level summary of the cross-file DAG derivation (WO06 §3.3) — one
+ *  compact banner instead of per-card noise, since cycles/duplicates are
+ *  rare and span files the current segment may not even show. Cycles and
+ *  duplicate ids are reported, never fatal (tasks_scan always succeeds). */
+function DagWarnings({ dag }: { dag: TaskDag }) {
+  if (dag.cycles.length === 0 && dag.duplicateIds.length === 0 && dag.unresolved.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-0.5 border-b border-border-subtle border-l-[3px] border-l-warning bg-warning-surface px-3 py-2 font-mono text-2xs leading-relaxed text-warning-text">
+      {dag.cycles.map((cycle, i) => (
+        <p key={`cycle-${i}`}>Dependency cycle: {formatCyclePath(cycle)}</p>
+      ))}
+      {dag.duplicateIds.length > 0 && (
+        <p>
+          Duplicate task id{dag.duplicateIds.length > 1 ? "s" : ""}: {dag.duplicateIds.join(", ")} — links to these
+          ids are refused until the duplicate is resolved.
+        </p>
+      )}
+      {dag.unresolved.length > 0 && (
+        <p>
+          {dag.unresolved.length} unresolved dependenc{dag.unresolved.length === 1 ? "y" : "ies"}:{" "}
+          {dag.unresolved.map((u) => `${u.taskId} needs ${u.dependsOn}`).join(", ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function AgentChip({
   agentRaw,
   agents,
@@ -153,6 +226,28 @@ function CardMenuButton({ items }: { items: MenuItem[] }) {
   );
 }
 
+/** Board-card launch point for the WO06 differentiator (§4/§10.3, audit
+ *  D1/F1) — every card, in every one of the four convention-file segments,
+ *  carries this next to the deps chip so the feature is reachable from the
+ *  "commodity" board surface, not only from the Inspector. `busy` covers the
+ *  on-demand `task_id_ensure` mint (§3.1: ids appear only on first link). */
+function ContextButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      disabled={busy}
+      title="Task context — preview the Memory Node subgraph this task's session would receive"
+      className="flex h-control-sm flex-none items-center gap-1 rounded-sm border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-disabled transition-colors duration-fast hover:text-content disabled:cursor-wait"
+    >
+      {busy ? <Loader2 size={10} className="animate-spin" /> : <Layers size={10} strokeWidth={1.5} />}
+    </button>
+  );
+}
+
 function StatusCard({
   task,
   status,
@@ -160,9 +255,12 @@ function StatusCard({
   agents,
   meta,
   otherFiles,
+  deps,
+  contextBusy,
   onSelect,
   onSetStatus,
   onMove,
+  onOpenContext,
 }: {
   task: TaskItem;
   status: TaskStatus;
@@ -170,9 +268,12 @@ function StatusCard({
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
   otherFiles: { relPath: string; label: string }[];
+  deps: DepsActions;
+  contextBusy: boolean;
   onSelect: () => void;
   onSetStatus: (status: TaskStatus) => void;
   onMove: (toRelPath: string) => void;
+  onOpenContext: () => void;
 }) {
   const menuItems: MenuItem[] = [
     ...STATUS_ORDER.filter((s) => s !== status).map(
@@ -220,7 +321,16 @@ function StatusCard({
             #{t}
           </span>
         ))}
+        {task.blocked && <BlockedBadge task={task} allTasks={deps.allTasks} />}
         <div className="min-w-[6px] flex-1" />
+        <DependsPicker
+          item={task}
+          allTasks={deps.allTasks}
+          disabled={false}
+          onAdd={(target) => deps.onAddDependency(task, target)}
+          onRemove={(depId) => deps.onRemoveDependency(task, depId)}
+        />
+        <ContextButton busy={contextBusy} onClick={onOpenContext} />
         <AgentChip agentRaw={task.agent} agents={agents} meta={meta} />
       </div>
     </div>
@@ -274,10 +384,13 @@ function Swimlane({
   agents,
   meta,
   otherFiles,
+  deps,
+  contextBusyId,
   selectedId,
   onSelect,
   onSetStatus,
   onMove,
+  onOpenContext,
 }: {
   label: string;
   tasks: TaskItem[];
@@ -285,10 +398,13 @@ function Swimlane({
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
   otherFiles: { relPath: string; label: string }[];
+  deps: DepsActions;
+  contextBusyId: string | null;
   selectedId: string | null;
   onSelect: (t: TaskItem) => void;
   onSetStatus: (t: TaskItem, status: TaskStatus) => void;
   onMove: (t: TaskItem, toRelPath: string) => void;
+  onOpenContext: (t: TaskItem) => void;
 }) {
   return (
     <div className="border-b border-border-subtle">
@@ -310,9 +426,12 @@ function Swimlane({
                   agents={agents}
                   meta={meta}
                   otherFiles={otherFiles}
+                  deps={deps}
+                  contextBusy={contextBusyId === t.id}
                   onSelect={() => onSelect(t)}
                   onSetStatus={(s) => onSetStatus(t, s)}
                   onMove={(to) => onMove(t, to)}
+                  onOpenContext={() => onOpenContext(t)}
                 />
               ))}
           </div>
@@ -328,16 +447,22 @@ function FlatRow({
   selected,
   agents,
   meta,
+  deps,
+  contextBusy,
   onSelect,
   onToggle,
+  onOpenContext,
 }: {
   task: TaskItem;
   showWhen: boolean;
   selected: boolean;
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
+  deps: DepsActions;
+  contextBusy: boolean;
   onSelect: () => void;
   onToggle: (done: boolean) => void;
+  onOpenContext: () => void;
 }) {
   return (
     <div
@@ -349,15 +474,19 @@ function FlatRow({
       }`}
     >
       <div className="flex items-start gap-1.5">
-        {task.source === "checklist" && (
-          <input
-            type="checkbox"
-            checked={task.done}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="mt-0.5 h-3 w-3 flex-none accent-[var(--accent)]"
-          />
-        )}
+        {/* O1 fix (WO06 §11): the checkbox used to be gated on
+            source === "checklist" — since WO02 made grids canonical, every
+            BACKLOG/ROADMAP/BUGS row is a table row, so none of them could be
+            completed from the board. onToggle now routes to toggleAny,
+            which sends a full-field task_update for table rows because
+            task_toggle genuinely refuses them server-side. */}
+        <input
+          type="checkbox"
+          checked={task.done}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => onToggle(e.target.checked)}
+          className="mt-0.5 h-3 w-3 flex-none accent-[var(--accent)]"
+        />
         <span
           title={task.name}
           className={`min-w-0 flex-1 truncate text-xs ${
@@ -375,7 +504,16 @@ function FlatRow({
             #{t}
           </span>
         ))}
+        {task.blocked && <BlockedBadge task={task} allTasks={deps.allTasks} />}
         <div className="min-w-[6px] flex-1" />
+        <DependsPicker
+          item={task}
+          allTasks={deps.allTasks}
+          disabled={false}
+          onAdd={(target) => deps.onAddDependency(task, target)}
+          onRemove={(depId) => deps.onRemoveDependency(task, depId)}
+        />
+        <ContextButton busy={contextBusy} onClick={onOpenContext} />
         <AgentChip agentRaw={task.agent} agents={agents} meta={meta} />
       </div>
     </div>
@@ -389,9 +527,12 @@ function FlatListPanel({
   showWhen,
   agents,
   meta,
+  deps,
+  contextBusyId,
   selectedId,
   onSelect,
   onToggle,
+  onOpenContext,
 }: {
   label: string;
   file: TaskFileInfo | undefined;
@@ -399,9 +540,12 @@ function FlatListPanel({
   showWhen: boolean;
   agents: AgentDoc[];
   meta: Record<string, AgentMeta>;
+  deps: DepsActions;
+  contextBusyId: string | null;
   selectedId: string | null;
   onSelect: (t: TaskItem) => void;
   onToggle: (t: TaskItem, done: boolean) => void;
+  onOpenContext: (t: TaskItem) => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -426,8 +570,11 @@ function FlatListPanel({
             selected={t.id === selectedId}
             agents={agents}
             meta={meta}
+            deps={deps}
+            contextBusy={contextBusyId === t.id}
             onSelect={() => onSelect(t)}
             onToggle={(done) => onToggle(t, done)}
+            onOpenContext={() => onOpenContext(t)}
           />
         ))}
       </div>
@@ -495,6 +642,7 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   const load = useTasksStore((s) => s.load);
   const files = useTasksStore((s) => s.files);
   const allTasks = useTasksStore((s) => s.tasks);
+  const dag = useTasksStore((s) => s.dag);
   const loading = useTasksStore((s) => s.loading);
   const error = useTasksStore((s) => s.error);
   const storeFilter = useTasksStore((s) => s.agentFilter);
@@ -502,8 +650,11 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   const selected = useTasksStore((s) => s.selected);
   const select = useTasksStore((s) => s.select);
   const setStatus = useTasksStore((s) => s.setStatus);
-  const toggle = useTasksStore((s) => s.toggle);
+  const toggleAny = useTasksStore((s) => s.toggleAny);
   const move = useTasksStore((s) => s.move);
+  const addDependency = useTasksStore((s) => s.addDependency);
+  const removeDependency = useTasksStore((s) => s.removeDependency);
+  const ensureId = useTasksStore((s) => s.ensureId);
   const setGraphSelection = useGraphStore((s) => s.setSelection);
   const agents = useAgentsStore((s) => s.agents);
   const meta = useAgentsStore((s) => s.meta);
@@ -512,6 +663,29 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   // #14 — local, deliberately not persisted (WO02_CONTRACT.md §1.3): resets
   // to TASKS on remount.
   const [segment, setSegment] = useState<BoardSegment>("TASKS");
+  // WO06 audit D1/F1 — board-card mount of the frozen §10.3 TaskContextModal.
+  // `taskId` is null until first minted (§3.1 "no auto-mint"); `openContext`
+  // mints on demand, exactly like DependsPicker's onAdd already does.
+  const [contextTask, setContextTask] = useState<{ taskId: string; taskName: string } | null>(null);
+  const [contextBusyId, setContextBusyId] = useState<string | null>(null);
+  const [contextError, setContextError] = useState<string | null>(null);
+
+  const openContext = (t: TaskItem) => {
+    setContextError(null);
+    if (t.taskId !== null) {
+      setContextTask({ taskId: t.taskId, taskName: t.name });
+      return;
+    }
+    setContextBusyId(t.id);
+    void ensureId(t).then((result) => {
+      setContextBusyId(null);
+      if (typeof result === "string") {
+        setContextError(result);
+        return;
+      }
+      if (result.taskId !== null) setContextTask({ taskId: result.taskId, taskName: result.name });
+    });
+  };
 
   // Board state loads on tab mount (contract R1) — every time this
   // component mounts (view switched to "tasks") and whenever the project
@@ -565,6 +739,11 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   const otherFilesFor = (relPath: string): { relPath: string; label: string }[] =>
     files.filter((f) => f.relPath !== relPath).map((f) => ({ relPath: f.relPath, label: columnLabel(f.relPath) }));
 
+  // Dependency candidates are every scanned task, not just the current
+  // segment's filtered subset — a task in TASKS.md can depend on one in
+  // BUGS.md (WO06 §3.3 places no such restriction on `needs:`).
+  const deps: DepsActions = { allTasks, onAddDependency: addDependency, onRemoveDependency: removeDependency };
+
   const pick = (t: TaskItem) => {
     select(t);
     setGraphSelection([], []);
@@ -592,6 +771,12 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
           {error}
         </div>
       )}
+      {contextError !== null && (
+        <div className="border-b border-border-subtle border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
+          {contextError}
+        </div>
+      )}
+      <DagWarnings dag={dag} />
       {loading ? (
         <p className="px-4 py-6 text-center text-sm text-content-muted">loading…</p>
       ) : segment === "TASKS" ? (
@@ -622,10 +807,13 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
               agents={agents}
               meta={meta}
               otherFiles={tasksFile !== undefined ? otherFilesFor(tasksFile.relPath) : []}
+              deps={deps}
+              contextBusyId={contextBusyId}
               selectedId={selectedId}
               onSelect={pick}
               onSetStatus={(t, s) => void setStatus(t, s)}
               onMove={(t, to) => void move(t, to)}
+              onOpenContext={openContext}
             />
           ))}
         </div>
@@ -637,13 +825,24 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
           showWhen={segment === "ROADMAP"}
           agents={agents}
           meta={meta}
+          deps={deps}
+          contextBusyId={contextBusyId}
           selectedId={selectedId}
           onSelect={pick}
-          onToggle={(t, done) => void toggle(t, done)}
+          onToggle={(t, done) => void toggleAny(t, done)}
+          onOpenContext={openContext}
         />
       )}
       {newTaskOpen && (
         <NewTaskDialog root={root} files={files} agents={agents} onClose={() => setNewTaskOpen(false)} />
+      )}
+      {contextTask !== null && (
+        <TaskContextModal
+          root={root}
+          taskId={contextTask.taskId}
+          taskName={contextTask.taskName}
+          onClose={() => setContextTask(null)}
+        />
       )}
     </div>
   );

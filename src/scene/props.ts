@@ -487,6 +487,130 @@ export function truncateLabel(s: string, max: number = BUBBLE_MAX): string {
   return s.length <= max ? s : `…${s.slice(-(max - 1))}`;
 }
 
+// ── WO06 B1 — mission control: per-session "stall" readability ─────────
+// A live agent session already gets one calf sprite at a fixed tile
+// (agentHerd.ts) with a stable seed-derived look. What was missing at
+// multi-session scale (up to 4 concurrent, same cap as calves) was a way to
+// tell "this tile is a live session's own space" apart from a wandering
+// calf at a glance, and to read that session's token budget without
+// hovering. The two makers below are added as CHILDREN of the session's
+// existing sprite.view (see agentHerd.ts) — no new top-level container, no
+// new zIndex bookkeeping, no per-frame animation (both are pure Graphics
+// mutated only when their inputs change, matching the file's `setOpened`/
+// bubble idiom elsewhere).
+
+/** Floor "stall" marker: a dashed diamond outline + four corner posts,
+ *  existing wood tones only (no new Barnlight-29 entry). Purely a ground
+ *  decal, drawn at index 0 of the sprite's own Container so it always
+ *  sorts with its owning sprite — no separate depth math needed. */
+export function makeStallMarker(): Graphics {
+  const g = new Graphics();
+  const ex = TILE_W / 2 - 3;
+  const ey = TILE_H / 2 - 2;
+  const corners: Array<[number, number]> = [
+    [0, -ey],
+    [ex, 0],
+    [0, ey],
+    [-ex, 0],
+  ];
+  for (let i = 0; i < 4; i += 1) {
+    const [x1, y1] = corners[i];
+    const [x2, y2] = corners[(i + 1) % 4];
+    for (let t = 0; t < 0.99; t += 0.34) {
+      const t2 = Math.min(1, t + 0.18);
+      g.moveTo(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+        .lineTo(x1 + (x2 - x1) * t2, y1 + (y2 - y1) * t2)
+        .stroke({ width: 1, color: PALETTE.woodShadow, alpha: 0.8 });
+    }
+  }
+  for (const [px, py] of corners) {
+    g.rect(px - 1, py - 3, 2, 3).fill(PALETTE.woodMid).stroke(OUT);
+  }
+  return g;
+}
+
+/** Budget-strip state for `StallPlacard.setBudget`. `fraction` is REMAINING
+ *  budget (1 − spent/ceiling, clamped 0..1) — the strip empties as spend
+ *  approaches the ceiling. `danger` = spent/ceiling ≥ 0.9 (design-tokens'
+ *  "amber -> danger at 90%" rule). `dark` = spent ≥ ceiling, the exact
+ *  instant `RegistryCore::charge` fires `Stop` (WO06_CONTRACT §5.3) — the
+ *  strip renders hollow/outline-only rather than a 0%-filled bar, so
+ *  "empty because nothing spent yet" and "empty because stopped" never look
+ *  the same. */
+export interface BudgetStripState {
+  fraction: number;
+  danger: boolean;
+  dark: boolean;
+}
+
+export interface StallPlacard {
+  view: Container;
+  /** No-op if `name` is unchanged since the last call. */
+  setName: (name: string) => void;
+  /** `null` hides the strip entirely — the contractually-correct "budget
+   *  off" rendering (ceiling 0/absent, WO06_CONTRACT §5.5.1). No-op if the
+   *  effective state is unchanged since the last call (gate 17: mutate an
+   *  existing display object, never rebuild Graphics per frame). */
+  setBudget: (state: BudgetStripState | null) => void;
+}
+
+const PLACARD_FONT_SIZE = 7;
+const PLACARD_MAX = 12; // terser than the 24-char hover bubble — this one never hides
+
+/** Always-visible per-session nameplate (unlike the top status bubble,
+ *  which only shows during a tool/waiting state) plus an optional budget
+ *  strip along its bottom edge. Positioned by the caller (agentHerd.ts)
+ *  below the sprite's feet, distinct from the tool bubble above its head. */
+export function makeStallPlacard(initialName: string): StallPlacard {
+  const view = new Container();
+  const bg = new Graphics();
+  const label = new Text({
+    text: "",
+    style: { fontFamily: "Silkscreen, monospace", fontSize: PLACARD_FONT_SIZE, fill: PALETTE.patchDark },
+    resolution: 3,
+  });
+  const strip = new Graphics();
+  view.addChild(bg, label, strip);
+
+  let lastName: string | null = null;
+  let lastBudgetKey = "";
+
+  const redrawFrame = (): void => {
+    const w = Math.max(16, label.width + 6);
+    const h = label.height + 4;
+    bg.clear();
+    bg.roundRect(-w / 2, 0, w, h, 2).fill(PALETTE.woodPale).stroke(OUT);
+    label.position.set(-label.width / 2, 2);
+    strip.position.set(-w / 2 + 1, h - 2);
+  };
+
+  const setName = (name: string): void => {
+    if (name === lastName) return;
+    lastName = name;
+    label.text = name.length <= PLACARD_MAX ? name : `${name.slice(0, PLACARD_MAX - 1)}…`;
+    redrawFrame();
+  };
+  setName(initialName);
+
+  const setBudget = (state: BudgetStripState | null): void => {
+    const key = state === null ? "off" : `${Math.round(state.fraction * 20)}:${state.danger}:${state.dark}`;
+    if (key === lastBudgetKey) return;
+    lastBudgetKey = key;
+    strip.clear();
+    if (state === null) return;
+    const stripW = Math.max(16, label.width + 6) - 2;
+    if (state.dark) {
+      strip.rect(0, 0, stripW, 2).stroke({ width: 1, color: PALETTE.outline, alpha: 0.9 });
+      return;
+    }
+    strip.rect(0, 0, stripW, 2).fill(PALETTE.night);
+    const filled = Math.round(stripW * Math.max(0, Math.min(1, state.fraction)));
+    if (filled > 0) strip.rect(0, 0, filled, 2).fill(state.danger ? PALETTE.barnRed : PALETTE.hay);
+  };
+
+  return { view, setName, setBudget };
+}
+
 /** Speech bubble: paper plate + warm outline + tiny monospace text. */
 export function makeBubble(textRaw: string): Container {
   const c = new Container();

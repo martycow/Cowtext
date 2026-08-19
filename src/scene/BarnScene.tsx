@@ -199,10 +199,29 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       // same sync() diff, no separate lifecycle wiring needed. No sfx here
       // (contract: session lifecycle has no cue in Block F).
       const agents = new AgentHerd(layout.objects);
+      // WO06 §5/§8 mission-control budget gauge (agentHerd.ts) — `Session`
+      // gains `tokensUsed`/`tokenCeiling` once lane U3 lands (B1 was
+      // dispatched ahead of it; see agentHerd.ts's module header). Read
+      // through a structurally-widened view rather than a cast to a made-up
+      // shape: any `Session` already satisfies `Session & {optional fields}`
+      // (missing optional props are fine), so `b.tokensUsed`/`b.tokenCeiling`
+      // are `undefined` today and pick up real values automatically the
+      // moment U3 adds them — this line needs no further edit either way.
+      type SessionWithBudget = Session & { tokensUsed?: number; tokenCeiling?: number | null };
       const toAgentInputs = (sessions: readonly Session[]): AgentSpriteInput[] =>
         sessions
           .filter((s) => s.alive)
-          .map((s) => ({ id: s.id, name: s.name, status: s.status, currentTool: s.currentTool }));
+          .map((s) => {
+            const b: SessionWithBudget = s;
+            return {
+              id: s.id,
+              name: s.name,
+              status: s.status,
+              currentTool: s.currentTool,
+              tokensUsed: b.tokensUsed,
+              tokenCeiling: b.tokenCeiling,
+            };
+          });
       agents.sync(toAgentInputs(useSessionsStore.getState().sessions));
       cleanups.push(
         useSessionsStore.subscribe((s, prev) => {
