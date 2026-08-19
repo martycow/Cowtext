@@ -2,7 +2,7 @@
 // The RF-local node/edge arrays are a projection: in-flight drag positions and
 // selection live here; every real mutation round-trips through the store.
 
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -15,7 +15,7 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { FolderOpen, Maximize2, Plus, X } from "lucide-react";
+import { ChevronDown, FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { revealPath } from "../fs/api";
@@ -27,6 +27,10 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import type { CanvasEdge, CanvasNode } from "./types";
+
+const NodeWizard = lazy(() =>
+  import("../wizard/NodeWizard").then((m) => ({ default: m.NodeWizard })),
+);
 
 const nodeTypes = { memory: MemoryNodeCard };
 const edgeTypes = { memory: MemoryEdgeView };
@@ -47,9 +51,14 @@ function CanvasInner() {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const paneMenu = useContextMenu();
+  const newNodeMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op."
   const [revealError, setRevealError] = useState<string | null>(null);
+  // New Node wizard (WO01 Block D §T5) — position is captured at open time
+  // (viewport center for the toolbar entry, click point for the pane menu),
+  // same idiom as newNodeAtCenter/onPaneContextMenu below. null = closed.
+  const [wizardPos, setWizardPos] = useState<{ x: number; y: number } | null>(null);
 
   // Store → RF nodes. Keep in-flight drag positions and RF-side selection;
   // brand-new nodes take their selection from the store (createNode selects).
@@ -108,6 +117,16 @@ function CanvasInner() {
     void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
   };
 
+  const wizardAtCenter = () => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    const pos = screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+    setWizardPos({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
+  };
+
   const onPaneContextMenu = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (!target.classList.contains("react-flow__pane")) return;
@@ -119,6 +138,13 @@ function CanvasInner() {
         label: "New node here",
         icon: Plus,
         onSelect: () => void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) }),
+      },
+      {
+        kind: "item",
+        id: "new-node-wizard",
+        label: "New node wizard…",
+        icon: Sparkles,
+        onSelect: () => setWizardPos({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) }),
       },
       {
         kind: "item",
@@ -211,14 +237,35 @@ function CanvasInner() {
         />
         <Panel position="top-left">
           <div className="flex items-center gap-2">
-            <button
-              onClick={newNodeAtCenter}
-              title="New memory node (or double-click the canvas)"
-              className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content shadow-card transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-            >
-              <Plus size={14} strokeWidth={1.5} />
-              New node
-            </button>
+            {/* Split button: click = quick node (old one-click behaviour),
+                chevron = wizard entry (WO01 Block D §T5). */}
+            <div className="flex h-control items-stretch overflow-hidden rounded border border-border bg-surface-2 shadow-card transition-colors duration-fast hover:border-border-strong">
+              <button
+                onClick={newNodeAtCenter}
+                title="New memory node (or double-click the canvas)"
+                className="flex items-center gap-1.5 px-3 text-sm text-content hover:bg-surface-3"
+              >
+                <Plus size={14} strokeWidth={1.5} />
+                New node
+              </button>
+              <button
+                onClick={(e) =>
+                  newNodeMenu.openAt(e, [
+                    {
+                      kind: "item",
+                      id: "wizard",
+                      label: "New node wizard…",
+                      icon: Sparkles,
+                      onSelect: wizardAtCenter,
+                    },
+                  ])
+                }
+                title="More ways to create a node"
+                className="flex items-center border-l border-border px-1.5 text-content-muted hover:bg-surface-3 hover:text-content"
+              >
+                <ChevronDown size={12} strokeWidth={1.5} />
+              </button>
+            </div>
             <LensControl />
           </div>
         </Panel>
@@ -247,6 +294,19 @@ function CanvasInner() {
           items={paneMenu.menu.items}
           onClose={paneMenu.close}
         />
+      )}
+      {newNodeMenu.menu !== null && (
+        <ContextMenu
+          x={newNodeMenu.menu.x}
+          y={newNodeMenu.menu.y}
+          items={newNodeMenu.menu.items}
+          onClose={newNodeMenu.close}
+        />
+      )}
+      {wizardPos !== null && root !== null && (
+        <Suspense fallback={null}>
+          <NodeWizard root={root} initialPosition={wizardPos} onClose={() => setWizardPos(null)} />
+        </Suspense>
       )}
     </div>
   );

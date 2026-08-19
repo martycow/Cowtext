@@ -628,6 +628,225 @@ below.
     Remove-Item -Recurse -Force C:\_cowagents, C:\_cowagents-wt1, C:\_cowagents-wt2, C:\_cowagents-wt3, C:\_cowagents-wt4, C:\_cownotrepo -ErrorAction SilentlyContinue
     ```
 
+## Block D — New Node wizard
+
+Extends WO01 Block D / T5 (`docs/INPUT_PROMPT.md`): the 4-step **New node wizard**
+(Identity → Target → Brief → Assemble), reached from a split "New node" button and the
+pane's right-click menu, plus its Import/Export preset round-trip and "Run Assemble after
+create". Written against the code as of 2026-08-18 (`src/wizard/NodeWizard.tsx`,
+`src/wizard/paths.ts`, `src/wizard/roleSkeleton.ts`, `src/wizard/preset.ts`,
+`src/store/graph.ts` `createNodeFrom`/`commitNewNode`, `src/canvas/GraphCanvas.tsx`).
+Uses a fresh throwaway project — earlier scratch projects are gone (Cleanup, step 63) or a
+sunk repo (F7's cleanup); do not reuse them.
+
+**Time budget:** ~12 min full pass.
+
+92. Make a throwaway project and open it:
+
+    ```powershell
+    mkdir C:\_cowwizard
+    Set-Content C:\_cowwizard\existing.md "# Existing`n`nAlready on disk before the wizard runs."
+    ```
+
+    Press **Open folder** and pick `C:\_cowwizard`. *Expected:* the file rail reads
+    **`1 markdown files`**, canvas empty.
+
+### D1. Entry points
+
+93. Look at the top-left **Panel**. *Expected:* the **New node** button is now a split
+    control — a left segment (`+ New node`) and a thin right segment holding only a
+    chevron (▾), separated by a hairline border, both inside one rounded pill.
+94. Click the **chevron** segment. *Expected:* a small menu opens with exactly one item,
+    **New node wizard…** (sparkle icon). Click it. *Expected:* the wizard modal opens
+    (`role="dialog"`, `aria-label="New node wizard"`), centered, ~720 px wide, titled
+    **New node**, header shows 4 step-dots labeled **Identity · Target · Brief ·
+    Assemble** with **1** highlighted blue and the other three greyed/disabled (not yet
+    reachable by clicking).
+95. Press **Escape**. *Expected:* the modal closes with no file written — confirm nothing
+    landed on disk or on the canvas:
+
+    ```powershell
+    Get-ChildItem C:\_cowwizard -Recurse -Filter *.md
+    ```
+
+    *Expected:* still only `existing.md`.
+96. Right-click empty canvas. *Expected:* the pane context menu includes, in order,
+    **New node here**, **New node wizard…**, then **Fit view**. Click **New node
+    wizard…**. *Expected:* the wizard reopens (same as step 94), and this time it will
+    place the new node at the click point rather than viewport center — keep this instance
+    open for D2.
+
+### D2. Identity → Target → Brief → Assemble, nothing written before Confirm
+
+97. **Step 1 (Identity):** the **Next** button is disabled (greyed). Type `API
+    Conventions` into the **Name** field. *Expected:* **Next** enables. Look at the **Role**
+    grid: 7 cards in a 4-column layout (`agent`, `rules`, `architecture`, `workflow`,
+    `task`, `reference`, `glossary`), each showing a glyph + colored label; **reference**
+    is pre-selected (highlighted card, colored border). Click the **rules** card.
+    *Expected:* selection moves to `rules`, the description line below the grid updates to
+    describe rules. Click **Next**.
+98. **Step 2 (Target):** *Expected:* **Directory** reads `context`, **File name** reads
+    `api-conventions.md` (auto-slugged from the Name), and the path-preview strip below
+    reads `context/api-conventions.md` with no de-dupe note. Now test collision de-dupe:
+    change **File name** to `existing.md`. *Expected:* the preview strip reads
+    `context/existing.md` (unchanged, since `existing.md` lives at the project root, not
+    under `context/` — no collision) — then change **Directory** to empty (clear the
+    field). *Expected:* the preview strip now reads **`existing.md (existing.md already
+    exists — de-duped)`**-style output: the shown path is **`existing-2.md`**, with a
+    grey note `(existing.md already exists — de-duped)` next to it. Now type
+    `.cowtext` into **Directory**. *Expected:* a red line reads **`This path is managed by
+    Cowtext — pick a different directory.`** and **Next** disables. Restore **Directory**
+    to `context` and **File name** to `api-conventions.md`.
+99. Flip the **Pinned** toggle ON (amber pill, right-aligned under "Always in context, not
+    just on demand."). *Expected:* the toggle turns amber-filled; below it, the adapter-chip
+    line changes from "Not pinned — compiles on demand only…" to **`Pinned — always
+    included in:`** followed by one amber chip per active compile target (at minimum
+    `claude`, the default). Click **Next**.
+100. **Step 3 (Brief):** type `Conventions the agent must follow for this repo's API
+     surface.` into the textarea (placeholder was "One line for Assemble to expand
+     later"). Click **Next**.
+101. **Step 4 (Assemble):** *Expected:* the field label shows the exact target path
+     `context/api-conventions.md`; the preview textarea is prefilled with a template
+     starting `# API Conventions`, then the brief text verbatim, then a `## Rules` section
+     (role-specific heading for `rules`) with an italic hint line. Manually edit the
+     preview (append a line `- No breaking changes without a version bump.`). *Expected:*
+     a **Reset to template** link appears next to the label. Click it. *Expected:* the
+     preview reverts to the freshly-generated template (your manual edit is gone) and the
+     link itself disappears. Leave **Run Assemble after create** OFF for this pass.
+102. Look at the footer. *Expected:* it reads exactly **`Creates
+     context/api-conventions.md and selects it on the canvas.`** Click **Create node**.
+     *Expected:* the modal closes immediately; a new card titled **API Conventions**
+     appears on the canvas, selected (accent ring); the role glyph matches **rules**.
+     Verify the file on disk:
+
+     ```powershell
+     Get-Content C:\_cowwizard\context\api-conventions.md
+     ```
+
+     *Expected:* starts with `# API Conventions`, then the brief line, then a `## Rules`
+     heading and hint — the template as shown in step 101 (post-reset), byte for byte.
+
+### D3. Export → Import → Confirm round-trip
+
+103. Reopen the wizard (chevron → **New node wizard…**). Fill **Step 1**: Name
+     `Deploy Steps`, Role **workflow**. **Step 2**: leave Directory `context`, File name
+     auto-slugs to `deploy-steps.md`. **Step 3**: Brief `How we ship a release.`
+     **Step 4**: hand-edit the preview textarea to add one distinguishing line, e.g.
+     `- Tag the release before deploying.` at the end.
+104. Click the header's **Export preset…** icon (download icon, left of Close). A save
+     dialog opens. Save as `C:\_cowwizard-preset\deploy-steps.node.cowtext-preset.json`
+     (create the folder first if the dialog requires it to pre-exist). *Expected:* dialog
+     closes with no error banner in the modal.
+105. Click **Close (X)** without confirming. *Expected:* modal closes, and no
+     `deploy-steps.md` exists yet:
+
+     ```powershell
+     Test-Path C:\_cowwizard\context\deploy-steps.md
+     ```
+
+     *Expected:* `False`.
+106. Reopen the wizard. Click **Import preset…** (folder-in icon) and pick the file saved
+     in step 104. *Expected:* the modal jumps straight to **step 1** with **Name**
+     `Deploy Steps`, **Role** `workflow`, all four step-dots now clickable (import unlocks
+     every step). Jump to **step 4** by clicking its dot. *Expected:* the preview textarea
+     contains your exact hand-edited text from step 103, including the
+     `Tag the release before deploying.` line — the imported `content` field, not a
+     freshly regenerated template.
+107. Click **Create node**. *Expected:* new node `Deploy Steps` appears, selected. Diff the
+     created file against the exported preset's `content` field to confirm the byte-exact
+     round-trip:
+
+     ```powershell
+     Get-Content C:\_cowwizard\context\deploy-steps.md -Raw |
+       Out-File C:\_cowwizard-preset\roundtrip-disk.txt -Encoding utf8 -NoNewline
+     $preset = Get-Content C:\_cowwizard-preset\deploy-steps.node.cowtext-preset.json -Raw |
+       ConvertFrom-Json
+     $preset.nodes[0].content | Out-File C:\_cowwizard-preset\roundtrip-preset.txt -Encoding utf8 -NoNewline
+     (Get-FileHash C:\_cowwizard-preset\roundtrip-disk.txt).Hash -eq
+       (Get-FileHash C:\_cowwizard-preset\roundtrip-preset.txt).Hash
+     ```
+
+     *Expected:* `True`.
+
+### D4. Import validation — bad file rejected inline, never a crash
+
+108. Reopen the wizard, click **Import preset…**, and pick a file that is **not** a preset
+     (e.g. `C:\_cowwizard\existing.md`, filtered out by the `.json` extension filter — if
+     your OS dialog still allows picking it via "all files", do so; otherwise create
+     `C:\_cowwizard-preset\bad.json` containing `{"not":"a preset"}` and pick that).
+     *Expected:* the wizard stays open on whatever step it was on, a red inline banner
+     appears at the top of the body reading a **`kind mismatch`**-flavored error (from
+     Rust's `validate_preset`) — the app does not crash and no fields change.
+109. Import again, this time picking a **regular graph preset** if one exists (Presets…
+     modal → Export a normal multi-node preset first, then try importing that file here).
+     *Expected:* red inline error reading **`This looks like a full graph preset, not a
+     node preset — use Presets… instead`** (or the "no content field" variant if it has
+     exactly one node).
+
+### D5. Run Assemble after create
+
+110. Open the wizard once more. Step 1: Name `Release Notes`, Role **task**. Step 2:
+     defaults. Step 3: Brief `Summarize what changed for the next release.` Step 4: flip
+     **Run Assemble after create** ON (amber pill under the preview, warns "overwrites the
+     preview above"). Click **Create node**.
+111. *Expected:* the modal closes immediately (fire-and-forget, same as the Inspector's
+     Assemble button); the new `Release Notes` card appears selected with the amber
+     assemble indicator (queued/running) within a second or two, then settles once the
+     real `claude -p` turn completes (or shows the error state if the CLI isn't
+     configured in this environment — either is an acceptable outcome here, this step is
+     checking the *wiring*, not CLI availability). Open the Inspector's Markdown tab for
+     `Release Notes` once settled. *Expected:* if assembled successfully, the content no
+     longer matches the plain role-skeleton template — it has been expanded.
+
+### D6. Known gap — same-name-different-case dir/file silently overwrites an existing file
+
+112. This step demonstrates a real defect found in audit; expect it to reproduce as
+     described (Windows' filesystem is case-insensitive, but the wizard's de-dupe check is
+     case-sensitive). Open the wizard, Step 1: Name `Existing Clobber Test`. Step 2:
+     type **Directory** as empty, **File name** as `EXISTING.MD` (same name as the
+     project's `existing.md` from step 92, but upper-cased). *Expected per the frozen
+     spec's "never-clobber via existing write path w/ collision de-dupe"*: this should
+     either de-dupe to `EXISTING-2.MD` or block, the way step 98 did for a same-case
+     collision. *Actual, as built:* the path-preview strip shows `EXISTING.MD` with **no**
+     de-dupe note (`rawPath === finalPath` — the exact-case check in
+     `src/wizard/paths.ts::dedupePath` never sees the collision against the taken set's
+     lowercase `existing.md`), and **Next**/**Create node** are not blocked. Step through
+     to Confirm and click **Create node**. *Expected known fail:* a **second** node titled
+     `Existing Clobber Test` appears on the canvas with `filePath = "EXISTING.MD"`, while
+     the original `existing.md`'s content on disk has been **silently overwritten** by the
+     new node's template content (NTFS resolves both names to the same file; Rust's
+     `write_atomic` in `src-tauri/src/project.rs` removes-then-renames unconditionally).
+     Confirm the loss:
+
+     ```powershell
+     Get-Content C:\_cowwizard\existing.md
+     ```
+
+     *Expected actual:* the original "Already on disk before the wizard runs." line is
+     gone, replaced by the wizard's generated template — with zero warning shown anywhere
+     in the UI. **Record this as a known fail — do not chase it further here**, see the
+     fleet defect report (`src/wizard/paths.ts::dedupePath`, `src/wizard/NodeWizard.tsx`
+     taken-path check). Recover by deleting both the stray canvas node (select it, Delete)
+     and restoring `existing.md` from the Set-Content command in step 92 if you continue
+     testing.
+
+### D7. Regression — the quick "New node" one-click path still works
+
+113. Click the **left** segment of the split button (`+ New node`, not the chevron).
+     *Expected:* exactly the old one-click behaviour — a new, unselected-then-selected
+     node titled **New node** appears immediately at the viewport center, `context/
+     new-node.md` (or `-2`/`-3`… if already taken), role `reference`, no modal involved.
+114. Double-click empty canvas. *Expected:* same quick-create behaviour at the click
+     point — untouched by this work order.
+
+## Cleanup (Block D)
+
+115. Close the app and remove the scratch project and preset folder:
+
+     ```powershell
+     Remove-Item -Recurse -Force C:\_cowwizard, C:\_cowwizard-preset -ErrorAction SilentlyContinue
+     ```
+
 ## Sign-off
 
 | Section | Pass/Fail | Notes |
@@ -639,5 +858,6 @@ below.
 | Block B Token budget | | |
 | Block C Disk-change review | | |
 | Block F Agents MVP | | |
+| Block D New Node wizard | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________

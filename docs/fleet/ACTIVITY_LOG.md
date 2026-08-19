@@ -296,3 +296,7 @@ App version after session: **v0.0.0003** (set by Task Manager). All automated ch
 | 2026-08-18 16:31 | tech-general | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
 | 2026-08-18 16:33 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
 | 2026-08-18 16:36 | project-manager | CLAUDE.md, docs/INPUT_PROMPT.md, docs/TERMINOLOGY.md, docs/fleet/ACTIVITY_LOG.md, docs/tasks/BUGS.md, docs/tasks/TASKS.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/assemble.rs, src-tauri/src/lib.rs, src/App.tsx, src/inspector/Inspector.tsx, src/scene/BarnScene.tsx, src/scene/hover.ts |
+| 2026-08-18 16:41 |  | docs/INPUT_PROMPT.md |
+| 2026-08-18 17:19 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |
+| 2026-08-18 17:25 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |
+| 2026-08-18 17:29 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |

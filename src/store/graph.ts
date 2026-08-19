@@ -248,6 +248,21 @@ interface GraphState {
   flushSave: () => Promise<void>;
 
   createNode: (position: { x: number; y: number }) => Promise<void>;
+  /** New Node wizard's entry point (WO01 Block D §T5) — same plumbing as
+   *  createNode (stub write, history push, selection, review snapshot seed)
+   *  but with caller-supplied role/content/pinned instead of the quick-node
+   *  defaults. Resolves to the new node's id, or null when no project is
+   *  open. Never throws: a failed disk write still lands the node (missing
+   *  -file badge), matching createNode's existing contract. */
+  createNodeFrom: (params: {
+    title: string;
+    role: NodeRole;
+    filePath: string;
+    brief: string;
+    pinned: boolean;
+    content: string;
+    position?: { x: number; y: number };
+  }) => Promise<string | null>;
   adoptFile: (relPath: string, title?: string) => void;
   updateNode: (id: string, patch: Partial<Omit<MemoryNode, "id">>) => void;
   moveNode: (id: string, position: { x: number; y: number }) => void;
@@ -334,6 +349,72 @@ function scheduleSave(): void {
 
 function projectNameFromRoot(root: string): string {
   return root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? root;
+}
+
+type SetFn = (
+  partial:
+    | Partial<GraphState>
+    | ((state: GraphState) => Partial<GraphState>),
+) => void;
+type GetFn = () => GraphState;
+
+/** Shared tail of createNode/createNodeFrom: write the stub file, seed the
+ *  review baseline, add the node, select it, schedule the debounced save.
+ *  A write failure is swallowed — the node still lands, with the missing
+ *  -file badge doing the talking (createNode's original contract). */
+async function commitNewNode(
+  set: SetFn,
+  get: GetFn,
+  opts: {
+    title: string;
+    role: NodeRole;
+    filePath: string;
+    brief: string;
+    pinned: boolean;
+    content: string;
+    position: { x: number; y: number };
+  },
+): Promise<string | null> {
+  const s = get();
+  if (s.root === null) return null;
+  // Defense-in-depth: the wizard already blocks Confirm on a protected
+  // path (isRenameProtected), but this is the trust boundary CLAUDE.md's
+  // hard rules call out for generated/tool-owned files — a brand-new node
+  // must never land on one no matter which caller reaches this tail
+  // (WO01 Block D defect: StepDots/Import could otherwise bypass the
+  // wizard's own check). Existing nodes adopting an already-protected file
+  // go through a different path (adoptFile), not this one, so this can't
+  // regress that flow.
+  if (isRenameProtected(opts.filePath)) return null;
+  const node: MemoryNode = {
+    id: makeId(),
+    title: opts.title,
+    role: opts.role,
+    brief: opts.brief,
+    filePath: opts.filePath,
+    readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
+    pinned: opts.pinned,
+    position: opts.position,
+  };
+  pushHistory("create");
+  try {
+    await invoke("write_md_file", {
+      root: s.root,
+      relPath: opts.filePath,
+      content: opts.content,
+    });
+    useReviewStore.getState().noteSelfSave(opts.filePath, opts.content);
+    void useProjectStore.getState().rescan();
+  } catch {
+    // Node still enters the graph; the missing-file badge will say so.
+  }
+  set((st) => ({
+    nodes: [...st.nodes, node],
+    selectedNodeIds: [node.id],
+    selectedEdgeIds: [],
+  }));
+  scheduleSave();
+  return node.id;
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
@@ -434,38 +515,28 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     for (let i = 2; taken.has(filePath); i += 1) {
       filePath = `context/${slugify(title)}-${i}.md`;
     }
-    const node: MemoryNode = {
-      id: makeId(),
+    await commitNewNode(set, get, {
       title,
       role: "reference",
-      brief: "",
       filePath,
-      readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
+      brief: "",
       pinned: false,
-      position,
-    };
-    pushHistory("create");
-    try {
       // Stub the file so the node is real on disk from the first second.
-      const stub = `# ${title}\n\n`;
-      await invoke("write_md_file", {
-        root: s.root,
-        relPath: filePath,
-        content: stub,
-      });
-      // We just wrote it — the content is already known, no need to round
-      // -trip through disk for the review baseline (Block C §T4).
-      useReviewStore.getState().noteSelfSave(filePath, stub);
-      void useProjectStore.getState().rescan();
-    } catch {
-      // Node still enters the graph; the missing-file badge will say so.
-    }
-    set((st) => ({
-      nodes: [...st.nodes, node],
-      selectedNodeIds: [node.id],
-      selectedEdgeIds: [],
-    }));
-    scheduleSave();
+      content: `# ${title}\n\n`,
+      position,
+    });
+  },
+
+  createNodeFrom: async (params) => {
+    return commitNewNode(set, get, {
+      title: params.title,
+      role: params.role,
+      filePath: params.filePath,
+      brief: params.brief,
+      pinned: params.pinned,
+      content: params.content,
+      position: params.position ?? { x: 80, y: 80 },
+    });
   },
 
   adoptFile: (relPath, title) => {
