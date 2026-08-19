@@ -177,6 +177,110 @@ fn register_preserves_a_nonzero_ceiling() {
     assert_eq!(info.token_ceiling, Some(200_000));
 }
 
+// ── resolve_ceiling: D9 fix — global default inheritance ───────────────
+// WO06_AUDIT.md D9: the global-default deliverable never shipped, so every
+// session launched unbounded unless a caller passed an explicit per-task
+// ceiling every time. `resolve_ceiling` is the fix's entire decision point.
+
+#[test]
+fn resolve_ceiling_with_no_explicit_choice_inherits_the_global_default() {
+    assert_eq!(resolve_ceiling(None, 200_000), Some(200_000));
+}
+
+#[test]
+fn resolve_ceiling_explicit_nonzero_overrides_the_global_default() {
+    assert_eq!(resolve_ceiling(Some(75_000), 200_000), Some(75_000));
+    // Even when the explicit choice is HIGHER than the global default —
+    // "explicit always wins", not "explicit wins only if it is stricter".
+    assert_eq!(resolve_ceiling(Some(500_000), 200_000), Some(500_000));
+}
+
+#[test]
+fn resolve_ceiling_explicit_zero_is_a_genuine_opt_out_never_falling_back() {
+    // The per-task equivalent of setting the global default itself to 0 —
+    // must NOT silently inherit the (non-zero) global default instead.
+    assert_eq!(resolve_ceiling(Some(0), 200_000), Some(0));
+}
+
+#[test]
+fn resolve_ceiling_no_explicit_choice_and_global_default_zero_is_unbounded() {
+    // The whole-app opt-out: global default itself set to 0, no per-task
+    // override — must resolve to unbounded, not fall back to any baked-in
+    // number.
+    assert_eq!(resolve_ceiling(None, 0), Some(0));
+}
+
+// ── D9 end-to-end: inherited ceiling still hard-stops exactly once, and
+// restart still resets tokens_used (no regression of the D3 fix) ────────
+
+#[test]
+fn a_session_with_no_explicit_ceiling_inherits_the_global_default_through_register() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-d9-inherit");
+    let ceiling = resolve_ceiling(/* explicit */ None, /* global default */ 50_000);
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, ceiling)
+        .unwrap();
+    assert_eq!(info.token_ceiling, Some(50_000), "must inherit the global default, not launch unbounded");
+}
+
+#[test]
+fn an_explicit_per_task_ceiling_still_overrides_the_global_default_through_register() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-d9-override");
+    let ceiling = resolve_ceiling(/* explicit */ Some(10_000), /* global default */ 200_000);
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, ceiling)
+        .unwrap();
+    assert_eq!(info.token_ceiling, Some(10_000));
+}
+
+#[test]
+fn explicit_opt_out_gives_genuinely_unbounded_behavior_not_just_a_high_number() {
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-d9-optout");
+    let ceiling = resolve_ceiling(/* explicit opt-out */ Some(0), /* global default */ 200_000);
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, ceiling)
+        .unwrap();
+    assert_eq!(info.token_ceiling, None, "an opted-out session must be stored as unlimited");
+    // Prove it via the real enforcement path too, not just the stored value:
+    // an enormous observed total must never stop an unlimited session.
+    assert_eq!(charge(&reg.inner, &info.id, 0, u64::MAX / 2), ChargeVerdict::Ok);
+}
+
+#[test]
+fn inherited_global_default_hard_stops_exactly_once_and_restart_resets_tokens_used() {
+    // Reuses the exact D3-regression shape (`restart_after_a_budget_stop_
+    // clears_tokens_used_so_the_new_turn_is_not_re_stopped` above), but with
+    // a ceiling that arrived via inheritance (no explicit per-task value)
+    // instead of an explicit one — proving the D9 fix rides the same,
+    // unmodified enforcement path rather than a second mechanism.
+    let reg = RegistryCore::default();
+    let check = wt("/tmp/proj-d9-hardstop");
+    let ceiling = resolve_ceiling(None, 1_000);
+    let (info, _, _) = reg
+        .register(&check, "root".to_string(), None, "Agent".to_string(), None, None, ceiling)
+        .unwrap();
+    assert_eq!(info.token_ceiling, Some(1_000));
+
+    let stop = charge(&reg.inner, &info.id, 0, 1_200);
+    assert_eq!(stop, ChargeVerdict::Stop { pid: None, spent: 1_200, ceiling: 1_000 });
+
+    // Exactly once: a second charge on the same (now-stale) generation.
+    let second = charge(&reg.inner, &info.id, 0, 9_999);
+    assert_eq!(second, ChargeVerdict::Stale);
+
+    // Restart resets tokens_used — the D3 fix must still hold for a
+    // ceiling that came from the global default, not just an explicit one.
+    let (restarted_info, _pid, _prompt, new_generation) = reg.begin_restart(&info.id).unwrap();
+    assert_eq!(restarted_info.tokens_used, 0);
+    assert!(restarted_info.alive);
+
+    let after_restart = charge(&reg.inner, &info.id, new_generation, 50);
+    assert_eq!(after_restart, ChargeVerdict::Ok, "a fresh budget must not immediately re-stop");
+}
+
 // ── generation_current: probe-race defect fix guard (contract §6.2) ────
 
 #[test]

@@ -13,3 +13,4 @@
 - [WO06 T4-budgets fix D3 restart](wo06-t4-budgets-fix-d3-restart.md) — begin_restart now resets tokens_used/turn_tokens/info.tokens_used; post-restart generation is +2 not +1 (Stop's own bump then restart's)
 - [WO06 seams fix round: handoff_node_propose](wo06-seams-fixround-handoff-node-propose.md) — D2/F3 fixed in handoff.rs (orphaned post-G2-split slice); D9/F2/F5 declined as genuinely outside seams' zone (100% frontend/docs)
 - [WO06 taskctx ancestry boundary follow-up](wo06-taskctx-ancestry-boundary-followup.md) — F4's off-by-one fix shifted the error-path contents by one hop, breaking a sibling-lane test written against the old boundary; fixed the test, added accept/reject symmetry tests both sides
+- [WO06 D9 global ceiling fix](wo06-d9-global-ceiling-fix.md) — settings.rs sessionTokenCeiling (default 200_000) + sessions.rs resolve_ceiling three-way inherit/override/opt-out; register()'s own signature/tests left untouched

@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (54) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (63) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
 | `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
@@ -33,7 +33,7 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (54)
+## Invoke commands (63)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -50,7 +50,10 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | settings | `read_app_settings`, `write_app_settings` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
 | handoff | `handoff_generate`, `handoff_write` |
-| tasks | `tasks_scan`, `task_toggle`, `task_append`, `task_move`, `task_update` |
+| tasks | `tasks_scan`, `task_toggle`, `task_append`, `task_move`, `task_update`, `task_id_ensure`, `task_depends_add`, `task_depends_remove` |
+| tasklinks | `tasklinks_read`, `tasklink_set`, `tasklink_delete` |
+| taskctx | `task_context_preview`, `task_context_write` |
+| handoff-node | `handoff_node_propose` |
 | worktree | `worktree_check`, `worktree_add` |
 | sessions | `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list` |
 

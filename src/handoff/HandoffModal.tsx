@@ -9,6 +9,7 @@ import { Check, X } from "lucide-react";
 import { GRAPH_VERSION, serializeGraph, useGraphStore } from "../store/graph";
 import { useEventsStore } from "../store/events";
 import { handoffGenerate, handoffWrite } from "./api";
+import { HandoffNodeProposalModal } from "./HandoffNodeProposalModal";
 import type { HandoffResult } from "./types";
 
 type Phase = "idle" | "generating" | "diff" | "writing" | "written" | "failed";
@@ -80,6 +81,12 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
   const [errText, setErrText] = useState<string | null>(null);
   const [copied, setCopied] = useState<CopyId | null>(null);
   const [clipFallback, setClipFallback] = useState<string | null>(null);
+  // §6 sub-flow (handoff_node_propose) — a separate modal, swapped in for
+  // this one rather than stacked on top of it (one scrim visible at a
+  // time). This component's own state (phase/result/…) stays alive
+  // underneath, so "Cancel" from the proposal modal returns here exactly
+  // as it was.
+  const [proposeOpen, setProposeOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef(true);
 
@@ -185,6 +192,10 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
     (phase === "diff" || phase === "writing" || phase === "written") && result !== null;
   const unchanged = result !== null && result.oldContent === result.content;
 
+  if (proposeOpen) {
+    return <HandoffNodeProposalModal root={root} onClose={() => setProposeOpen(false)} />;
+  }
+
   return (
     <div
       className="fixed inset-0 z-modal flex items-center justify-center bg-[var(--scrim)]"
@@ -235,6 +246,19 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
                 session: current state, decisions made, open threads and next actions — distilled
                 from your context graph and recent agent activity.
               </p>
+              <div className="border-t border-border-subtle pt-3">
+                <p className="text-sm leading-relaxed text-content-secondary">
+                  Or capture a single agent session&rsquo;s outcome as its own reviewable Memory
+                  Node — deterministic, no <span className="font-mono text-xs">claude -p</span>{" "}
+                  call.
+                </p>
+                <button
+                  onClick={() => setProposeOpen(true)}
+                  className={`${SECONDARY_BTN} mt-2`}
+                >
+                  Propose node from session…
+                </button>
+              </div>
             </div>
           ) : phase === "generating" ? (
             <PixelMarch caption="the cow is writing the handoff" />

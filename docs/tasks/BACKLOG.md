@@ -46,16 +46,16 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 
 | Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| Per-task subgraph injection + compile-on-launch | new | high | sessions, tasks, moat, wo06 |  | The L2 differentiator: task pulls exactly the subgraph it needs; session starts with a context file compiled for that task alone. |
-| Tasklinks sidecar (task↔node↔session) | new | high | tasks, data-model, wo06 |  | `.cowtext/tasklinks.json` v1 `{taskId, nodeIds[], sessionIds[], parentTaskId?}`; task lines get stable `id:t-xxxxxx` tags. Goal ancestry via parentTaskId. |
-| Task DAG / dependencies | new | high | tasks, dag, wo06 |  | Dependency modelling + cycle detection in the task format and board; blocked-by visualisation. Chorus-class. |
-| Per-task/per-agent token ceilings with atomic hard-stop | new | high | sessions, budgets, wo06 |  | Paperclip-class budgets: spend cap enforced in sessions.rs; session stops dead at the limit. |
-| Session-to-node attribution | new | medium | sessions, heatmap, wo06 |  | Which rules were live for this run: sessionIds × resolveNodeId aggregation on WO05 event data. |
-| Handoff → node | new | medium | handoff, graph, wo06 |  | Session outcome becomes a new Memory Node wired into the graph (provenance recorded). |
+| Per-task subgraph injection + compile-on-launch | done | high | sessions, tasks, moat, wo06 |  | The L2 differentiator: task pulls exactly the subgraph it needs; session starts with a context file compiled for that task alone. Delivered 2026-08-19 (6d81251). |
+| Tasklinks sidecar (task↔node↔session) | done | high | tasks, data-model, wo06 |  | `.cowtext/tasklinks.json` v1 `{taskId, nodeIds[], sessionIds[], parentTaskId?}`; task lines get stable `id:t-xxxxxx` tags. Goal ancestry via parentTaskId. Delivered 2026-08-19. |
+| Task DAG / dependencies | done | high | tasks, dag, wo06 |  | Dependency modelling + cycle detection in the task format and board; blocked-by visualisation. Chorus-class. Delivered 2026-08-19. |
+| Per-task/per-agent token ceilings with atomic hard-stop | done | high | sessions, budgets, wo06 |  | Paperclip-class budgets: spend cap enforced in sessions.rs; session stops dead at the limit. Delivered 2026-08-19 with global default (200,000) + per-task override logic. |
+| Session-to-node attribution | new | medium | sessions, heatmap, wo05 |  | Which rules were live for this run: sessionIds × resolveNodeId aggregation on WO05 event data. Explicitly deferred from WO06 to WO05 (needs persisted hook events). |
+| Handoff → node | done | medium | handoff, graph, wo06 |  | Session outcome becomes a new Memory Node wired into the graph (provenance recorded). Full implementation delivered 2026-08-19 (Rust + TS wiring + modal UI). |
 | Streaming assemble output into the node | new | high | assemble, ux, wo06 |  | Stream token output during Assemble (cuts perceived wait 55–70%); buffer incomplete markdown. |
 | 'Run Claude' launcher window | new | medium | assemble, ui, process, wo06 |  | Interactive launcher for `claude -p` flags, folded into session spawn options. |
 | Agent-card live session status | new | medium | ui, agents, wo06 |  | Agent card shows spawned/running dot via useSessionsStore (cross-store subscription). |
-| Barn mission control | new | medium | multi-agent, sessions, barn, wo06 |  | Concurrent sessions get own stall and full cow; per-session color lanes; chalkboard lists subagents. |
+| Barn mission control | done | medium | multi-agent, sessions, barn, wo06 |  | Concurrent sessions get own stall and full cow; per-session color lanes; chalkboard lists subagents. Delivered 2026-08-19. |
 
 ## L3 — Workflows & governance (WO07)
 
@@ -81,6 +81,16 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 | Context packages | new | medium | teams, sharing, versioning, wo08 |  | Export subgraph as versioned package; imports render locked with approval-gated diffs. |
 | Cowtext as a plugin | new | medium | distribution, hooks, wo08 |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
 | Barn Raising | new | high | progression, retention, barn, wo08 |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
+
+## Re-homing needed / Carried forward
+
+Fell through dispatch/phase gaps and have no current WO home. Must not be lost.
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Full preservation of unknown enum values | new | medium | data-model, compat, wo04-wo07 |  | WO04 amendment routed this to WO06, but WO06's contract was frozen, so it fell through. Needs re-homing to WO07 or a follow-up. Enums survive round-trip without loss (tolerant read/drop-on-write); governs schema stability across versions. |
+| Bidirectional invoke-reachability gate | new | medium | testing, gates, wo04-wo07 |  | Counting registered commands proves registration, not reachability; diffing invoke names in both directions catches registered-but-uncalled commands. WO03's `default-run` and WO06's `handoff_node_propose` both shipped unreachable; count-based gates cannot see this. Needs re-homing to a future WO with test discipline. |
+| Auditor has no shell | new | medium | process, gates, wo07+ |  | Tech-lead cannot run gates (Bash disabled), so its gate sections are static inference. Either grant it a shell or stop asking it for gate status. Process/permission decision for Marty. |
 
 ## Observations from WO03 audit (2026-08-19) — backlog, no fix round
 

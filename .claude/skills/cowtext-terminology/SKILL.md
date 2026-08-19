@@ -1,6 +1,6 @@
 ---
 name: cowtext-terminology
-description: Canonical Cowtext vocabulary — module map, the 54 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
+description: Canonical Cowtext vocabulary — module map, the 63 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
 ---
 
 # Cowtext canonical terminology
@@ -13,7 +13,7 @@ synonyms for existing terms.
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (54) |
+| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (63) |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root` |
 | `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
 | `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
@@ -21,12 +21,15 @@ synonyms for existing terms.
 | `src-tauri/src/assemble.rs` | `claude -p` queue (FIFO, max 2), Runner trait, `set_claude_override` |
 | `src-tauri/src/hooks.rs` + `hooks_server.rs` | Hooks trust boundary; axum on `127.0.0.1:4923` |
 | `src-tauri/src/settings.rs`, `preset.rs`, `handoff.rs` | App settings, presets (never-clobber), `HANDOFF.md` |
+| `src-tauri/src/tasks.rs` | Task DAG, stable task ids (reserved `id:` tags), cycle detection, dependency validation |
+| `src-tauri/src/tasklinks.rs` | Tasklinks sidecar v1 (`.cowtext/tasklinks.json`): task↔node↔session bindings, ancestry, per-task ceilings |
+| `src-tauri/src/taskctx.rs` | Per-task subgraph injection: closure rule, compile-on-launch, deterministic preview |
 | `src/store/` | Zustand: `useProjectStore`, `useGraphStore`, `useEventsStore`, `useSettingsStore` |
 | `src/canvas/`, `src/inspector/`, `src/compile/` | React Flow view, inspector + EventLog + HooksModal, CompileModal + LCS diff |
 | `src/scene/` | Pixi barn + `sfx.ts` (howler confined here) |
 | `src/settings/`, `src/preset/`, `src/handoff/` | SettingsModal, preset & handoff UI |
 
-## Invoke commands (54) — byte-exact names
+## Invoke commands (63) — byte-exact names
 
 project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs`
 · compile: `compile_preview`, `compile_write`
@@ -38,7 +41,10 @@ project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_
 · preset: `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply`
 · handoff: `handoff_generate`, `handoff_write`
 · agents: `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`, `agent_convert`, `agent_memory_ensure`
-· tasks: `tasks_scan`, `task_toggle`, `task_update`, `task_append`, `task_move`
+· tasks: `tasks_scan`, `task_toggle`, `task_update`, `task_append`, `task_move`, `task_id_ensure`, `task_depends_add`, `task_depends_remove`
+· tasklinks: `tasklinks_read`, `tasklink_set`, `tasklink_delete`
+· taskctx: `task_context_preview`, `task_context_write`
+· handoff-node: `handoff_node_propose`
 · worktree: `worktree_check`, `worktree_add`
 · sessions: `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list`
 
@@ -54,7 +60,7 @@ name). camelCase in JS ⇄ snake_case in Rust.
 - `fs://change` — `FsChange { relPath, modifiedMs, sizeBytes, kind }`: watcher → emit
   → `useProjectStore.applyFsChange` → lens updates.
 - `agent://event` — `{ id, kind, status?, tool?, text?, usage?, ts }`: sessions.rs
-  → emit → event stream, inspector transcript, status badges.
+  → emit → event stream, inspector transcript, status badges. `kind` includes `"budget"` when token ceiling is reached (WO06).
 - One-way pipeline: Rust emits → store → both views react. React Flow and PixiJS
   never import each other.
 
@@ -81,6 +87,10 @@ name). camelCase in JS ⇄ snake_case in Rust.
 - **Ports** — 1420 Vite dev (strictPort, pinned in two files); 4923 hooks server.
 - **Capabilities** — Tauri deny-by-default; new plugin permissions go in
   `src-tauri/capabilities/default.json`.
+- **Stable task id** — a task's persistent identity `t-[0-9a-z]{6}` lifted from the reserved `id:` tag; minted on-demand via `task_id_ensure`, never auto-minted, survives file edits and task moves. Distinguished from volatile `id` locator `<relPath>#<line>`.
+- **TaskLinks sidecar** — `.cowtext/tasklinks.json` v1: per-task entries binding `taskId` to `nodeIds[]` (seeds), `sessionIds[]` (durable UUIDs), optional `parentTaskId` (goal ancestry), optional `tokenCeiling`. Written only by Rust; deterministic (sorted, deduped, `skip_serializing_if`).
+- **Task context / subgraph injection** — compiled context for one task alone: THE differentiator. Seed nodes (linked via tasklinks) + ancestry (via parentTaskId, depth ≤8) + globally pinned → transitive `imports` closure → synthesized `BarnGraph` → `compile_preview` on that subgraph → body injected over stdin at session spawn (32 KB cap).
+- **Session token ceiling** — per-task optional limit (`tasklinks[taskId].tokenCeiling`); global default fallback (`AppSettings.sessionTokenCeiling`, default 200,000; `0` = unbounded). Enforced by `charge()` which returns `Stop` inside one lock, bumping generation to gate all later emits.
 
 "FEATURES n.n" references resolve to the Feature inventory section of
 `docs/tasks/BACKLOG.md`.

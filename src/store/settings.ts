@@ -29,6 +29,20 @@ export const PANEL_LIMITS = {
 export type LensMode = "none" | "activity" | "weight" | "live";
 export const LENS_MODES: readonly LensMode[] = ["none", "activity", "weight", "live"];
 
+// WO06 D9 fix (§5.1/§8): the global default cap applied to every agent
+// session spawned with no explicit per-task ceiling. `0` is the deliberate
+// whole-app opt-out to unbounded (same wire convention `Session.tokenCeiling`
+// already uses). `src-tauri/src/settings.rs::DEFAULT_SESSION_TOKEN_CEILING`
+// is the byte-exact mirror of this constant, for the case a settings.json
+// predates this field: Rust falls back to the same 200_000 there for the
+// same reason (its own comment cites `CONTEXT_WINDOW_TOKENS` and the
+// contract's own worked example). Kept in sync deliberately — NOT the
+// contract text's literal "default 0": since this store always persists the
+// FULL settings object on every change (never a partial merge), the first
+// unrelated setting change after load would otherwise bake `0` into
+// settings.json and silently defeat Rust's own safety-net fallback.
+export const DEFAULT_SESSION_TOKEN_CEILING = 200_000;
+
 export interface AppSettings {
   version: 1;
   masterVolume: number; // 0..1
@@ -50,6 +64,13 @@ export interface AppSettings {
   managerMode: boolean;
   /** WO02 #7: Barn FPS overlay. Additive, tolerant-merge field — default false. */
   showFps: boolean;
+  /** WO06 §5.1/§8 (D9 fix), appended last: the global default token ceiling
+   *  for a new agent session that carries no explicit per-task ceiling.
+   *  `0` = unbounded (explicit whole-app opt-out). Rust's
+   *  `agent_session_spawn` already folds this in server-side
+   *  (`settings::global_token_ceiling` + `sessions.rs::resolve_ceiling`) —
+   *  no frontend spawn call site needs to change. */
+  sessionTokenCeiling: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -69,6 +90,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lens: "none",
   managerMode: false,
   showFps: false,
+  sessionTokenCeiling: DEFAULT_SESSION_TOKEN_CEILING,
 };
 
 export interface SettingsState extends AppSettings {
@@ -96,6 +118,7 @@ export interface SettingsState extends AppSettings {
   setLens: (l: LensMode) => void;
   setManagerMode: (b: boolean) => void;
   setShowFps: (b: boolean) => void;
+  setSessionTokenCeiling: (n: number) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -166,6 +189,13 @@ function mergeSettings(raw: unknown): AppSettings {
   }
   if (typeof r.managerMode === "boolean") out.managerMode = r.managerMode;
   if (typeof r.showFps === "boolean") out.showFps = r.showFps;
+  if (
+    typeof r.sessionTokenCeiling === "number" &&
+    Number.isFinite(r.sessionTokenCeiling) &&
+    r.sessionTokenCeiling >= 0
+  ) {
+    out.sessionTokenCeiling = Math.round(r.sessionTokenCeiling);
+  }
   return out;
 }
 
@@ -193,6 +223,7 @@ function persistNow(): void {
     lens: s.lens,
     managerMode: s.managerMode,
     showFps: s.showFps,
+    sessionTokenCeiling: s.sessionTokenCeiling,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -324,6 +355,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setShowFps: (b) => {
     set({ showFps: b });
+    schedulePersist();
+  },
+  setSessionTokenCeiling: (n) => {
+    set({ sessionTokenCeiling: Math.max(0, Math.round(n)) });
     schedulePersist();
   },
 }));

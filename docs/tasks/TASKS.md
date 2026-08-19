@@ -11,6 +11,7 @@ All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 
 | WO01 full acceptance walk (manual sections A-F + N) | new | high | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps. Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
 | WO02 acceptance walk (manual A-H, 61 steps) | new | high | wo02, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO02_TEST_MANUAL.md. WO02 committed as 103ac80; gates green. |
 | WO03 acceptance walk (manual A-H, 583 lines incl. CSP production-build step) | new | critical | wo03, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO03_TEST_MANUAL.md: 71 steps A–H including CSP production-build verification (replaced old v0.1.0 gate). All 14 defects fixed; audit observations recorded. Gates re-run green. |
+| WO06 acceptance walk (manual A-K, 7 sections, WO02 regression at end) | new | high | wo06, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO06_TEST_MANUAL.md: B–H sections cover task DAG, blockage, O1/O2/O3 board defects, per-task subgraph injection, token budgets, handoff → node. Manual was authored pre-fixes (snapshots of audit findings); actual codebase is feature-complete (542 tests, 63/63 reachable). Awaiting Marty's walk. |
 
 ## Done — WO03 dispatch (2026-08-19)
 

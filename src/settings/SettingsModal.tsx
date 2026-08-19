@@ -5,8 +5,9 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { useSettingsStore } from "../store/settings";
+import { DEFAULT_SESSION_TOKEN_CEILING, useSettingsStore } from "../store/settings";
 import { useProjectStore } from "../store/project";
+import { formatTokenCount } from "../store/tokens";
 
 // hooks_server.rs bind address — a constant of the app, shown for reference.
 const HOOKS_ADDR = "127.0.0.1:4923";
@@ -94,6 +95,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const syncFileName = useSettingsStore((s) => s.syncFileName);
   const managerMode = useSettingsStore((s) => s.managerMode);
   const showFps = useSettingsStore((s) => s.showFps);
+  const sessionTokenCeiling = useSettingsStore((s) => s.sessionTokenCeiling);
   const persistError = useSettingsStore((s) => s.persistError);
   const setMasterVolume = useSettingsStore((s) => s.setMasterVolume);
   const setBarnSounds = useSettingsStore((s) => s.setBarnSounds);
@@ -104,6 +106,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setSyncFileName = useSettingsStore((s) => s.setSyncFileName);
   const setManagerMode = useSettingsStore((s) => s.setManagerMode);
   const setShowFps = useSettingsStore((s) => s.setShowFps);
+  const setSessionTokenCeiling = useSettingsStore((s) => s.setSessionTokenCeiling);
 
   const root = useProjectStore((s) => s.root);
 
@@ -112,6 +115,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   // blur-only commit would silently drop the draft (contract deviation
   // 2026-08-17). The draft state keeps in-progress whitespace visible.
   const [pathDraft, setPathDraft] = useState(claudeBinaryPath);
+
+  // Ceiling draft — same "commit per keystroke, draft absorbs churn" idiom
+  // as pathDraft above. `lastBoundedCeiling` remembers the last positive
+  // value typed so flipping "Unbounded" off restores it instead of
+  // resetting to the app default every time (0 itself is never a valid
+  // draft — it is the Unbounded toggle's job, not a typed value).
+  const [lastBoundedCeiling, setLastBoundedCeiling] = useState(
+    sessionTokenCeiling > 0 ? sessionTokenCeiling : DEFAULT_SESSION_TOKEN_CEILING,
+  );
+  const [ceilingDraft, setCeilingDraft] = useState(String(lastBoundedCeiling));
+  const unboundedDefault = sessionTokenCeiling <= 0;
 
   const soundOff = muted || calmMode;
   const graphPath = root !== null ? `${root}\\.cowtext\\graph.json` : null;
@@ -248,6 +262,62 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               />
             </Row>
             <HelperLine>Used by Assemble and Handoff. Leave empty to auto-detect.</HelperLine>
+
+            <Row label="Default token ceiling">
+              <span className="flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={ceilingDraft}
+                  disabled={unboundedDefault}
+                  aria-label="Default token ceiling"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/[^0-9]/g, "");
+                    setCeilingDraft(digits);
+                    if (digits !== "") {
+                      const n = Math.max(1, Number(digits));
+                      setLastBoundedCeiling(n);
+                      setSessionTokenCeiling(n);
+                    }
+                  }}
+                  onBlur={() => {
+                    // Never persist "" or 0 through this field — 0 is the
+                    // Unbounded toggle's job, not something you can type in.
+                    if (ceilingDraft === "" || Number(ceilingDraft) <= 0) {
+                      setCeilingDraft(String(lastBoundedCeiling));
+                      setSessionTokenCeiling(lastBoundedCeiling);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
+                  className="h-control w-[90px] rounded border border-border bg-surface-2 px-2 text-right font-mono text-xs text-content transition-colors duration-fast focus:border-accent disabled:text-content-disabled disabled:opacity-60"
+                />
+                <span className="w-[76px] font-mono text-2xs text-content-muted">
+                  {unboundedDefault
+                    ? "unbounded"
+                    : `≈${formatTokenCount(Math.max(0, Number(ceilingDraft) || lastBoundedCeiling))} tok`}
+                </span>
+                <Toggle
+                  checked={unboundedDefault}
+                  onChange={(b) => {
+                    if (b) {
+                      setSessionTokenCeiling(0);
+                    } else {
+                      setCeilingDraft(String(lastBoundedCeiling));
+                      setSessionTokenCeiling(lastBoundedCeiling);
+                    }
+                  }}
+                  label="Unbounded default"
+                  title="No global cap — sessions run unbounded unless a task sets its own ceiling"
+                />
+              </span>
+            </Row>
+            <HelperLine>
+              New agent sessions stop automatically once they spend this many tokens, unless the
+              task they were launched for sets its own ceiling. Sessions already running are
+              unaffected.
+            </HelperLine>
 
             <Row label="Hooks server">
               <span className="font-mono text-xs text-content-secondary">{HOOKS_ADDR}</span>

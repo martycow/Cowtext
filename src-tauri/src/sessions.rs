@@ -201,8 +201,12 @@ impl RegistryCore {
     /// for the first turn, and a non-fatal "agent file could not be read"
     /// message when applicable.
     ///
-    /// `token_ceiling` is the *raw* caller value (`None`/`Some(0)` both mean
-    /// unlimited, contract §5.1) — normalized to `None` before it is stored.
+    /// `token_ceiling` is the already-resolved effective value (WO06 D9:
+    /// `agent_session_spawn` folds the explicit per-task choice and the
+    /// global default together via `resolve_ceiling` before calling this —
+    /// `register` itself knows nothing about settings.rs or the global
+    /// default). `None`/`Some(0)` both mean unlimited (contract §5.1) —
+    /// normalized to `None` before it is stored.
     #[allow(clippy::too_many_arguments)] // contract §7.1 froze agent_session_spawn's 3 appended params; this is where they land.
     fn register(
         &self,
@@ -925,6 +929,28 @@ fn charge(inner: &Registry, id: &str, generation: u64, observed_total: u64) -> C
     ChargeVerdict::Stop { pid, spent, ceiling }
 }
 
+/// WO06 D9 fix: resolves the ceiling [`RegistryCore::register`] should be
+/// given from the caller's explicit per-task value (`agent_session_spawn`'s
+/// `token_ceiling` argument) and the app-wide global default
+/// (`settings::global_token_ceiling`). Three-way, in priority order:
+///
+/// 1. `explicit = Some(n)`, any `n` including `0` — an explicit choice was
+///    made at spawn time and it always wins outright, never falling back
+///    to the global default. `Some(0)` is a *deliberate* per-task opt-out
+///    to unbounded (`register`'s own normalization then turns that into
+///    "unlimited" exactly as it always has, contract §5.1).
+/// 2. `explicit = None` — no explicit choice was made; the session
+///    inherits `global_default` (itself `0` = unlimited, on the same
+///    convention).
+///
+/// A free function, not a `RegistryCore` method, so it stays testable with
+/// two bare `u64`/`Option<u64>` values — no registry, no lock, no
+/// `AppHandle` — matching the style of `generation_current`/`emit_gated`
+/// above.
+fn resolve_ceiling(explicit: Option<u64>, global_default: u64) -> Option<u64> {
+    Some(explicit.unwrap_or(global_default))
+}
+
 /// The one chokepoint every turn (boot, send, restart) runs through (§2.3 —
 /// the seam a future interactive/PTY channel would sit behind instead of
 /// duplicating). Never blocks its caller: always invoked via
@@ -1241,12 +1267,25 @@ pub async fn agent_session_spawn(
     cwd: String,
     task_id: Option<String>,        // WO06 §4.3 — the task this session is scoped to, if any.
     task_context: Option<String>,   // WO06 §4.3 — already-compiled subgraph body, from `task_context_preview`.
-    token_ceiling: Option<u64>,     // WO06 §5.1 — `None`/`Some(0)` = unlimited.
+    // WO06 §5.1 / D9 fix — the caller's EXPLICIT per-task choice only.
+    // `None` = no explicit choice was made at spawn time, so the session
+    // inherits the app-wide global default (`settings::global_token_ceiling`)
+    // instead of launching unbounded (WO06_AUDIT.md D9: that inheritance
+    // never shipped). `Some(0)` is a deliberate opt-out to unbounded for
+    // this one session, regardless of the global default. `Some(n>0)`
+    // always wins outright. See `resolve_ceiling`.
+    token_ceiling: Option<u64>,
 ) -> Result<SessionInfo, String> {
     let _ = state.app.set(app.clone());
     let check = crate::worktree::worktree_check(cwd)?;
+    // D9: fold in the global default before `register` — `register` itself
+    // stays exactly as WO06 shipped it (an already-resolved "effective"
+    // ceiling in, `Some(0)`/`None` normalized to "unlimited"), so none of
+    // its existing guardrail/normalization tests needed to change.
+    let global_default = crate::settings::global_token_ceiling(&app);
+    let effective_ceiling = resolve_ceiling(token_ceiling, global_default);
     let (info, boot_prompt, agent_file_error) =
-        state.core.register(&check, root, agent_file_name, name, task_id, task_context, token_ceiling)?;
+        state.core.register(&check, root, agent_file_name, name, task_id, task_context, effective_ceiling)?;
 
     if let Some(err) = agent_file_error {
         let ts = now_millis();
