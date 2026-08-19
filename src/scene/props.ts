@@ -478,10 +478,13 @@ export function makeCow(): CowSprite {
   };
 }
 
-const BUBBLE_MAX = 24; // filename truncation per plan §8
+export const BUBBLE_MAX = 24; // filename truncation per plan §8
 
-export function truncateLabel(s: string): string {
-  return s.length <= BUBBLE_MAX ? s : `…${s.slice(-(BUBBLE_MAX - 1))}`;
+/** Tail-keep ellipsis truncation. `max` defaults to the bubble width but
+ *  callers that need to reserve room for a prefix (mapper.ts's verbLabel)
+ *  can pass a smaller budget so the prefix is never swallowed. */
+export function truncateLabel(s: string, max: number = BUBBLE_MAX): string {
+  return s.length <= max ? s : `…${s.slice(-(max - 1))}`;
 }
 
 /** Speech bubble: paper plate + warm outline + tiny monospace text. */

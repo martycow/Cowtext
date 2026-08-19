@@ -300,3 +300,6 @@ App version after session: **v0.0.0003** (set by Task Manager). All automated ch
 | 2026-08-18 17:19 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |
 | 2026-08-18 17:25 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |
 | 2026-08-18 17:29 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/canvas/GraphCanvas.tsx, src/store/graph.ts |
+| 2026-08-18 17:35 | tech-barn | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, src/scene/cow.ts, src/scene/mapper.ts |
+| 2026-08-18 17:41 | tester | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/scene/cow.ts, src/scene/mapper.ts |
+| 2026-08-18 17:43 | tech-barn | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/scene/cow.ts, src/scene/mapper.ts, src/scene/props.ts |

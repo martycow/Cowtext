@@ -19,7 +19,7 @@ import type { BarnEvent } from "./types";
 import type { BarnLayout, PropEntry } from "./sceneGraph";
 import { DEV_DESK_TILE, SIDE_DESK_TILE } from "./sceneGraph";
 import { clampTile, type Tile } from "./iso";
-import { truncateLabel } from "./props";
+import { truncateLabel, BUBBLE_MAX } from "./props";
 import type { Cow } from "./cow";
 import type { CalfHerd } from "./calf";
 import * as sfx from "./sfx";
@@ -62,8 +62,19 @@ function approachTile(t: Tile): Tile {
   return clampTile({ tx: t.tx + 1, ty: t.ty + 1 });
 }
 
-function fileLabel(filePath: string): string {
-  return truncateLabel(filePath.replace(/\\/g, "/"));
+/** T6 — "reading CLAUDE.md" / "editing rules.md": verb derived from the
+ *  BarnEvent kind. Fix (Block E defect #1): truncating `${verb} ${filePath}`
+ *  as one string let the tail-keep ellipsis eat the verb whenever filePath
+ *  was more than one directory deep — both bubbles rendered identical
+ *  '…context/architecture.md' text with no verb at all. The verb prefix is
+ *  now reserved first; only the remaining budget is spent on a truncated
+ *  (tail-keep) filename, so the verb always survives. */
+function verbLabel(verb: string, filePath: string): string {
+  const path = filePath.replace(/\\/g, "/");
+  const prefix = `${verb} `;
+  const budget = BUBBLE_MAX - prefix.length;
+  if (budget < 1) return truncateLabel(verb); // pathological: verb alone overflows
+  return prefix + truncateLabel(path, budget);
 }
 
 export interface MapperCtx {
@@ -93,9 +104,16 @@ export function handleEvent(e: BarnEvent, ctx: MapperCtx): void {
       // replay derives from the ring, which has no completion data, so the
       // live path must accumulate at receipt too or remounts change the scene.
       layout.setPropOpened(prop.nodeId);
+      // Fix (Block E defect #2): bubbleOnStart mirrors bubbleOnArrive so a
+      // real read event preempts an active flavor bubble the moment the task
+      // is picked up (startTask), not after the ~1.5s walk to the prop. The
+      // arrival call re-shows the same text, refreshing its on-screen timer
+      // to line up with flashProp/the read cue.
+      const label = verbLabel("reading", e.filePath ?? "");
       cow.enqueue({
         target: approachTile(prop.tile),
-        bubbleOnArrive: fileLabel(e.filePath ?? ""),
+        bubbleOnStart: label,
+        bubbleOnArrive: label,
         onArrive: () => {
           layout.flashProp(prop.nodeId);
           if (sound) sfx.play(sfx.readCueForRole(prop.role));
@@ -109,9 +127,17 @@ export function handleEvent(e: BarnEvent, ctx: MapperCtx): void {
       // J5: stack grows at EVENT RECEIPT so it always matches the ring-derived
       // remount replay (an interrupted/queue-dropped task must not under-count).
       layout.addPaper();
+      // Fix (Block E defect #2): same bubbleOnStart/bubbleOnArrive mirroring
+      // as the read arm — an edit/write must preempt a flavor bubble the
+      // instant the task starts, not after the walk to the side desk.
+      const label =
+        e.filePath !== undefined
+          ? verbLabel(e.kind === "write" ? "writing" : "editing", e.filePath)
+          : undefined;
       cow.enqueue({
         target: SIDE_DESK_TILE,
-        bubbleOnArrive: e.filePath !== undefined ? fileLabel(e.filePath) : undefined,
+        bubbleOnStart: label,
+        bubbleOnArrive: label,
         busyMs: 900,
         onArrive: () => {
           sfx.startTypewriter();

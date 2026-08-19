@@ -847,6 +847,127 @@ sunk repo (F7's cleanup); do not reuse them.
      Remove-Item -Recurse -Force C:\_cowwizard, C:\_cowwizard-preset -ErrorAction SilentlyContinue
      ```
 
+## Block E — Thought bubbles
+
+Extends WO01 Block E / T6 (`docs/INPUT_PROMPT.md`): the cow's existing bubble system
+upgraded into a controller — real `BarnEvent`s show a verb+filename bubble ("reading X" /
+"editing X" / "writing X"), and after 30 s idle the cow cycles a 10-line flavor pool,
+meant to be preempted instantly by the next real event. Written against the code as of
+2026-08-18 (`src/scene/cow.ts` `FLAVOR_LINES`/flavor countdown, `src/scene/mapper.ts`
+`verbLabel`). Uses a fresh throwaway project; live event injection via the same
+`curl.exe` → `:4923/event` idiom as Block A's B5.
+
+**Time budget:** ~10 min (includes two required ≥30 s idle waits).
+
+116. Make a throwaway project and open it, then switch to the **Barn** view:
+
+    ```powershell
+    mkdir C:\_cowbubbles
+    Set-Content C:\_cowbubbles\notes.md "# Notes`n`nShort file for the bubble verb check."
+    ```
+
+    Press **Open folder**, pick `C:\_cowbubbles`. In the file rail, hover `notes.md` and
+    click **+ adopt**. Click the **Barn** segment of the top view toggle. *Expected:* the
+    barn scene renders, the cow stands near the dev desk, no bubble showing.
+
+117. **Real event bubble text (read, happy path):** POST a synthetic read event for the
+    adopted file:
+
+    ```powershell
+    '{"hook_event_name":"PostToolUse","tool_name":"Read","session_id":"manual-e1","tool_input":{"file_path":"C:\\_cowbubbles\\notes.md"}}' |
+      curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
+    ```
+
+    *Expected, within ~1.5 s:* the cow walks to the bookshelf prop and a bubble reading
+    exactly **`reading notes.md`** appears above her head; the `page_flip` cue plays once
+    on arrival (matching the existing read cue, no new sound added).
+
+118. **Real event bubble text — verb-dropping truncation (known gap):** POST a write event
+    for a longer, nested path (this file need not exist on disk or be adopted — the
+    edit/write bubble text doesn't require a resolved prop):
+
+    ```powershell
+    '{"hook_event_name":"PostToolUse","tool_name":"Write","session_id":"manual-e1","tool_input":{"file_path":"C:\\_cowbubbles\\context\\architecture.md"}}' |
+      curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
+    ```
+
+    *Expected per the T6 acceptance ("editing rules.md" — derive verb from kind):* a
+    bubble reading something like `writing architecture.md`. *Actual, as built:* the
+    bubble reads **`…context/architecture.md`** — the verb is silently gone. Root cause:
+    `mapper.ts`'s `verbLabel()` builds `` `${verb} ${filePath}` `` and only *then* calls
+    the existing `truncateLabel`'s 24-char tail-keep; once `"writing " + filePath` exceeds
+    24 chars (true for almost any file more than one directory deep — real repo paths like
+    `docs/design/SOUND_DESIGN.md` or `src/scene/BarnScene.tsx` reproduce it too), the
+    ellipsis-tail truncation eats the verb before the filename. Repeat the same curl with
+    `"tool_name":"Edit"` on the identical path. *Expected difference:* a different verb.
+    *Actual:* the resulting bubble text is **byte-identical** to the write case,
+    `…context/architecture.md` — reading vs. editing vs. writing become visually
+    indistinguishable for any nested path. **Record as a known fail — do not chase it
+    further here**, see the fleet defect report against `src/scene/mapper.ts::verbLabel`.
+
+119. **Idle 30 s flavor rotation:** let the barn sit with no further events for at least
+    35 s (past `IDLE_LIE_MS` = 30 000 ms in `BarnScene.tsx`). *Expected:* the cow lies down
+    (pre-existing E5 pose escalation) and, some seconds after lying down, a bubble appears
+    reading one of the ten flavor-pool lines (`chewing grass`, `mooing thoughtfully`,
+    `swishing tail`, `watching dust motes`, `counting hay bales`, `dreaming of clover`,
+    `humming a tune`, `practicing patience`, `polishing a hoof`, `waiting for a commit`) —
+    no sound plays on spawn. Watch for at least two more rotations (~8–12 s apart).
+    *Expected:* the bubble swaps to a new line each time; **note but do not fail on** an
+    occasional exact repeat — the pool pick is a plain `Math.random()` index with no
+    anti-repeat guard, so the same line twice in a row is possible (~1-in-10 per swap).
+
+120. **Preemption — social/search events (immediate, works as spec'd):** while a flavor
+    bubble is showing, POST a prompt-submitted event:
+
+    ```powershell
+    '{"hook_event_name":"UserPromptSubmit","session_id":"manual-e1"}' |
+      curl.exe -s -X POST --data-binary "@-" http://127.0.0.1:4923/event
+    ```
+
+    *Expected:* the flavor bubble is replaced by **`!`** on the very next frame — no fade,
+    no waiting for the flavor bubble's remaining lifetime to elapse. This path
+    (`bubbleOnStart`, fired at task pickup) does satisfy "immediately."
+
+121. **Preemption — file-access events (known gap):** wait for another flavor bubble to
+    appear (idle 30 s+ again), then immediately re-run step 117's read curl. *Expected per
+    the T6 acceptance ("a real file-access event replaces an active flavor bubble
+    immediately")*: the flavor bubble should vanish the instant the event is received.
+    *Actual, as built:* the flavor bubble stays on screen unchanged for the whole walk to
+    the bookshelf — `bubbleOnArrive` only fires inside `Cow.arrive()`, not at task start —
+    which can be up to ~1.5 s later, before it flips to `reading notes.md`. This bubble-
+    timing model predates this drop (edit/write/read never had a `bubbleOnStart`), but T6's
+    spec explicitly promises immediate preemption for file-access events specifically, so
+    it reproduces as a gap here. **Record as a known fail — do not chase it further here**,
+    see the fleet defect report against `src/scene/cow.ts`/`src/scene/mapper.ts`'s
+    read/edit/write arms.
+
+122. **Calm mode — instant swap, still silent:** open **Settings** (gear icon, top bar) and
+    flip **Calm mode** ON. Close Settings. Let the barn idle 30 s+ again. *Expected:* the
+    cow rests in the static reduced-motion pose (no walk-fade, no juice) and the flavor
+    bubble still appears/swaps every ~8–12 s with a plain instant swap (there was never an
+    animation to suppress). Re-run step 117's read curl. *Expected:* the bubble still
+    updates to `reading notes.md` in calm mode (the mapper/cow bubble logic runs regardless
+    of `reducedMotion()`), and the whole exchange stays completely silent (Calm mode
+    implies mute; bubbles were already silent by design). Turn **Calm mode** back OFF
+    before continuing.
+
+123. **No new cues, no interference with hover:** with Calm mode off, hover the bookshelf
+    prop `notes.md` sits on with the mouse. *Expected:* the pre-existing hover bubble
+    (`src/scene/hover.ts`) appears independently near the prop, unaffected by and not
+    replaced by whatever the cow's own head-bubble is doing at the same moment — the two
+    bubbles coexist without fighting over the same state. Re-run step 117's read curl while
+    still hovering. *Expected:* only the existing per-event `page_flip` cue plays — no
+    extra "bubble spawn" sound fires for either the real bubble or a flavor bubble,
+    consistent with `SOUND_DESIGN.md`'s deliberately-silent "bubble show/expire" line.
+
+## Cleanup (Block E)
+
+124. Close the app and remove the scratch project:
+
+    ```powershell
+    Remove-Item -Recurse -Force C:\_cowbubbles -ErrorAction SilentlyContinue
+    ```
+
 ## Sign-off
 
 | Section | Pass/Fail | Notes |
@@ -859,5 +980,6 @@ sunk repo (F7's cleanup); do not reuse them.
 | Block C Disk-change review | | |
 | Block F Agents MVP | | |
 | Block D New Node wizard | | |
+| Block E Thought bubbles | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________

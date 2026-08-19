@@ -57,6 +57,25 @@ const CHEW_FRAME_MS = 600; // E5 2-frame chew, 1.2 s period
 const MICRO_GAP_MS = 8000; // E5 idle micro-behaviours ≥ 8 s apart
 const MICRO_ACT_MS = 150; // blink / weight-shift hold
 
+// T6 flavor bubbles (WO01 Block E): idle > 30 s (idleStage >= 2, the same
+// threshold BarnScene uses for the lying pose) pulls a random line from this
+// pool. Silent by design — bubbles are on SOUND_DESIGN's deliberately-silent
+// list; a real event's showBubble() call always preempts one immediately
+// since it overwrites `this.bubble` unconditionally, same as any other task.
+const FLAVOR_LINES: readonly string[] = [
+  "chewing grass",
+  "mooing thoughtfully",
+  "swishing tail",
+  "watching dust motes",
+  "counting hay bales",
+  "dreaming of clover",
+  "humming a tune",
+  "practicing patience",
+  "polishing a hoof",
+  "waiting for a commit",
+];
+const FLAVOR_GAP_MS = 8000; // same cadence as the E5 micro-behaviour gap
+
 /** E5 idle escalation stage: 0 active · 1 ≥5 s · 2 ≥30 s · 3 ≥5 min. */
 export type IdleStage = 0 | 1 | 2 | 3;
 
@@ -91,6 +110,9 @@ export class Cow {
   private microWaitMs = MICRO_GAP_MS;
   private microActiveMs = 0;
   private microKind: "blink" | "shift" = "blink";
+  // T6 flavor bubble rotation (idle > 30 s)
+  private flavorWaitMs = FLAVOR_GAP_MS;
+  private lastFlavorIndex = -1; // anti-repeat: never show the same line twice in a row
 
   constructor(start: Tile) {
     this.tile = { ...start };
@@ -330,6 +352,27 @@ export class Cow {
       // stage dropped without a task (e.g. unresolved read) — close the jaw
       this.sprite.setChew(0);
       this.chewMs = 0;
+    }
+    // T6 flavor bubbles — idle > 30 s (stage 2 lying / stage 3 asleep both
+    // qualify). Runs ahead of the `reduced` gate: calm mode still swaps the
+    // text (no animation exists to suppress — showBubble() is a plain swap),
+    // matching the "bubbles swap instantly" calm-mode rule. A real event
+    // preempts on its own next enqueue()/interrupt() via showBubble().
+    if (stage >= 2 && this.bubble === null) {
+      this.flavorWaitMs -= dtMs;
+      if (this.flavorWaitMs <= 0) {
+        this.flavorWaitMs = FLAVOR_GAP_MS + Math.random() * 4000;
+        // anti-repeat: re-roll once if the pick matches the previous line
+        // (dispatching audit checklist — "flavor never repeats back-to-back")
+        let idx = Math.floor(Math.random() * FLAVOR_LINES.length);
+        if (FLAVOR_LINES.length > 1 && idx === this.lastFlavorIndex) {
+          idx = (idx + 1) % FLAVOR_LINES.length;
+        }
+        this.lastFlavorIndex = idx;
+        this.showBubble(FLAVOR_LINES[idx]);
+      }
+    } else if (stage < 2) {
+      this.flavorWaitMs = FLAVOR_GAP_MS; // fresh countdown next time idle deepens
     }
     if (reduced) return; // static resting pose only — no loops, no fidgets
     if (stage === 1 && this.pose === "stand") {
