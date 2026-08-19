@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import {
+  Bot,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -7,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   Folder,
+  MousePointer2,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,11 +19,13 @@ import {
   Send,
   Settings,
   Undo2,
+  Users,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useProjectStore } from "./store/project";
 import type { MdFile } from "./store/project";
-import { isRenameProtected, useGraphStore, type SaveState } from "./store/graph";
+import { isRenameProtected, useGraphStore, type CompileTarget, type SaveState } from "./store/graph";
 import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
 import { initEventListener } from "./store/events";
 import { initSessionsListener, useSessionsStore } from "./store/sessions";
@@ -81,7 +85,16 @@ const VIEW_TITLES: Record<View, string> = {
   tasks: "Browse TASKS / BACKLOG / ROADMAP",
 };
 
-function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
+function ViewToggle({
+  view,
+  onChange,
+  managerMode,
+}: {
+  view: View;
+  onChange: (v: View) => void;
+  /** N3: manager mode hides Barn entirely — pure context-graph/agents UI. */
+  managerMode: boolean;
+}) {
   const seg = (v: View, label: string) => (
     <button
       onClick={() => onChange(v)}
@@ -99,7 +112,7 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => voi
   return (
     <div className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
       {seg("canvas", "Canvas")}
-      {seg("barn", "Barn")}
+      {!managerMode && seg("barn", "Barn")}
       {seg("tasks", "Tasks")}
     </div>
   );
@@ -205,6 +218,85 @@ function UndoRedoButtons() {
   );
 }
 
+/** N2: Compile split-button — the main face keeps today's behaviour
+ *  (compile whatever the graph's compileTargets currently are); the chevron
+ *  opens a dropdown of the three targets, each icon-labelled, and picking
+ *  one opens the Compile modal locked to just that target with the preview
+ *  auto-run (CompileModal's `lockedTarget` prop). Positioned like RoleField's
+ *  popup (button rect → x/y), not a right-click menu, so it opens on a plain
+ *  click of the chevron. */
+const COMPILE_TARGET_META: Record<CompileTarget, { label: string; icon: LucideIcon }> = {
+  claude: { label: "CLAUDE.md", icon: Bot },
+  agents: { label: "AGENTS.md", icon: Users },
+  cursor: { label: ".cursor/rules", icon: MousePointer2 },
+};
+const COMPILE_TARGET_ORDER: readonly CompileTarget[] = ["claude", "agents", "cursor"];
+
+function CompileSplitButton({
+  onCompile,
+  disabled,
+}: {
+  onCompile: (lockedTarget?: CompileTarget) => void;
+  disabled: boolean;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const chevronRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState<{ x: number; y: number } | null>(null);
+
+  // Anchored on the whole split-button's left edge (not just the chevron)
+  // so the dropdown reads as belonging to "Compile", not floating off a
+  // 20px sliver — same left/bottom+4 anchor idiom as RoleField's popup.
+  const openMenu = () => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    setOpen({ x: rect.left, y: rect.bottom + 4 });
+  };
+
+  const items: MenuItem[] = COMPILE_TARGET_ORDER.map((t) => ({
+    kind: "item",
+    id: t,
+    label: COMPILE_TARGET_META[t].label,
+    icon: COMPILE_TARGET_META[t].icon,
+    onSelect: () => onCompile(t),
+  }));
+
+  return (
+    <div ref={wrapRef} className="flex flex-none">
+      <button
+        onClick={() => onCompile()}
+        disabled={disabled}
+        title={disabled ? "The graph is empty" : "Preview and write generated files"}
+        className="flex h-control items-center gap-1.5 rounded-l border border-r-0 border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+      >
+        <FileOutput size={14} strokeWidth={1.5} />
+        Compile
+      </button>
+      <button
+        ref={chevronRef}
+        onClick={openMenu}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open !== null}
+        title="Compile a single target"
+        className="grid h-control w-[20px] flex-none place-items-center rounded-r border border-border bg-surface-2 text-content-muted transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 hover:text-content disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
+      >
+        <ChevronDown size={11} strokeWidth={1.5} />
+      </button>
+      {open !== null && (
+        <ContextMenu
+          x={open.x}
+          y={open.y}
+          items={items}
+          onClose={() => {
+            setOpen(null);
+            chevronRef.current?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function TopBar({
   onCompile,
   onSettings,
@@ -213,7 +305,7 @@ function TopBar({
   view,
   onViewChange,
 }: {
-  onCompile: () => void;
+  onCompile: (lockedTarget?: CompileTarget) => void;
   onSettings: () => void;
   onPresets: () => void;
   onHandoff: () => void;
@@ -222,6 +314,7 @@ function TopBar({
 }) {
   const { root, openProject } = useProjectStore();
   const nodeCount = useGraphStore((s) => s.nodes.length);
+  const managerMode = useSettingsStore((s) => s.managerMode);
   return (
     <header className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle bg-surface-1 px-4">
       <PixelLogo />
@@ -239,22 +332,14 @@ function TopBar({
         </>
       )}
       <div className="flex-1" />
-      {root !== null && <ViewToggle view={view} onChange={onViewChange} />}
+      {root !== null && (
+        <ViewToggle view={view} onChange={onViewChange} managerMode={managerMode} />
+      )}
       <div className="flex-1" />
       {root !== null && <PinnedTokenChip />}
       {root !== null && <SaveIndicator />}
       {root !== null && <UndoRedoButtons />}
-      {root !== null && (
-        <button
-          onClick={onCompile}
-          disabled={nodeCount === 0}
-          title={nodeCount === 0 ? "The graph is empty" : "Preview and write generated files"}
-          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
-        >
-          <FileOutput size={14} strokeWidth={1.5} />
-          Compile
-        </button>
-      )}
+      {root !== null && <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />}
       {root !== null && (
         <button
           onClick={onPresets}
@@ -1012,12 +1097,37 @@ function ReviewBanner() {
   );
 }
 
+/** N4: slim status strip, the very bottom of the window — N/M straight from
+ *  the graph store, J the review queue length (shrinks on Accept/Revert/
+ *  dismiss), K the session's running external-change counter (only resets
+ *  on a project switch, see review.ts). Mono micro, muted — a status line,
+ *  never a call to action. */
+function StatusBar() {
+  const nodeCount = useGraphStore((s) => s.nodes.length);
+  const edgeCount = useGraphStore((s) => s.edges.length);
+  const changedCount = useReviewStore((s) => s.externalChangeCount);
+  const toReviewCount = useReviewStore((s) => s.queue.length);
+  return (
+    <div className="flex h-control-sm flex-none items-center border-t border-border-subtle bg-surface-1 px-3">
+      <span className="font-mono text-micro text-content-muted">
+        {nodeCount} node{nodeCount === 1 ? "" : "s"} · {edgeCount} edge{edgeCount === 1 ? "" : "s"} ·{" "}
+        {changedCount} changed on disk · {toReviewCount} to review
+      </span>
+    </div>
+  );
+}
+
 function Workspace({ root, view }: { root: string; view: View }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
   // The agent panel is reachable from any view, including the barn — without
   // this, selecting a roster card while watching the barn has no visible effect.
   const sessionSelected = useSessionsStore((s) => s.selectedId !== null);
+  // N3: defense-in-depth — even if `view` somehow still says "barn" (e.g. a
+  // settings load racing a restored view), manager mode must never mount
+  // BarnScene/Pixi.
+  const managerMode = useSettingsStore((s) => s.managerMode);
+  const barnView = view === "barn" && !managerMode;
   const leftPanelCollapsed = useSettingsStore((s) => s.leftPanelCollapsed);
   const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
   const setLeftPanelWidth = useSettingsStore((s) => s.setLeftPanelWidth);
@@ -1073,7 +1183,7 @@ function Workspace({ root, view }: { root: string; view: View }) {
             <div className={view === "canvas" ? "h-full" : "hidden"}>
               <GraphCanvas />
             </div>
-            {view === "barn" && (
+            {barnView && (
               <Suspense fallback={<LoadingFallback />}>
                 <BarnScene />
               </Suspense>
@@ -1094,7 +1204,7 @@ function Workspace({ root, view }: { root: string; view: View }) {
       </main>
       {loaded &&
         loadError === null &&
-        (view === "canvas" || view === "tasks" || (view === "barn" && sessionSelected)) && (
+        (view === "canvas" || view === "tasks" || (barnView && sessionSelected)) && (
         <>
           <ResizeHandle
             value={rightPanelWidth}
@@ -1117,6 +1227,10 @@ export default function App() {
   const loadGraph = useGraphStore((s) => s.loadGraph);
   const reviewing = useReviewStore((s) => s.reviewing !== null);
   const [compileOpen, setCompileOpen] = useState(false);
+  // N2 split-button: which single target (if any) the modal is locked to.
+  const [compileLockedTarget, setCompileLockedTarget] = useState<CompileTarget | undefined>(
+    undefined,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
@@ -1126,6 +1240,13 @@ export default function App() {
   useEffect(() => {
     setView("canvas");
   }, [root]);
+
+  // N3: turning manager mode on while watching the barn falls back to the
+  // canvas — Barn is never a reachable view once the toggle is on.
+  const managerMode = useSettingsStore((s) => s.managerMode);
+  useEffect(() => {
+    if (managerMode) setView((v) => (v === "barn" ? "canvas" : v));
+  }, [managerMode]);
 
   // Project opened → load (or start) its graph, and scan .claude/ agents.
   useEffect(() => {
@@ -1166,7 +1287,10 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-surface-0">
       <TopBar
-        onCompile={() => setCompileOpen(true)}
+        onCompile={(lockedTarget) => {
+          setCompileLockedTarget(lockedTarget);
+          setCompileOpen(true);
+        }}
         onSettings={() => setSettingsOpen(true)}
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
@@ -1194,6 +1318,7 @@ export default function App() {
           <Workspace root={root} view={view} />
           <RosterBar root={root} />
           <EventLog root={root} />
+          <StatusBar />
         </>
       )}
       {reviewing && root !== null && (
@@ -1203,7 +1328,14 @@ export default function App() {
       )}
       {compileOpen && root !== null && (
         <Suspense fallback={null}>
-          <CompileModal root={root} onClose={() => setCompileOpen(false)} />
+          <CompileModal
+            root={root}
+            lockedTarget={compileLockedTarget}
+            onClose={() => {
+              setCompileOpen(false);
+              setCompileLockedTarget(undefined);
+            }}
+          />
         </Suspense>
       )}
       {settingsOpen && (

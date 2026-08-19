@@ -19,6 +19,14 @@ export function formatTokenCount(tokens: number): string {
   return `${(tokens / 1000).toFixed(1)}k`;
 }
 
+/** Whole-percent of the 200k context window (WO01 N5) — shared by
+ *  AgentPanel's usage line and RosterBar's ctx bar so the two never drift
+ *  on rounding. Not clamped: a session that overruns the window reads
+ *  >100%, which the amber-at-80% treatment already flags as a problem. */
+export function ctxPercent(totalTokens: number): number {
+  return Math.round((totalTokens / CONTEXT_WINDOW_TOKENS) * 100);
+}
+
 // Compile-modal budget thresholds (Work Order 01 Block B / T3). A target's
 // root file (CLAUDE.md / AGENTS.md) tripping either one flips its total bar
 // to the warning treatment — static amber, per the token law (amber = the

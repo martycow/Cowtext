@@ -276,6 +276,50 @@ fn map_line_result_success_emits_text_usage_idle_and_ends_turn() {
 }
 
 #[test]
+fn map_line_result_success_with_total_cost_usd_carries_it_on_the_usage_event() {
+    // N5: `total_cost_usd` is a sibling of `usage` on the `result` line, not
+    // nested inside it — the mapper must read it from the top level and
+    // thread it into the emitted `Usage.costUsd`.
+    let line = r#"{"type":"result","subtype":"success","result":"done","total_cost_usd":0.0086265,"usage":{"input_tokens":3,"output_tokens":4}}"#;
+    let mapped = map_line("as0", line, 1000);
+    let usage_event = mapped
+        .events
+        .iter()
+        .find(|e| e.kind == AgentEventKind::Usage)
+        .expect("a usage event must be emitted");
+    let usage = usage_event.usage.as_ref().expect("usage payload");
+    assert_eq!(usage.cost_usd, Some(0.0086265));
+    // Mapping table otherwise unchanged: still text, usage, idle, in order.
+    assert_eq!(mapped.events.len(), 3);
+    assert_eq!(mapped.events[2], status_event("as0", SessionStatus::Idle, 1000));
+}
+
+#[test]
+fn map_line_result_success_without_total_cost_usd_is_tolerated_as_null() {
+    // Absent `total_cost_usd` must never be fatal — `costUsd` reads as `None`
+    // (wire `null`), everything else about the mapping is unaffected.
+    let line = r#"{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":3,"output_tokens":4}}"#;
+    let mapped = map_line("as0", line, 1000);
+    let usage_event = mapped
+        .events
+        .iter()
+        .find(|e| e.kind == AgentEventKind::Usage)
+        .expect("a usage event must be emitted");
+    let usage = usage_event.usage.as_ref().expect("usage payload");
+    assert_eq!(usage.cost_usd, None);
+}
+
+#[test]
+fn map_line_result_success_zero_total_tokens_drops_usage_event_even_with_cost() {
+    // Mapping table unchanged: a zero-total `usage` object still suppresses
+    // the `kind:"usage"` event entirely (contract §5.1), regardless of
+    // whether `total_cost_usd` is present.
+    let line = r#"{"type":"result","subtype":"success","result":"done","total_cost_usd":0.01,"usage":{"input_tokens":0,"output_tokens":0}}"#;
+    let mapped = map_line("as0", line, 1000);
+    assert!(mapped.events.iter().all(|e| e.kind != AgentEventKind::Usage), "{:?}", mapped.events);
+}
+
+#[test]
 fn map_line_result_success_empty_text_skips_text_event() {
     let line = r#"{"type":"result","subtype":"success","result":""}"#;
     let mapped = map_line("as0", line, 1000);

@@ -90,6 +90,16 @@ pub struct Usage {
     /// not report a window size and Cowtext will not invent one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// `total_cost_usd` from the terminal `result` line (N5), as reported by
+    /// the CLI — this is the conversation's running total, not a per-turn
+    /// delta. Deliberately `number | null` on the wire (no
+    /// `skip_serializing_if`, unlike `context_window`): the frontend must be
+    /// able to distinguish "this CLI build doesn't report cost" (`null`)
+    /// from "cost is zero", and an omitted key collapses that distinction on
+    /// the TS side (`undefined` vs `null` both read as "absent" through
+    /// `?.`). `None` when the result line carries no `total_cost_usd` field —
+    /// tolerated, never fatal.
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -399,8 +409,11 @@ fn status_event(id: &str, status: SessionStatus, ts: u64) -> AgentEvent {
 /// `inputTokens = input_tokens`, `outputTokens = output_tokens`,
 /// `totalTokens = input + output + cache_creation + cache_read` (each
 /// missing field reads as 0). `None` when the total is zero (contract
-/// §5.1's "only if U has a non-zero total").
-fn map_usage(usage: &serde_json::Value) -> Option<Usage> {
+/// §5.1's "only if U has a non-zero total") — unchanged by N5; `cost_usd` is
+/// threaded through separately (it lives on the `result` line itself, not
+/// inside the nested `usage` object) and is simply carried along when a
+/// `Usage` is emitted at all.
+fn map_usage(usage: &serde_json::Value, cost_usd: Option<f64>) -> Option<Usage> {
     let get = |k: &str| usage.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
     let input = get("input_tokens");
     let output = get("output_tokens");
@@ -408,7 +421,7 @@ fn map_usage(usage: &serde_json::Value) -> Option<Usage> {
     if total == 0 {
         return None;
     }
-    Some(Usage { input_tokens: input, output_tokens: output, total_tokens: total, context_window: None })
+    Some(Usage { input_tokens: input, output_tokens: output, total_tokens: total, context_window: None, cost_usd })
 }
 
 /// Every stdout line -> zero or more `AgentEvent`s (contract §5.1, byte-exact
@@ -502,7 +515,12 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                 if !result_text.is_empty() {
                     events.push(text_event(id, result_text.to_string(), ts));
                 }
-                if let Some(usage) = value.get("usage").and_then(map_usage) {
+                // N5: `total_cost_usd` lives on the `result` line itself, a
+                // sibling of `usage`, not nested inside it — read it here and
+                // thread it into `map_usage` so the emitted `Usage` carries
+                // both. Absent field -> `None` -> wire `null`, tolerated.
+                let cost_usd = value.get("total_cost_usd").and_then(serde_json::Value::as_f64);
+                if let Some(usage) = value.get("usage").and_then(|u| map_usage(u, cost_usd)) {
                     events.push(AgentEvent { id: id.to_string(), kind: AgentEventKind::Usage, status: None, tool: None, text: None, usage: Some(usage), ts });
                 }
                 events.push(status_event(id, SessionStatus::Idle, ts));

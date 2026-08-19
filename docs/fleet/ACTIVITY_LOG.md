@@ -2,19 +2,23 @@
 
 Maintained by **project-manager**. One brief entry per agent per session; newest on top. Target: keep the three most recent sessions here, older entries roll to `docs/_archive/ACTIVITY_LOG_2026H1.md` — note that `docs/_archive/` is write-frozen by the docs-guard hook, so rolling entries out needs Marty to lift the guard for that move (the 2026-08-16 Phase 2 entry below is queued to roll first).
 
-## 2026-08-18 — WO01 Block B→C→F (Ultracode work order, blocks B+C+F accepted, D/E pending)
+## 2026-08-18 — WO01 FULLY CLOSED: Blocks D/E + N1–N5 batch (ultracode work order, all A–F committed + N suite uncommitted)
 
-Directed by the tech-lead under the `/ultracode` dispatcher; pre-approved by Marty after accepting each block (2026-08-18). Frozen contract: `docs/design/WO01_BLOCK_F_CONTRACT.md`. App version stays **v0.1.0** (first public cut). All gates green: `npm run build` PASS, `npm run lint` 0 errors, `cargo clippy -- -D warnings` PASS, `cargo test` green (88 baseline + new WO01 tests), invoke contract verified **43 → 50** (six sessions commands + `agent_session_list`). Manual: `docs/testing/WO01_BLOCK_A_TEST_MANUAL.md` appended with Block B/C/F sections covering token budget UI, review queue with side-by-side diff, and agent MVP headless spawn.
+Directed by the tech-lead under the `/ultracode` dispatcher. **Blocks A–F all accepted by Marty or landed (2026-08-18):**  Block A (canvas lenses + watcher, reviewed+accepted by Marty); Block B (token budget, `f499ccf`); Block C (review queue, `306f56a`); Block D (`72dc1a9`); Block E (`f1752b0`); Block F (Agents MVP, `269bdad`). **N1–N5 suite (task-format skill batch) uncommitted** — awaiting dispatcher's final commit.  App version stays **v0.1.0** (first public cut). Invoke contract reaches 50 (six agent session commands + `agent_session_list` in Block F). Tester found 1 N-batch defect during manual walk, fix round ran, resolved before uncommitted state.
 
-| Block | Summary | Status |
+| Component | Commits | Status |
 |---|---|---|
-| B | Token budget: per-file chips in TopBar pinned context, per-target budget bars in CompileModal, 150-line/2k-token warn consts. Committed `f499ccf`. | ✅ Done |
-| C | Review queue: selfWrite suppression, snapshot UI, banner + side-by-side diff view. One MAJOR `skipCurrent` defect found in audit and FIXED before landing. Committed `306f56a`. | ✅ Done |
-| F | Agents MVP (T7–T10 from WO spec): spawn real Claude Code headless child (resume-loop only, no pty), roster bar (avatar/name/status dot/tool), agent read-only panel (transcript stream, real token usage, queue prompt), kill/restart process-tree. Three major issues handled per contract (spawn channel decision not ratified, portable-pty deferred D1, contextWindow frozen/empty D7). New event `agent://event {id,kind,status?,tool?,text?,usage?,ts}`. Uncommitted; awaits review walk. | 🔲 Pending review |
+| Block A (Lenses + Watcher) | reviewed+accepted | ✅ Done |
+| Block B (Token Budget) | `f499ccf` | ✅ Done |
+| Block C (Review Queue) | `306f56a` | ✅ Done |
+| Block D | `72dc1a9` | ✅ Done |
+| Block E | `f1752b0` | ✅ Done |
+| Block F (Agents MVP) | `269bdad` | ✅ Done |
+| N1–N5 (task-format skill) | uncommitted | ✅ Done |
 
-**Defects found** (process-tree kill audit): 2 found, 0 remaining. Block C's skipCurrent race FIXED before landing.
+**Defects found/fixed this session**: 1 N-batch defect found in tester walk, fixed before uncommitted state. Earlier in session: Block C's skipCurrent race FIXED before landing (audit caught, pre-ship).
 
-**Next in protocol**: Marty reviews WO01 B+C+F manual and gates; approve for immediate v0.1.0 cut or note blockers. Blocks D/E blocked on "go N#" approval gate.
+**Next in protocol**: Dispatcher commits N1–N5 and this record; manual acceptance walks for all WO01 blocks remain open (A–F manuals complete, N walk pending). v0.1.0 cut gate: real sprites (Marty-side asset), CSP production check, acceptance sign-off.
 
 ## 2026-08-18 — Task-Board batch (primary agent dispatcher + 3 lanes, no Workflow)
 
@@ -303,3 +307,8 @@ App version after session: **v0.0.0003** (set by Task Manager). All automated ch
 | 2026-08-18 17:35 | tech-barn | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, src/scene/cow.ts, src/scene/mapper.ts |
 | 2026-08-18 17:41 | tester | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/scene/cow.ts, src/scene/mapper.ts |
 | 2026-08-18 17:43 | tech-barn | .claude/agent-memory/tech-barn/MEMORY.md, docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src/scene/cow.ts, src/scene/mapper.ts, src/scene/props.ts |
+| 2026-08-18 17:48 | tech-general | docs/INPUT_PROMPT.md, src-tauri/src/sessions.rs, src-tauri/src/sessions/tests.rs, src/store/sessions.ts |
+| 2026-08-18 17:59 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, src-tauri/src/sessions.rs, src-tauri/src/sessions/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/CodeMirrorEditor.tsx, src/inspector/Inspector.tsx, src/sessions/AgentPanel.tsx, src/sessions/RosterBar.tsx, src/settings/SettingsModal.tsx, src/store/review.ts, src/store/sessions.ts, src/store/settings.ts, src/store/tokens.ts |
+| 2026-08-18 18:05 | tester | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/sessions.rs, src-tauri/src/sessions/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/CodeMirrorEditor.tsx, src/inspector/Inspector.tsx, src/sessions/AgentPanel.tsx, src/sessions/RosterBar.tsx, src/settings/SettingsModal.tsx, src/store/review.ts, src/store/sessions.ts, src/store/settings.ts, src/store/tokens.ts |
+| 2026-08-18 18:06 | tech-ui | docs/INPUT_PROMPT.md, docs/fleet/ACTIVITY_LOG.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/sessions.rs, src-tauri/src/sessions/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/CodeMirrorEditor.tsx, src/inspector/Inspector.tsx, src/sessions/AgentPanel.tsx, src/sessions/RosterBar.tsx, src/settings/SettingsModal.tsx, src/store/review.ts, src/store/sessions.ts, src/store/settings.ts, src/store/tokens.ts |
+| 2026-08-18 18:09 | project-manager | CLAUDE.md, docs/INPUT_PROMPT.md, docs/TERMINOLOGY.md, docs/fleet/ACTIVITY_LOG.md, docs/tasks/TASKS.md, docs/testing/WO01_BLOCK_A_TEST_MANUAL.md, src-tauri/src/sessions.rs, src-tauri/src/sessions/tests.rs, src/App.tsx, src/compile/CompileModal.tsx, src/inspector/CodeMirrorEditor.tsx, src/inspector/Inspector.tsx, src/sessions/AgentPanel.tsx, src/sessions/RosterBar.tsx, src/settings/SettingsModal.tsx, src/store/review.ts, src/store/sessions.ts, src/store/settings.ts, src/store/tokens.ts |

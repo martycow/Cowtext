@@ -45,6 +45,9 @@ export interface AppSettings {
   briefHeight: number; // px, clamped briefMin..briefMax
   syncFileName: boolean; // default true (idea #1)
   lens: LensMode; // canvas lens (WO01 Block A); additive, tolerant-merge field
+  // N3: hides the Barn segment (and never mounts BarnScene/Pixi) for a pure
+  // manager UI. Additive, tolerant-merge field — default false.
+  managerMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -62,6 +65,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   briefHeight: PANEL_LIMITS.briefDefault,
   syncFileName: true,
   lens: "none",
+  managerMode: false,
 };
 
 export interface SettingsState extends AppSettings {
@@ -87,6 +91,7 @@ export interface SettingsState extends AppSettings {
   setBriefHeight: (px: number) => void;
   setSyncFileName: (b: boolean) => void;
   setLens: (l: LensMode) => void;
+  setManagerMode: (b: boolean) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -155,6 +160,7 @@ function mergeSettings(raw: unknown): AppSettings {
   if (typeof r.lens === "string" && LENS_MODES.some((m) => m === r.lens)) {
     out.lens = r.lens as LensMode;
   }
+  if (typeof r.managerMode === "boolean") out.managerMode = r.managerMode;
   return out;
 }
 
@@ -180,6 +186,7 @@ function persistNow(): void {
     briefHeight: s.briefHeight,
     syncFileName: s.syncFileName,
     lens: s.lens,
+    managerMode: s.managerMode,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -303,6 +310,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setLens: (l) => {
     set({ lens: l });
+    schedulePersist();
+  },
+  setManagerMode: (b) => {
+    set({ managerMode: b });
     schedulePersist();
   },
 }));

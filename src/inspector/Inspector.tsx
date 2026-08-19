@@ -2,7 +2,7 @@
 // form) + Markdown (CodeMirror on the node's file; explicit save writes to
 // disk through Rust). The file on disk is the content source of truth.
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import {
@@ -33,7 +33,7 @@ import { SkillEditor } from "../agents/SkillEditor";
 import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
 import { useSessionsStore } from "../store/sessions";
 import { AgentPanel } from "../sessions/AgentPanel";
-import { CodeMirrorEditor } from "./CodeMirrorEditor";
+import { CodeMirrorEditor, type AtMentionHandlers } from "./CodeMirrorEditor";
 import { ScanOverlay } from "../ui/ScanOverlay";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
@@ -1201,6 +1201,43 @@ function MarkdownTab({ node, root }: { node: MemoryNode; root: string }) {
   const [savedDoc, setSavedDoc] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // N1: @path mention chips. `nodes` is subscribed only so `mentionsKey`
+  // recomputes when the resolution universe changes (adopt, rename,
+  // remove); the handlers themselves always read fresh via getState() so
+  // they can never act on a stale node/edge list.
+  const nodes = useGraphStore((s) => s.nodes);
+  const mentionsKey = useMemo(
+    () => nodes.map((n) => `${n.id}:${n.filePath}`).sort().join("|"),
+    [nodes],
+  );
+  const atMentions = useMemo<AtMentionHandlers>(
+    () => ({
+      resolve: (path) => {
+        const normalized = path.replace(/\\/g, "/");
+        return (
+          useGraphStore.getState().nodes.find((n) => n.filePath.replace(/\\/g, "/") === normalized)
+            ?.id ?? null
+        );
+      },
+      hasReferenceEdge: (targetNodeId) =>
+        useGraphStore
+          .getState()
+          .edges.some(
+            (e) => e.source === node.id && e.target === targetNodeId && e.kind === "references",
+          ),
+      onFocusNode: (nodeId) => {
+        useGraphStore.getState().setSelection([nodeId], []);
+        useInspectorTabStore.getState().setTab("properties");
+      },
+      onAddReference: (targetNodeId) => {
+        const gs = useGraphStore.getState();
+        gs.beginConnection({ source: node.id, target: targetNodeId });
+        gs.confirmConnection("references");
+      },
+    }),
+    [node.id],
+  );
+
   useEffect(() => {
     let live = true;
     setState({ kind: "loading" });
@@ -1309,6 +1346,8 @@ function MarkdownTab({ node, root }: { node: MemoryNode; root: string }) {
           value={savedDoc}
           onChange={setDoc}
           onSave={save}
+          atMentions={atMentions}
+          mentionsKey={mentionsKey}
         />
       </div>
     </div>

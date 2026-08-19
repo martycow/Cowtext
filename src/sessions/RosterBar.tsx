@@ -9,7 +9,12 @@ import { Plus, X } from "lucide-react";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { selectReducedMotion, useSettingsStore } from "../store/settings";
 import { MAX_SESSIONS, useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
+import { ctxPercent } from "../store/tokens";
 import { AddAgentDialog } from "./AddAgentDialog";
+
+/** N5: amber at/above 80% of the 200k window — static amber = warning,
+ *  never mixed with the accent fill below it. */
+const CTX_WARN_PCT = 80;
 
 // "Blue is you, amber is the cow": waiting wants the human back (accent
 // blue), working is the agent doing live work (amber), idle is neutral.
@@ -43,13 +48,14 @@ function RosterCard({
 }) {
   const selectSession = useSessionsStore((s) => s.selectSession);
   const dismiss = useSessionsStore((s) => s.dismiss);
+  const pct = ctxPercent(session.usage.totalTokens);
   return (
     <div
       onClick={() => selectSession(session.id)}
       title={`${session.name} — ${session.status}${
         session.currentTool !== null ? `: ${session.currentTool}` : ""
-      }`}
-      className={`flex h-[30px] w-[172px] flex-none cursor-default items-center gap-1.5 rounded border px-1.5 transition-colors duration-fast ${
+      }${session.usage.turns > 0 ? ` · ${pct}% of ctx` : ""}`}
+      className={`relative flex h-[30px] w-[172px] flex-none cursor-default items-center gap-1.5 overflow-hidden rounded border px-1.5 transition-colors duration-fast ${
         selected ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2 hover:border-border-strong"
       } ${!session.alive ? "opacity-60" : ""}`}
     >
@@ -75,6 +81,16 @@ function RosterCard({
         >
           <X size={11} strokeWidth={1.5} />
         </button>
+      )}
+      {/* N5 ctx bar — thin strip under the status dot, accent fill, amber
+          once the session is heavy in its context window. */}
+      {session.alive && (
+        <div className="absolute inset-x-0 bottom-0 h-[2px] bg-surface-1">
+          <div
+            className={`h-full ${pct >= CTX_WARN_PCT ? "bg-amber" : "bg-accent"}`}
+            style={{ width: `${Math.min(100, pct)}%` }}
+          />
+        </div>
       )}
     </div>
   );

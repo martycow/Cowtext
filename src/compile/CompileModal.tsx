@@ -310,7 +310,19 @@ function FileSection({
 
 // ── Modal ─────────────────────────────────────────────────────────────
 
-export function CompileModal({ root, onClose }: { root: string; onClose: () => void }) {
+export function CompileModal({
+  root,
+  onClose,
+  lockedTarget,
+}: {
+  root: string;
+  onClose: () => void;
+  /** N2 split-button entry: the modal previews/writes exactly this one
+   *  target, the target chips are hidden, and nothing is persisted to the
+   *  graph's general `compileTargets` preference (that's a separate,
+   *  broader setting the plain Compile click still reads). */
+  lockedTarget?: CompileTarget;
+}) {
   const compileTargets = useGraphStore((s) => s.compileTargets);
   const setCompileTargets = useGraphStore((s) => s.setCompileTargets);
 
@@ -328,10 +340,11 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
     panelRef.current?.focus();
   }, []);
 
-  const targetsKey = compileTargets.join(",");
+  const targetsKey = lockedTarget !== undefined ? lockedTarget : compileTargets.join(",");
 
-  // On open and on every target-toggle: flush the debounced save so disk and
-  // preview agree, then serialize the store snapshot and ask Rust to preview.
+  // On open, on every target-toggle, and once for a locked target: flush the
+  // debounced save so disk and preview agree, then serialize the store
+  // snapshot and ask Rust to preview.
   useEffect(() => {
     let live = true;
     setPhase("loading");
@@ -349,7 +362,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
         projectName: s.projectName,
         nodes: s.nodes,
         edges: s.edges,
-        compileTargets: s.compileTargets,
+        compileTargets: lockedTarget !== undefined ? [lockedTarget] : s.compileTargets,
       });
       const p = await compilePreview(root, graphJson);
       if (!live) return;
@@ -373,7 +386,7 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
     return () => {
       live = false;
     };
-  }, [root, targetsKey]);
+  }, [root, targetsKey, lockedTarget]);
 
   const canClose =
     phase === "preview" || phase === "errors" || phase === "done" || phase === "failed";
@@ -522,8 +535,20 @@ export function CompileModal({ root, onClose }: { root: string; onClose: () => v
           </button>
         </div>
 
+        {/* Locked target (N2 split-button) — no picker, single accent chip. */}
+        {phase !== "done" && lockedTarget !== undefined && (
+          <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle px-4">
+            <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
+              target
+            </span>
+            <span className="flex h-control-sm items-center gap-1.5 rounded border border-accent-border bg-accent-surface px-2 font-mono text-xs text-accent-text">
+              {lockedTarget}
+            </span>
+          </div>
+        )}
+
         {/* Target toggles — checkbox chips, persisted via the store */}
-        {phase !== "done" && (
+        {phase !== "done" && lockedTarget === undefined && (
           <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle px-4">
             <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
               targets

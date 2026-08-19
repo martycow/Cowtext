@@ -24,6 +24,11 @@ export interface Usage {
   outputTokens: number;
   totalTokens: number;
   contextWindow?: number;
+  /** `total_cost_usd` from the CLI's terminal `result` line (N5) — the
+   *  conversation's running total as reported by claude, not a per-turn
+   *  delta. `number | null` on the wire, never omitted: `null` means this
+   *  CLI build didn't report a cost, not "unknown". */
+  costUsd: number | null;
 }
 
 export interface AgentEvent {
@@ -52,6 +57,13 @@ export interface UsageTotals {
   outputTokens: number;
   totalTokens: number;
   turns: number;
+  /** Cumulative session cost (N5). `total_cost_usd` is already a running
+   *  total as reported by the CLI (not a per-turn delta), so this field
+   *  takes the latest reported value rather than summing turn-over-turn —
+   *  summing an already-cumulative number would double count. `null` until
+   *  the first turn that reports a cost; stays at its last known value
+   *  after that (a later turn with no cost does not erase it). */
+  costUsd: number | null;
 }
 
 export interface Session {
@@ -104,7 +116,7 @@ function sessionFromInfo(info: SessionInfo): Session {
     currentTool: null,
     alive: info.alive,
     transcript: [],
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0 },
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0, costUsd: null },
     queue: [],
     lastError: null,
     startedMs: Date.now(),
@@ -282,6 +294,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
               outputTokens: session.usage.outputTokens + u.outputTokens,
               totalTokens: session.usage.totalTokens + u.totalTokens,
               turns: session.usage.turns + 1,
+              // Take-latest, not sum: costUsd is already a running total
+              // (see UsageTotals doc comment). A turn with no cost leaves
+              // the last known value in place rather than clearing it.
+              costUsd: u.costUsd ?? session.usage.costUsd,
             },
           };
           break;

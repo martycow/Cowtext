@@ -92,6 +92,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const prefersReducedMotion = useSettingsStore((s) => s.prefersReducedMotion);
   const claudeBinaryPath = useSettingsStore((s) => s.claudeBinaryPath);
   const syncFileName = useSettingsStore((s) => s.syncFileName);
+  const managerMode = useSettingsStore((s) => s.managerMode);
   const persistError = useSettingsStore((s) => s.persistError);
   const setMasterVolume = useSettingsStore((s) => s.setMasterVolume);
   const setBarnSounds = useSettingsStore((s) => s.setBarnSounds);
@@ -100,6 +101,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setCalmMode = useSettingsStore((s) => s.setCalmMode);
   const setClaudeBinaryPath = useSettingsStore((s) => s.setClaudeBinaryPath);
   const setSyncFileName = useSettingsStore((s) => s.setSyncFileName);
+  const setManagerMode = useSettingsStore((s) => s.setManagerMode);
 
   const root = useProjectStore((s) => s.root);
 
@@ -248,6 +250,19 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <Row label="Hooks server">
               <span className="font-mono text-xs text-content-secondary">{HOOKS_ADDR}</span>
             </Row>
+          </section>
+
+          {/* View */}
+          <section className="border-b border-border-subtle px-4 py-3">
+            <SectionLabel>View</SectionLabel>
+
+            <Row label="Manager mode">
+              <Toggle checked={managerMode} onChange={setManagerMode} label="Manager mode" />
+            </Row>
+            <HelperLine>
+              Hides the Barn view and never loads the Pixi scene — a pure context-graph and
+              agents UI.
+            </HelperLine>
           </section>
 
           {/* Context */}

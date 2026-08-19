@@ -105,6 +105,9 @@ React Flow and PixiJS never import each other.
 | LensMode | Canvas lens setting: `'none' \| 'activity' \| 'weight' \| 'live'`, persisted in app settings, last field in AppSettings interface, version stays 1 |
 | Watcher | notify-based file system monitor (src-tauri/src/watcher.rs): watches project for `.md` file changes, emits `fs://change` events via Tauri, hand-rolled 300ms debounce with starvation guards |
 | fs://change event | Real-time file system change: `{ relPath, modifiedMs, sizeBytes, kind: create\|modify\|remove }`, emitted by watcher.rs, drives Activity/Weight/Live lens brightness updates and real-time node-list refresh |
+| Manager mode | App setting that hides the Barn view and never loads the Pixi scene — pure context-graph + agents UI (toggle in SettingsModal) |
+| Status bar | Bottom strip showing node/edge counts, external file changes, and items queued for review; updates live from graph and review stores |
+| @mention chip | Inline editor decoration for `@rel/path/to/node.md` syntax (N1 feature): resolved mentions light up as accent-colored clickable chip, unresolved as muted; click focuses the node, shift-click adds a references edge |
 
 Cross-references like "FEATURES n.n" resolve to the Feature inventory section of
 `docs/tasks/BACKLOG.md` (formerly `docs/FEATURES.md`, archived).

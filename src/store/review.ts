@@ -36,6 +36,17 @@ interface ReviewState {
   /** Which queue entry the modal is currently showing, or null. Still
    *  present in `queue` until Accept/Revert/dismissAll removes it. */
   reviewing: ReviewEntry | null;
+  /** N4 status-bar "K changed on disk": a session counter of every external
+   *  (non-selfWrite) `fs://change` on a managed file — every EVENT, not the
+   *  distinct-file count, and never decremented by Accept/Revert/dismiss
+   *  (that's `queue.length`, "J to review"). Only a project switch resets
+   *  it — tracked via `currentRoot` below, set from `initSnapshots`, the one
+   *  call every project open makes exactly once (adoptFile's later calls
+   *  reuse the same root and don't reset). */
+  externalChangeCount: number;
+  /** Root the counters/snapshots above belong to; internal bookkeeping for
+   *  the project-switch reset, not meant to be read by callers. */
+  currentRoot: string | null;
 
   /** Seeds snapshots for `relPaths` from disk (parallel, missing tolerated —
    *  a file that can't be read just never gets a snapshot). */
@@ -74,8 +85,22 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   snapshots: new Map(),
   queue: [],
   reviewing: null,
+  externalChangeCount: 0,
+  currentRoot: null,
 
   initSnapshots: async (root, relPaths) => {
+    // A different root than last time this store saw = a project switch —
+    // the whole review session (baselines, queue, the K counter) belongs to
+    // the previous project and must not bleed into the new one.
+    if (get().currentRoot !== root) {
+      set({
+        currentRoot: root,
+        snapshots: new Map(),
+        queue: [],
+        reviewing: null,
+        externalChangeCount: 0,
+      });
+    }
     const reads = await Promise.all(
       relPaths.map(async (relPath) => {
         try {
@@ -106,6 +131,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   onFsChange: (change) => {
     if (change.selfWrite) return;
     if (!isManaged(change.relPath)) return;
+    set((st) => ({ externalChangeCount: st.externalChangeCount + 1 }));
     const entry: ReviewEntry = { relPath: change.relPath, kind: change.kind, ts: Date.now() };
     set((st) => {
       if (st.reviewing !== null && st.reviewing.relPath === change.relPath) {

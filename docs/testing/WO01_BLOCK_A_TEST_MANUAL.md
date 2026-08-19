@@ -968,6 +968,138 @@ meant to be preempted instantly by the next real event. Written against the code
     Remove-Item -Recurse -Force C:\_cowbubbles -ErrorAction SilentlyContinue
     ```
 
+## N1–N5 — WO01 Nice-to-haves
+
+Extends `docs/INPUT_PROMPT.md` N1–N5: @path mention chips in the Markdown editor,
+the Compile split-button, Manager mode, the bottom status bar, and ctx%/cost in the
+usage line. Written against the code as of 2026-08-18 (`src/inspector/
+CodeMirrorEditor.tsx`, `src/inspector/Inspector.tsx`, `src/App.tsx`, `src/compile/
+CompileModal.tsx`, `src/store/settings.ts`, `src/settings/SettingsModal.tsx`,
+`src/store/review.ts`, `src/store/tokens.ts`, `src/sessions/AgentPanel.tsx`,
+`src/sessions/RosterBar.tsx`, `src-tauri/src/sessions.rs`). Uses a fresh throwaway
+project; earlier scratch projects are gone (or a sunk repo) — do not reuse them.
+
+**Time budget:** ~12 min (N5's step needs one real, cheap `claude -p` boot turn).
+
+125. Make a throwaway project and open it:
+
+     ```powershell
+     mkdir C:\_cowmentions
+     Set-Content C:\_cowmentions\main.md "# Main`n`nSee @ref.md and also @missing.md for details."
+     Set-Content C:\_cowmentions\ref.md "# Ref`n`nReferenced content."
+     ```
+
+     Press **Open folder**, pick `C:\_cowmentions`. *Expected:* the file rail reads
+     **`2 markdown files`**. Adopt only `main.md` and `ref.md` (**+ adopt** on each
+     rail row) — `missing.md` deliberately never existed, so no node will ever
+     resolve it (that's the unresolved-chip case below). *Expected:* two node cards,
+     `main` and `ref`.
+
+### N1 — @path mention chips
+
+126. Select the `main` node, open the Inspector's **Markdown** tab. *Expected:* inside
+     the editor, `@ref.md` renders as an accent-bordered chip (`.cm-at-mention`) and
+     `@missing.md` renders with a dashed muted border (`.cm-at-mention-muted`) —
+     visually distinct at a glance, not just by hover.
+127. Hover the `@ref.md` chip. *Expected:* the tooltip reads exactly **`Click to focus
+     the node · Shift-click to add a references edge`**. Click it (plain click).
+     *Expected:* selection moves to the `ref` node and the Inspector switches to the
+     **Properties** tab.
+128. Reselect `main`, reopen the **Markdown** tab. Hover `@missing.md`. *Expected:*
+     the tooltip reads exactly **`no node for this file`**, cursor is the default
+     arrow (not a pointer) over the chip. Click it. *Expected:* nothing happens — no
+     selection change, no console error in the `tauri dev` terminal.
+129. Shift-click the `@ref.md` chip. Switch to the **Canvas** view. *Expected:* a new
+     dashed **references** edge now runs `main → ref`. Reopen `main`'s Markdown tab
+     and shift-click `@ref.md` again. *Expected:* no second edge — back on Canvas,
+     exactly one `main → ref` edge exists (the store's own duplicate guard in
+     `confirmConnection` holds even if a caller re-fires the same add).
+
+### N2 — Compile split-button
+
+130. Look at the top-left **Compile** control. *Expected:* it is now a split button —
+     a left `Compile` segment and a thin right chevron segment, hairline-separated.
+     Click the **chevron**. *Expected:* a dropdown opens with exactly three items, in
+     order, each with an icon: **CLAUDE.md**, **AGENTS.md**, **.cursor/rules**. Click
+     **AGENTS.md**. *Expected:* the Compile modal opens with the preview already
+     auto-running (brief pixel-march, then the file list) and, in place of the usual
+     three-chip target row, a single **locked** accent chip reading **`agents`** next
+     to the label `target` — no way to flip to `claude`/`cursor` from inside this
+     modal. Close it (**Cancel**).
+131. Click the split button's **left** segment (`Compile`, not the chevron).
+     *Expected:* the modal reopens showing the full three-chip target-toggle row
+     (today's original behaviour, untouched by N2). Close it.
+
+### N3 — Manager mode
+
+132. Open **Settings** (gear icon, top bar). *Expected:* a new **View** section
+     appears with a **Manager mode** row and a toggle, helper text mentioning it
+     "never loads the Pixi scene". Flip it **ON**, close Settings. *Expected:* the
+     top view-toggle strip now shows only **Canvas** and **Tasks** — the **Barn**
+     segment is gone entirely, not just disabled.
+133. Open Settings again, flip **Manager mode** back **OFF**, close Settings.
+     *Expected:* **Barn** reappears in the view toggle immediately, no reload
+     needed, and clicking it still opens the barn scene normally.
+
+### N4 — Status bar
+
+134. Look at the very bottom of the window, below the roster strip and the event
+     log. *Expected:* a slim ~24px strip reads exactly **`2 nodes · 1 edge · 0
+     changed on disk · 0 to review`** (mono, muted; note the singular "edge" —
+     the strip pluralizes each unit independently) — matching the 2 adopted nodes
+     and the 1 references edge from step 129. Edit `ref.md` from **outside** the
+     app:
+
+     ```powershell
+     Add-Content C:\_cowmentions\ref.md "`nAn external line."
+     ```
+
+     *Expected within ~1 s:* the strip updates to **`2 nodes · 1 edge · 1 changed
+     on disk · 1 to review`** and the amber ReviewBanner appears above the
+     workspace. Click **Review next**, then **Accept**. *Expected:* the strip's "to
+     review" count drops back to **0**, but "changed on disk" **stays at 1** — it is
+     a session counter that only resets on a project switch, never on Accept/
+     Revert/Dismiss.
+
+### N5 — ctx% + cost in the usage line
+
+135. Add a real agent to exercise real usage reporting (see Block F/F1 for the full
+     flow if any step below is unfamiliar):
+
+     ```powershell
+     cd C:\_cowmentions
+     git init -q
+     git config user.email "test@test.com"
+     git config user.name "test"
+     git add -A
+     git commit -q -m "init"
+     cd C:\
+     ```
+
+     In Cowtext, click **Add agent** (bottom roster strip), leave **Agent file**
+     `(none)`, type `probe` for **Name**, point **Folder** at `C:\_cowmentions`
+     (accept the main-working-copy nudge, no worktree needed for this quick check),
+     click **Add**. Wait for the boot turn to settle (status dot goes amber →
+     idle).
+136. Read the Agent panel's usage line (just under the cwd/agent-file meta).
+     *Expected:* it reads **`≈<N> tok · <X>% of 200k · $<Y.YYYY>`** (4 decimal
+     places on the cost; if this `claude` build never reports `total_cost_usd`, the
+     last segment instead reads exactly **`cost n/a`**, never `$0.0000`) — not the
+     old `↑<N> ↓<N> · <N> tok · <N> turns` format, which is now only in the line's
+     hover tooltip. Look at the `probe` roster card. *Expected:* a thin 2px bar
+     under the status dot, accent-colored, reflecting the same percentage (would
+     switch to amber at ≥80% of the 200k window — not expected to trip on one boot
+     turn).
+137. Kill `probe` (**Kill** → **Confirm kill?**) to avoid leaving a stray process.
+
+## Cleanup (N1–N5)
+
+138. Close the app and remove the scratch project:
+
+     ```powershell
+     Remove-Item -Recurse -Force C:\_cowmentions -ErrorAction SilentlyContinue
+     ```
+
 ## Sign-off
 
 | Section | Pass/Fail | Notes |
@@ -981,5 +1113,6 @@ meant to be preempted instantly by the next real event. Written against the code
 | Block F Agents MVP | | |
 | Block D New Node wizard | | |
 | Block E Thought bubbles | | |
+| N1-N5 Nice-to-haves | | |
 
 Tester: ____________  Date: ____________  Build/commit: ____________

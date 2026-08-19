@@ -9,12 +9,20 @@ import { X } from "lucide-react";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { selectReducedMotion, useSettingsStore } from "../store/settings";
 import { useSessionsStore, type SessionStatus } from "../store/sessions";
+import { CONTEXT_WINDOW_TOKENS, ctxPercent } from "../store/tokens";
 
 const STATUS_BADGE: Record<SessionStatus, string> = {
   idle: "border-border bg-surface-2 text-content-secondary",
   working: "border-amber-border bg-amber-surface text-amber-text",
   waiting: "border-accent-border bg-accent-surface text-accent-text",
 };
+
+/** N5: "$Y.YYYY" — 4 decimals (per-turn spend is small; 2 decimals would
+ *  round most turns to $0.00). null (no CLI cost report yet) reads as
+ *  "cost n/a", never a misleading "$0.0000". */
+function formatCost(usd: number | null): string {
+  return usd === null ? "cost n/a" : `$${usd.toFixed(4)}`;
+}
 
 const TRANSCRIPT_CLS: Record<string, string> = {
   tool: "text-amber-text",
@@ -145,11 +153,11 @@ export function AgentPanel() {
       <div className="flex-none border-b border-border-subtle px-3 py-1.5">
         <p
           className="font-mono text-2xs text-content-muted"
-          title="reported by claude, not an estimate"
+          title={`reported by claude, not an estimate · ↑${session.usage.inputTokens} ↓${session.usage.outputTokens} · ${session.usage.turns} turn${session.usage.turns === 1 ? "" : "s"}`}
         >
           {session.usage.turns === 0
             ? "no usage yet"
-            : `↑${session.usage.inputTokens} ↓${session.usage.outputTokens} · ${session.usage.totalTokens} tok · ${session.usage.turns} turns`}
+            : `≈${session.usage.totalTokens} tok · ${ctxPercent(session.usage.totalTokens)}% of ${CONTEXT_WINDOW_TOKENS / 1000}k · ${formatCost(session.usage.costUsd)}`}
         </p>
       </div>
 
