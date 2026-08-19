@@ -89,9 +89,10 @@ fn save_and_read_reject_invalid_presets() {
     assert!(save_inner(&dir, "x", &wrong_kind)
         .unwrap_err()
         .contains("kind"));
-    // Wrong version — 1 and 2 are both accepted (persona→agent role
-    // rename), so this must be a version outside that range.
-    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 3");
+    // Wrong version — 1, 2, and 3 are all accepted (persona→agent role
+    // rename, then the WO03 v3 schema bump), so this must be a version
+    // outside that range.
+    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 4");
     assert!(save_inner(&dir, "x", &wrong_version)
         .unwrap_err()
         .contains("version"));
@@ -111,6 +112,39 @@ fn save_and_read_accept_version_2_presets() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), v2);
     assert_eq!(preset_read(path).unwrap(), v2);
     assert_eq!(list_inner(&dir).unwrap()[0].node_count, 2);
+}
+
+#[test]
+fn preset_v2_is_accepted_and_a_v3_resave_round_trips_cleanly() {
+    // WO03 §7: preset_read/preset_apply auto-upgrade a v2 preset
+    // transparently (never reject it at the version gate) and a re-save at
+    // the new version round-trips cleanly. Rust never re-serializes a
+    // preset — the "auto-upgrade" the frontend performs is: read a v2
+    // preset (this Rust gate must accept it, same as it always has), then
+    // save the upgraded v3 shape (this Rust gate must also accept it, and
+    // store/read it back byte-for-byte).
+    let dir = temp_dir("v2-to-v3");
+
+    let v2 = preset_json("Legacy", 2).replace("\"version\": 1", "\"version\": 2");
+    let read_back = {
+        let path = save_inner(&dir, "Legacy", &v2).unwrap();
+        preset_read(path).unwrap()
+    };
+    assert_eq!(read_back, v2);
+
+    // Simulate the frontend's upgrade: same structure, `version: 3`, one
+    // v3-only node field present (`tags`) to prove v3 content — not just
+    // the bare version number — passes the gate too.
+    let v3 = preset_json("Legacy", 2)
+        .replace("\"version\": 1", "\"version\": 3")
+        .replacen("\"pinned\": false", "\"pinned\": false, \"tags\": [\"a\"]", 1);
+    let path = save_inner(&dir, "Legacy", &v3).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), v3);
+    assert_eq!(preset_read(path.clone()).unwrap(), v3);
+    let list = list_inner(&dir).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].node_count, 2);
+    assert_eq!(list[0].path, path);
 }
 
 #[test]

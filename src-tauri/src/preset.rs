@@ -59,12 +59,16 @@ fn validate_preset(json: &str) -> Result<PresetMeta, String> {
         return Err("Not a Cowtext preset (kind mismatch)".to_string());
     }
     // v1 presets predate the persona→agent role rename; v2 presets may
-    // already carry `role: "agent"` nodes. Both graph shapes deserialize the
-    // same way downstream (compile.rs's `RoleIn` accepts both spellings), so
-    // presets accept either version — the frontend owns the migration.
+    // already carry `role: "agent"` nodes; v3 presets (WO03) may carry the
+    // widened role/edge-kind vocabularies, `tags`/`owner`/`meta`, edge
+    // `color`, and the two new compile targets. All three shapes deserialize
+    // the same way downstream (compile.rs's `RoleIn`/`EdgeKindIn`/`TargetIn`
+    // fall back to `Other`/`Unknown` for anything they don't model) — Rust
+    // just gatekeeps here and stores bytes verbatim; the frontend owns the
+    // actual migration and re-save-at-current-version.
     match v.get("version").and_then(serde_json::Value::as_u64) {
-        Some(1) | Some(2) => {}
-        _ => return Err("Unsupported preset version (expected 1 or 2)".to_string()),
+        Some(1) | Some(2) | Some(3) => {}
+        _ => return Err("Unsupported preset version (expected 1, 2, or 3)".to_string()),
     }
     let nodes = v
         .get("nodes")

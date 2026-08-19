@@ -457,7 +457,10 @@ fn golden_cursor_frontmatter() {
 fn header_present_in_every_output() {
     let dir = temp_project("headers");
     golden_files(&dir);
-    let p = preview(&dir, &golden_graph(&["claude", "agents", "cursor"]));
+    let p = preview(
+        &dir,
+        &golden_graph(&["claude", "agents", "cursor", "copilot", "gemini"]),
+    );
     assert!(p.errors.is_empty());
     assert!(!p.files.is_empty());
     for f in &p.files {
@@ -755,6 +758,386 @@ fn agent_output_requires_context_block_markers_not_generated_header() {
     .unwrap();
     assert_eq!(written, [".claude/agents/x.md"]);
     assert_eq!(fs::read_to_string(dir.join(".claude/agents/x.md")).unwrap(), with_markers);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ── WO03: new compile targets + `overrides`/`supersedes`/`conflicts-with` ──
+
+#[test]
+fn golden_copilot_output() {
+    let dir = temp_project("golden-copilot");
+    golden_files(&dir);
+    let p = preview(&dir, &golden_graph(&["copilot"]));
+    assert!(p.errors.is_empty());
+    assert_eq!(p.files.len(), 1);
+    let f = &p.files[0];
+    assert_eq!(f.rel_path, ".github/copilot-instructions.md");
+    assert_eq!(f.target, "copilot");
+    // Same structure as `agents` (markdown links, not `@path` imports).
+    let golden = format!(
+        "{GENERATED_HEADER}\n\
+         \n\
+         # TestProj — agent context\n\
+         \n\
+         ## Always read\n\
+         \n\
+         - [Persona](context/persona.md)\n\
+         - [Rules](context/rules.md)\n\
+         \n\
+         ## Read when relevant\n\
+         \n\
+         - When working on **Persona**, read [Networking notes](context/net-notes.md).\n\
+         - When touching `src/net/**`, read [Net rules](context/net-rules.md).\n"
+    );
+    assert_eq!(f.new_content, golden);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn golden_gemini_output() {
+    let dir = temp_project("golden-gemini");
+    golden_files(&dir);
+    let p = preview(&dir, &golden_graph(&["gemini"]));
+    assert!(p.errors.is_empty());
+    assert_eq!(p.files.len(), 1);
+    let f = &p.files[0];
+    assert_eq!(f.rel_path, "GEMINI.md");
+    assert_eq!(f.target, "gemini");
+    // Same structure as `claude` (`@path` inline imports).
+    let golden = format!(
+        "{GENERATED_HEADER}\n\
+         \n\
+         # TestProj — agent context\n\
+         \n\
+         ## Always read\n\
+         \n\
+         @context/persona.md\n\
+         @context/rules.md\n\
+         \n\
+         ## Read when relevant\n\
+         \n\
+         - When working on **Persona**, read @context/net-notes.md.\n\
+         - When touching `src/net/**`, read @context/net-rules.md.\n"
+    );
+    assert_eq!(f.new_content, golden);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn all_five_targets_at_once() {
+    let dir = temp_project("all-five");
+    golden_files(&dir);
+    let p = preview(
+        &dir,
+        &golden_graph(&["claude", "agents", "cursor", "copilot", "gemini"]),
+    );
+    assert!(p.errors.is_empty());
+    let by_path: HashMap<&str, &PreviewFile> =
+        p.files.iter().map(|f| (f.rel_path.as_str(), f)).collect();
+    assert!(by_path.contains_key("CLAUDE.md"));
+    assert!(by_path.contains_key("AGENTS.md"));
+    assert!(by_path.contains_key(".github/copilot-instructions.md"));
+    assert!(by_path.contains_key("GEMINI.md"));
+    assert!(by_path.keys().any(|k| k.starts_with(".cursor/rules/")));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn copilot_and_gemini_allowlist_rejects_near_misses() {
+    let dir = temp_project("new-target-write");
+    let root = dir.to_string_lossy().into_owned();
+    let ok = format!("{GENERATED_HEADER}\nbody\n");
+    let af = |rel: &str, content: &str| ApprovedFile {
+        rel_path: rel.to_string(),
+        content: content.to_string(),
+    };
+
+    for bad in [
+        ".github/copilot-instructions.txt",
+        "sub/GEMINI.md",
+        ".github/nested/copilot-instructions.md",
+        "github/copilot-instructions.md",
+        "GEMINI.MD",
+    ] {
+        assert!(
+            compile_write(root.clone(), vec![af(bad, &ok)]).is_err(),
+            "should have rejected {bad}"
+        );
+    }
+
+    let written = compile_write(
+        root.clone(),
+        vec![
+            af(".github/copilot-instructions.md", &ok),
+            af("GEMINI.md", &ok),
+        ],
+    )
+    .unwrap();
+    assert_eq!(written, [".github/copilot-instructions.md", "GEMINI.md"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn overrides_edge_participates_like_imports_in_ordering() {
+    let dir = temp_project("overrides-order");
+    for f in ["a", "b"] {
+        touch(&dir.join(format!("context/{f}.md")), "x\n");
+    }
+    // readOrder a=1, b=2 but "a overrides b" ⇒ b (the overridden node) is
+    // read first — the contract mandates the same direction as `imports`.
+    let g = graph_json(
+        "P",
+        &[
+            node("a", "A", "context/a.md", 1, true),
+            node("b", "B", "context/b.md", 2, true),
+        ],
+        &[edge("e1", "a", "b", "overrides", None)],
+        &["claude"],
+    );
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty());
+    let at_lines: Vec<&str> = p.files[0]
+        .new_content
+        .lines()
+        .filter(|l| l.starts_with('@'))
+        .collect();
+    assert_eq!(at_lines, ["@context/b.md", "@context/a.md"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn overrides_cycle_detected_with_path() {
+    let dir = temp_project("overrides-cycle");
+    touch(&dir.join("context/a.md"), "a\n");
+    touch(&dir.join("context/b.md"), "b\n");
+    let g = graph_json(
+        "P",
+        &[
+            node("a", "A", "context/a.md", 1, true),
+            node("b", "B", "context/b.md", 2, true),
+        ],
+        &[
+            edge("e1", "a", "b", "overrides", None),
+            edge("e2", "b", "a", "overrides", None),
+        ],
+        &["claude"],
+    );
+    let p = preview(&dir, &g);
+    assert!(p.files.is_empty());
+    assert_eq!(p.errors.len(), 1);
+    match &p.errors[0] {
+        ValidationError::Cycle { nodes } => {
+            assert_eq!(nodes.len(), 3);
+            assert_eq!(nodes.first().unwrap().id, nodes.last().unwrap().id);
+        }
+        other => panic!("expected a cycle error, got {other:?}"),
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn mixed_imports_and_overrides_cycle_detected() {
+    // Cycle formed by mixing `imports` and `overrides` edges — both are
+    // structural with the same (target-before-source) direction, so a
+    // cycle spanning both kinds must be caught exactly like a same-kind one.
+    let dir = temp_project("mixed-cycle");
+    touch(&dir.join("context/a.md"), "a\n");
+    touch(&dir.join("context/b.md"), "b\n");
+    let g = graph_json(
+        "P",
+        &[
+            node("a", "A", "context/a.md", 1, true),
+            node("b", "B", "context/b.md", 2, true),
+        ],
+        &[
+            edge("e1", "a", "b", "imports", None),
+            edge("e2", "b", "a", "overrides", None),
+        ],
+        &["claude"],
+    );
+    let p = preview(&dir, &g);
+    assert!(p.files.is_empty());
+    assert_eq!(p.errors.len(), 1);
+    assert!(matches!(p.errors[0], ValidationError::Cycle { .. }));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn supersedes_and_conflicts_with_edges_are_non_structural() {
+    let dir = temp_project("non-structural");
+    for f in ["a", "b"] {
+        touch(&dir.join(format!("context/{f}.md")), "x\n");
+    }
+    // A "cycle" shape built entirely from supersedes + conflicts-with edges
+    // must NOT be reported (they never enter the constraint graph) and must
+    // NOT affect ordering — pure readOrder decides.
+    let g = graph_json(
+        "P",
+        &[
+            node("a", "A", "context/a.md", 1, true),
+            node("b", "B", "context/b.md", 2, true),
+        ],
+        &[
+            edge("e1", "a", "b", "supersedes", None),
+            edge("e2", "b", "a", "conflicts-with", None),
+        ],
+        &["claude"],
+    );
+    let p = preview(&dir, &g);
+    assert!(
+        p.errors.is_empty(),
+        "non-structural edges must not trigger cycle validation: {:?}",
+        p.errors
+    );
+    let at_lines: Vec<&str> = p.files[0]
+        .new_content
+        .lines()
+        .filter(|l| l.starts_with('@'))
+        .collect();
+    assert_eq!(
+        at_lines,
+        ["@context/a.md", "@context/b.md"],
+        "order must follow pure readOrder, unaffected by non-structural edges"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn edge_kind_in_is_structural_matches_project_edge_kind() {
+    // Every recognized wire spelling must delegate to (not re-derive) the
+    // canonical predicate — this is the "go through `is_structural()`"
+    // contract requirement made explicit and independently checkable.
+    let cases: &[(&str, bool)] = &[
+        ("imports", true),
+        ("sequence", true),
+        ("overrides", true),
+        ("references", false),
+        ("conditional", false),
+        ("supersedes", false),
+        ("conflicts-with", false),
+    ];
+    for &(name, expected) in cases {
+        let e: EdgeIn = serde_json::from_value(json!({
+            "id": "e", "source": "a", "target": "b", "kind": name
+        }))
+        .unwrap();
+        assert_eq!(e.kind.is_structural(), expected, "kind = {name}");
+    }
+}
+
+/// The single most important test in this lane: a v3-shaped graph carrying
+/// every new WO03 field (tags/owner/meta on nodes, color on edges, version
+/// 3) that has no *new-variant* data (no `overrides`/`supersedes`/
+/// `conflicts-with` edges, no new roles, no copilot/gemini targets) must
+/// still produce byte-identical `claude`/`agents`/`cursor` output to the
+/// pre-WO03 golden graph — proving the new schema surface doesn't leak into
+/// legacy adapters. `GraphIn`/`NodeIn`/`EdgeIn` simply don't model the new
+/// fields, so they parse and are ignored by construction; this test is the
+/// executable proof of that, pinned against the same literal goldens the
+/// pre-WO03 tests use.
+#[test]
+fn v3_additions_do_not_change_legacy_target_output() {
+    let dir = temp_project("v3-legacy-regression");
+    golden_files(&dir);
+    let g = json!({
+        "version": 3,
+        "projectName": "TestProj",
+        "nodes": [
+            {
+                "id": "a", "title": "Persona", "role": "agent",
+                "filePath": "context/persona.md", "readOrder": 1, "pinned": true,
+                "tags": ["core"], "owner": "marty", "meta": { "k": "v" }
+            },
+            {
+                "id": "b", "title": "Rules", "role": "rules",
+                "filePath": "context/rules.md", "readOrder": 2, "pinned": true
+            },
+            {
+                "id": "c", "title": "Networking notes", "role": "reference",
+                "filePath": "context/net-notes.md", "readOrder": 3, "pinned": false
+            },
+            {
+                "id": "d", "title": "Net rules", "role": "rules",
+                "filePath": "context/net-rules.md", "readOrder": 4, "pinned": false
+            }
+        ],
+        "edges": [
+            { "id": "e1", "source": "a", "target": "c", "kind": "references", "color": "#ff0000" },
+            { "id": "e2", "source": "a", "target": "d", "kind": "conditional", "condition": "src/net/**" }
+        ],
+        "compileTargets": ["claude", "agents", "cursor"]
+    })
+    .to_string();
+    let p = preview(&dir, &g);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    let by_path: HashMap<&str, &PreviewFile> =
+        p.files.iter().map(|f| (f.rel_path.as_str(), f)).collect();
+
+    let golden_claude = format!(
+        "{GENERATED_HEADER}\n\
+         \n\
+         # TestProj — agent context\n\
+         \n\
+         ## Always read\n\
+         \n\
+         @context/persona.md\n\
+         @context/rules.md\n\
+         \n\
+         ## Read when relevant\n\
+         \n\
+         - When working on **Persona**, read @context/net-notes.md.\n\
+         - When touching `src/net/**`, read @context/net-rules.md.\n"
+    );
+    assert_eq!(by_path["CLAUDE.md"].new_content, golden_claude);
+
+    let golden_agents = format!(
+        "{GENERATED_HEADER}\n\
+         \n\
+         # TestProj — agent context\n\
+         \n\
+         ## Always read\n\
+         \n\
+         - [Persona](context/persona.md)\n\
+         - [Rules](context/rules.md)\n\
+         \n\
+         ## Read when relevant\n\
+         \n\
+         - When working on **Persona**, read [Networking notes](context/net-notes.md).\n\
+         - When touching `src/net/**`, read [Net rules](context/net-rules.md).\n"
+    );
+    assert_eq!(by_path["AGENTS.md"].new_content, golden_agents);
+
+    // The clean-folder-glob conditional (`src/net/**`, targeting "d") also
+    // spawns a nested AGENTS.md — same as pre-WO03 (`nested_agents_for_clean_glob`).
+    let golden_nested_agents = format!(
+        "{GENERATED_HEADER}\n\
+         \n\
+         # TestProj — context for src/net\n\
+         \n\
+         - Read [Net rules](../../context/net-rules.md).\n"
+    );
+    assert_eq!(
+        by_path["src/net/AGENTS.md"].new_content,
+        golden_nested_agents
+    );
+
+    assert_eq!(
+        by_path[".cursor/rules/persona.mdc"].new_content,
+        format!("---\ndescription: Persona\nalwaysApply: true\n---\n{GENERATED_HEADER}\n\npersona body\n")
+    );
+    assert_eq!(
+        by_path[".cursor/rules/rules.mdc"].new_content,
+        format!("---\ndescription: Rules\nalwaysApply: true\n---\n{GENERATED_HEADER}\n\nrules body\n")
+    );
+    assert_eq!(
+        by_path[".cursor/rules/net-rules.mdc"].new_content,
+        format!("---\ndescription: Net rules\nglobs: src/net/**\n---\n{GENERATED_HEADER}\n\nnet rules body\n")
+    );
+    // "c" (Networking notes) is only `references`-linked, never pinned nor a
+    // glob target — no cursor rule file, same as before WO03.
+    assert!(!by_path.contains_key(".cursor/rules/net-notes.mdc"));
+    assert_eq!(p.files.len(), 6); // CLAUDE.md, AGENTS.md, nested AGENTS.md, 3× .mdc
+
     let _ = fs::remove_dir_all(&dir);
 }
 

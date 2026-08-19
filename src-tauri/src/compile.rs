@@ -7,14 +7,26 @@
 //!   preview files, never both. Graph problems are data (`Ok` with errors);
 //!   `Err` is reserved for infrastructure failure.
 //! - **Deterministic output**: node order is Kahn's algorithm over the
-//!   `imports`/`sequence` constraint graph with `(readOrder, id)` as the
-//!   ready-set tie-break, so the same graph always compiles to the same bytes.
+//!   `imports`/`sequence`/`overrides` constraint graph (WO03: `overrides` is
+//!   structural, exactly like `imports` — see [`EdgeKindIn::is_structural`],
+//!   which delegates to [`crate::project::EdgeKind::is_structural`] rather
+//!   than re-deriving the split) with `(readOrder, id)` as the ready-set
+//!   tie-break, so the same graph always compiles to the same bytes.
+//!   `references`/`conditional`/`supersedes`/`conflicts-with` never
+//!   participate in ordering or cycle detection.
+//! - **Five compile targets** (WO03): `claude` → `CLAUDE.md`, `agents` →
+//!   root/nested `AGENTS.md`, `cursor` → `.cursor/rules/*.mdc`, `copilot` →
+//!   `.github/copilot-instructions.md`, `gemini` → `GEMINI.md`. All five
+//!   share the same Kahn ordering and GENERATED header requirement; `claude`
+//!   and `gemini` render `@path` inline imports, `agents` and `copilot`
+//!   render plain markdown links (see [`LinkStyle`]).
 //! - **Write allowlist**: `compile_write` only accepts the compile output
 //!   shapes (`CLAUDE.md`, root or nested `AGENTS.md`, `.cursor/rules/*.mdc`,
-//!   one `.md` component under `.claude/agents/`) and only content carrying
-//!   the GENERATED header (agent files: the Cowtext context block markers
-//!   instead — see below) — it must never become a general write primitive,
-//!   even inside the path guard.
+//!   `.github/copilot-instructions.md`, `GEMINI.md`, one `.md` component
+//!   under `.claude/agents/`) and only content carrying the GENERATED header
+//!   (agent files: the Cowtext context block markers instead — see below) —
+//!   it must never become a general write primitive, even inside the path
+//!   guard.
 //! - **Agent context blocks**: independent of `compile_targets` and of the
 //!   claude/agents/cursor adapters. Any node with role `agent` (v1 legacy:
 //!   `persona`) whose own file lives under `.claude/agents/` and has at
@@ -119,6 +131,18 @@ enum EdgeKindIn {
     References,
     Conditional,
     Sequence,
+    /// WO03: structural, exactly like `imports` — see [`EdgeKindIn::is_structural`].
+    Overrides,
+    /// WO03: non-structural, linter-only (`lint.rs`); parses fine here and
+    /// contributes nothing to ordering.
+    Supersedes,
+    /// WO03: non-structural, linter-only; wire spelling is kebab-case
+    /// (mirrors `crate::project::EdgeKind::ConflictsWith`'s
+    /// `rename_all = "kebab-case"`), so this variant needs an explicit
+    /// rename — `#[serde(rename_all = "lowercase")]` alone would produce
+    /// `"conflictswith"`.
+    #[serde(rename = "conflicts-with")]
+    ConflictsWith,
     /// Future edge kinds parse fine and contribute nothing to compile.
     #[serde(other)]
     Unknown,
@@ -131,7 +155,31 @@ impl EdgeKindIn {
             EdgeKindIn::References => "references",
             EdgeKindIn::Conditional => "conditional",
             EdgeKindIn::Sequence => "sequence",
+            EdgeKindIn::Overrides => "overrides",
+            EdgeKindIn::Supersedes => "supersedes",
+            EdgeKindIn::ConflictsWith => "conflicts-with",
             EdgeKindIn::Unknown => "unknown",
+        }
+    }
+
+    /// Whether this edge kind participates in Kahn's algorithm / cycle
+    /// validation / topological ordering. Delegates to
+    /// [`crate::project::EdgeKind::is_structural`] per kind rather than
+    /// re-deriving the structural/non-structural split (WO03 contract) —
+    /// `Unknown` (a forward-compat edge kind this tolerant parser doesn't
+    /// recognize) has no `project::EdgeKind` counterpart and is never
+    /// structural.
+    fn is_structural(self) -> bool {
+        use crate::project::EdgeKind;
+        match self {
+            EdgeKindIn::Imports => EdgeKind::Imports.is_structural(),
+            EdgeKindIn::References => EdgeKind::References.is_structural(),
+            EdgeKindIn::Conditional => EdgeKind::Conditional.is_structural(),
+            EdgeKindIn::Sequence => EdgeKind::Sequence.is_structural(),
+            EdgeKindIn::Overrides => EdgeKind::Overrides.is_structural(),
+            EdgeKindIn::Supersedes => EdgeKind::Supersedes.is_structural(),
+            EdgeKindIn::ConflictsWith => EdgeKind::ConflictsWith.is_structural(),
+            EdgeKindIn::Unknown => false,
         }
     }
 }
@@ -142,6 +190,10 @@ enum TargetIn {
     Claude,
     Agents,
     Cursor,
+    /// WO03: `.github/copilot-instructions.md`, off by default.
+    Copilot,
+    /// WO03: `GEMINI.md` at the project root, off by default.
+    Gemini,
     #[serde(other)]
     Unknown,
 }
@@ -164,7 +216,7 @@ pub struct CompilePreview {
 pub struct PreviewFile {
     /// Forward-slash path relative to project root, e.g. ".cursor/rules/net.mdc".
     pub rel_path: String,
-    /// "claude" | "agents" | "cursor"
+    /// "claude" | "agents" | "cursor" | "copilot" | "gemini" | "agent"
     pub target: String,
     /// None = file does not exist on disk yet.
     pub old_content: Option<String>,
@@ -316,10 +368,18 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
     let wants = |t: TargetIn| graph.compile_targets.contains(&t);
     let mut produced: Vec<(String, &'static str, String)> = Vec::new();
     if wants(TargetIn::Claude) {
-        produced.push(("CLAUDE.md".to_string(), "claude", ctx.emit_root(true)));
+        produced.push((
+            "CLAUDE.md".to_string(),
+            "claude",
+            ctx.emit_root(LinkStyle::AtImport),
+        ));
     }
     if wants(TargetIn::Agents) {
-        produced.push(("AGENTS.md".to_string(), "agents", ctx.emit_root(false)));
+        produced.push((
+            "AGENTS.md".to_string(),
+            "agents",
+            ctx.emit_root(LinkStyle::MarkdownLink),
+        ));
         let mut nested = ctx.emit_nested_agents();
         nested.sort_by(|a, b| a.0.cmp(&b.0));
         for (rel, content) in nested {
@@ -336,6 +396,20 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         for (rel, content) in mdc {
             produced.push((rel, "cursor", content));
         }
+    }
+    if wants(TargetIn::Copilot) {
+        produced.push((
+            ".github/copilot-instructions.md".to_string(),
+            "copilot",
+            ctx.emit_root(LinkStyle::MarkdownLink),
+        ));
+    }
+    if wants(TargetIn::Gemini) {
+        produced.push((
+            "GEMINI.md".to_string(),
+            "gemini",
+            ctx.emit_root(LinkStyle::AtImport),
+        ));
     }
 
     let mut files = Vec::with_capacity(produced.len());
@@ -492,8 +566,12 @@ pub fn compile_write(root: String, files: Vec<ApprovedFile>) -> Result<Vec<Strin
 // ── Ordering + validation helpers ─────────────────────────────────────
 
 /// Kahn's algorithm over the constraint graph: `sequence` says source
-/// before target, `imports` says target before source. The ready set pops
-/// by `(readOrder, id)`, making manual order the tie-break inside what
+/// before target; `imports` and `overrides` (WO03: structural exactly like
+/// `imports` — same direction, per contract) say target before source.
+/// Participation is decided by [`EdgeKindIn::is_structural`], never
+/// re-derived inline — `references`/`conditional`/`supersedes`/
+/// `conflicts-with` never reach the `if` body. The ready set pops by
+/// `(readOrder, id)`, making manual order the tie-break inside what
 /// topology allows. `Err` carries one concrete cycle path, first node
 /// repeated as the last element.
 fn total_order(
@@ -506,12 +584,18 @@ fn total_order(
     let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut pred: Vec<Vec<usize>> = vec![Vec::new(); n];
     for e in edges {
+        if !e.kind.is_structural() {
+            continue;
+        }
         let s = id_to_idx[e.source.as_str()];
         let t = id_to_idx[e.target.as_str()];
-        let (u, v) = match e.kind {
-            EdgeKindIn::Sequence => (s, t),
-            EdgeKindIn::Imports => (t, s),
-            _ => continue,
+        // `is_structural()` narrows `e.kind` to {Sequence, Imports,
+        // Overrides}; Sequence is source-before-target, the other two are
+        // target-before-source.
+        let (u, v) = if e.kind == EdgeKindIn::Sequence {
+            (s, t)
+        } else {
+            (t, s)
         };
         succ[u].push(v);
         pred[v].push(u);
@@ -686,15 +770,21 @@ fn has_header(content: &str) -> bool {
 /// agent-context surgical edit (`Some(true)`) vs a normal fully-generated
 /// file (`Some(false)`) — `None` means refuse. Exactly `CLAUDE.md`, any path
 /// ending in `AGENTS.md`, one component under `.cursor/rules/` with an
-/// `.mdc` extension, or one `.md` component directly under
+/// `.mdc` extension, `.github/copilot-instructions.md` (WO03, that exact
+/// path only — no nested variant), `GEMINI.md` at the project root only
+/// (WO03, no nested variant), or one `.md` component directly under
 /// `.claude/agents/` (no nested subdirectory — `.claude/agents/sub/x.md` is
-/// refused).
+/// refused). A strict allowlist, never a general write primitive — every
+/// new shape is an exact-path or exact-shape match, not a prefix/extension
+/// rule that could accidentally admit a near-miss.
 fn classify_output(rel: &str) -> Option<bool> {
     let norm = rel.replace('\\', "/");
     let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
     match parts.as_slice() {
         [.., "AGENTS.md"] => Some(false),
         ["CLAUDE.md"] => Some(false),
+        ["GEMINI.md"] => Some(false),
+        [".github", "copilot-instructions.md"] => Some(false),
         [".cursor", "rules", name] => name
             .strip_suffix(".mdc")
             .is_some_and(|stem| !stem.is_empty())
@@ -709,6 +799,39 @@ fn classify_output(rel: &str) -> Option<bool> {
 }
 
 // ── Adapters ──────────────────────────────────────────────────────────
+
+/// The two link syntaxes shared by [`Ctx::emit_root`]'s four root-file
+/// adapters (WO03 widens this from a `bool` to name the two families):
+/// `claude` and `gemini` both understand the `@path` inline-import syntax
+/// (Claude Code and Gemini CLI share that context-file protocol); `agents`
+/// and `copilot` are plain markdown with no import mechanism, so they get
+/// ordinary links instead. Adding a `claude`/`gemini`-shaped adapter or an
+/// `agents`/`copilot`-shaped one in the future only needs a new call site,
+/// never a new formatting branch.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkStyle {
+    AtImport,
+    MarkdownLink,
+}
+
+impl LinkStyle {
+    /// A full "always read" list line for this node.
+    fn pinned_line(self, n: &NodeIn) -> String {
+        match self {
+            LinkStyle::AtImport => format!("@{}", n.file_path),
+            LinkStyle::MarkdownLink => format!("- [{}]({})", n.title, n.file_path),
+        }
+    }
+
+    /// Just the reference fragment, for inlining into an
+    /// [`Ctx::on_demand_bullets`] sentence (`"- When X, read {inline_link}."`).
+    fn inline_link(self, n: &NodeIn) -> String {
+        match self {
+            LinkStyle::AtImport => format!("@{}", n.file_path),
+            LinkStyle::MarkdownLink => format!("[{}]({})", n.title, n.file_path),
+        }
+    }
+}
 
 /// Everything the adapters read, built once after validation passes.
 struct Ctx<'a> {
@@ -760,9 +883,10 @@ impl Ctx<'_> {
         items.into_iter().map(|(_, _, text)| text).collect()
     }
 
-    /// Root `CLAUDE.md` (`claude: true`) or root `AGENTS.md` — identical
-    /// structure, `@path` imports vs markdown links.
-    fn emit_root(&self, claude: bool) -> String {
+    /// Root `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md` /
+    /// `GEMINI.md` — identical structure across all four targets, differing
+    /// only in link syntax (`style`, see [`LinkStyle`]).
+    fn emit_root(&self, style: LinkStyle) -> String {
         let mut lines: Vec<String> = vec![
             GENERATED_HEADER.to_string(),
             String::new(),
@@ -773,19 +897,10 @@ impl Ctx<'_> {
             lines.push("## Always read".to_string());
             lines.push(String::new());
             for &i in &self.pinned {
-                let n = &self.nodes[i];
-                lines.push(if claude {
-                    format!("@{}", n.file_path)
-                } else {
-                    format!("- [{}]({})", n.title, n.file_path)
-                });
+                lines.push(style.pinned_line(&self.nodes[i]));
             }
         }
-        let bullets = if claude {
-            self.on_demand_bullets(&|n: &NodeIn| format!("@{}", n.file_path))
-        } else {
-            self.on_demand_bullets(&|n: &NodeIn| format!("[{}]({})", n.title, n.file_path))
-        };
+        let bullets = self.on_demand_bullets(&|n: &NodeIn| style.inline_link(n));
         if !bullets.is_empty() {
             lines.push(String::new());
             lines.push("## Read when relevant".to_string());

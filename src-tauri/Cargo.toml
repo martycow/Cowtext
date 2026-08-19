@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A tool to maintain and visualize context files."
 authors = ["you"]
 edition = "2021"
+default-run = "cowtext"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +14,14 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "cowtext_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# WO03 Lane C: headless CI binary. Never constructs `tauri::Builder`; calls
+# only the plain, non-Tauri-context functions `cowtext_lib` exposes
+# (`project::{read_graph,migrate_graph,serialize_graph}`,
+# `compile::compile_preview`, `lint::lint_graph`).
+[[bin]]
+name = "cowtext-cli"
+path = "src/bin/cowtext_cli.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

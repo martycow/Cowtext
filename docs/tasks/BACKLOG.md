@@ -6,11 +6,11 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 
 | Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| Edge colour persistence | new | medium | edges, graph, wo03 |  | Absorbed into the WO03 graph v2→v3 bump (`color?` on MemoryEdge) alongside tags/owner/meta and the 3 new edge kinds. |
-| Problems list (FEATURES 9.3) | new | high | lint, ui, wo03 |  | Unified Problems payload: cycles, missing files, dangling edges + linter v1 findings (conflict/duplication/stale). WO03 Lane E/F. |
-| Orphan & dead-node lint (FEATURES 2.9) | new | medium | lint, wo03 |  | Structural half in WO03 linter v1; usage-driven half depends on the WO05 heatmap. |
-| Reverse-import (FEATURES 1.6) | new | high | import, moat, wo03, wo04 |  | MVP in WO03 (CLAUDE.md/AGENTS.md/.cursor rules → proposed changeset, never auto-writes); full round-trip incl. copilot/gemini parse-back in WO04. |
-| cowtext-cli compile --check | new | high | ci, cli, wo03 |  | Second cargo binary; exit 1 on graph↔output drift; `lint` subcommand; `--json`. GitHub Action wrapper lands WO04. |
+| Edge colour persistence | done | medium | edges, graph, wo03 |  | Absorbed into the WO03 graph v2→v3 bump (`color?` on MemoryEdge) alongside tags/owner/meta and the 3 new edge kinds. Delivered 2026-08-19. |
+| Problems list (FEATURES 9.3) | done | high | lint, ui, wo03 |  | Unified Problems payload: cycles, missing files, dangling edges + linter v1 findings (conflict/duplication/stale). WO03 Lane E/F. Delivered 2026-08-19. |
+| Orphan & dead-node lint (FEATURES 2.9) | done | medium | lint, wo03 |  | Structural half in WO03 linter v1 (cycles, missing, dangling, conflicts); usage-driven half depends on the WO05 heatmap. Delivered 2026-08-19. |
+| Reverse-import (FEATURES 1.6) | done | high | import, moat, wo03, wo04 |  | MVP in WO03 (CLAUDE.md/AGENTS.md/.cursor rules → proposed changeset, never auto-writes); full round-trip incl. copilot/gemini parse-back in WO04. Delivered 2026-08-19. |
+| cowtext-cli compile --check | done | high | ci, cli, wo03 |  | Second cargo binary; exit 1 on graph↔output drift; `lint` subcommand; `--json`. GitHub Action wrapper lands WO04. Delivered 2026-08-19. |
 | Hierarchy simulator | new | high | compile, wo04 |  | Global `~/.claude/CLAUDE.md` → project → directory nearest-file-wins preview per path. Deck L1; absorbs FEATURES 1.10. |
 | Windows-safe symlink manager | new | high | compile, windows, wo04 |  | AGENTS.md master pattern via junction/hardlink/copy fallback ladder; never a broken symlink on NTFS. Deck L1. |
 | SKILL.md frontmatter compile target | new | medium | compile, skills, wo04 |  | Sixth target: skill nodes compile to `.claude/skills/*/SKILL.md` frontmatter shape. Deck L1. |
@@ -19,7 +19,7 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 | Context loadouts | new | medium | profiles, compile, wo04 |  | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides. |
 | Preset starter packs per stack (FEATURES 8.6) | new | medium | presets, wo04 |  | Built-in starter set: Rust, Tauri, Next.js, Python packs. |
 | Branch-aware graph | new | high | git, branches, wo04 |  | Watch .git/HEAD per project; reload graph on checkout; warn via GENERATED header hash on branch mismatch. |
-| graph.json schema migration discipline | new | medium | data-model, persistence, wo03 |  | Standing rule: any schema change bumps version and adds migration. Exercised by the WO03 v2→v3 bump. |
+| graph.json schema migration discipline | done | medium | data-model, persistence, wo03 |  | Standing rule: any schema change bumps version and adds migration. Exercised by the WO03 v2→v3 bump. Delivered 2026-08-19. |
 
 ## L4 — Observability + barn (WO05)
 
@@ -81,6 +81,24 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 | Context packages | new | medium | teams, sharing, versioning, wo08 |  | Export subgraph as versioned package; imports render locked with approval-gated diffs. |
 | Cowtext as a plugin | new | medium | distribution, hooks, wo08 |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
 | Barn Raising | new | high | progression, retention, barn, wo08 |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
+
+## Observations from WO03 audit (2026-08-19) — backlog, no fix round
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| O1: Barn roles 7→13 visual collision (rules/invariant/trap all straw) | new | low | barn, palette, wo05 |  | Three of the 13 new roles render as identical straw cabinets because `ROLE_ACCENT` only has 7 entries. Decision: defer until real-sprites work (WO05); user identifies on canvas where all roles have distinct glyphs. Backlog row: revisit palette.ts when WO05 opens. |
+| O2: Only `agent` role changes compiled output; others are metadata | new | medium | compiler, moat, wo04 |  | The 12 new roles change zero bytes in any of the 5 compile targets. This is a valid design (one cheap string field, TS compiler enforces completeness) but the "richer taxonomy = moat" claim is unearned. Honest framing for v0.1.0: 13 roles organize *your* graph. Moat arrives when role changes output (role-grouped sections, role-filtered subgraph). Work: WO04+. |
+| O3: Missing `duplicate-id` lint code | new | low | lint, integrity |  | Duplicate node ids silently tolerated by compile/lint. Low reachability but it is one missing graph-integrity check. Three-line fix for linter. |
+| O4: `import_apply` accepts any file path inside root | new | low | import, defense, security |  | Changeset can point nodes at non-.md or protected files. D2's fix should add `is_rename_protected` / non-.md refusal; this closes with it. |
+| O5: Lane G docs obligations (WO03_AUDIT §3, ratified deviations) | new | medium | docs, wo03 |  | TERMINOLOGY.md counts/roles/edge kinds/version were pre-WO03. Plus the normative rules in §4 (overrides edge direction = target-before-source; effective_pinned excludes overrides). Updated 2026-08-19. |
+
+## Carried forward from WO03 audit (tech-lead consolidation questions)
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Consolidate three cycle validators | new | medium | lint, compile, refactor |  | Three independent re-derivations exist: `lint.rs`, `import.rs::is_compile_output_path`, `compile.rs`. Tech-lead decision: shared module vs per-module copies. Cheap to keep; expensive to change. Audit §9 ratified duplication; no test pins them yet. |
+| Unknown enum round-trip preservation | new | low | import, lint, coercion |  | D6 follow-up: unknown role/edge/target values are coerced silently, not preserved. `import.rs`/`lint.rs` need wildcard `#[serde(other)]` arms to round-trip unknown values through changeset and lint cycle. |
+| JS byte-order sort fix unpaired | new | low | test, graph.json |  | D5 fix (TS graph.json serializer now byte-orders like Rust) has no JS-side test because no frontend test runner exists yet. Covered by empirical round-trip checks. |
 
 ## Unscheduled
 

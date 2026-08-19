@@ -5,6 +5,11 @@ $rel = ($p -replace '\\','/')
 if ($rel -notmatch '\.md$') { exit 0 }
 if ((Split-Path $p -Leaf) -in @('CLAUDE.md','README.md')) { exit 0 }
 
+# Agent memory is fleet infrastructure, not project documentation - the docs/ rule
+# was never meant to police it. Without this, every agent that saves a memory note
+# hits a wall and is nudged into tunnelling the write through Bash (WO03 Lane B).
+if ($rel -match '/\.claude/agent-memory/') { exit 0 }
+
 if ($rel -match '/docs/_archive/') {
   [Console]::Error.WriteLine("Blocked: docs/_archive/ is frozen.")
   exit 2

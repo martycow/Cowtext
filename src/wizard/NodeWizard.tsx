@@ -10,7 +10,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Download, FolderInput, Sparkles, X } from "lucide-react";
 import {
   GRAPH_VERSION,
-  NODE_ROLES,
   isRenameProtected,
   serializeGraph,
   useGraphStore,
@@ -19,7 +18,7 @@ import {
 } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
-import { ROLE_DESCRIPTIONS } from "../canvas/roleMeta";
+import { ROLE_DESCRIPTIONS, ROLE_GROUPS } from "../canvas/roleMeta";
 import { assembleNode } from "../assemble/api";
 import { dedupePath, joinDirFile, normalizeDir, normalizeFileName, slugForFile } from "./paths";
 import { buildRoleSkeleton } from "./roleSkeleton";
@@ -36,6 +35,8 @@ const TARGET_LABEL: Record<CompileTarget, string> = {
   claude: "claude",
   agents: "agents",
   cursor: "cursor",
+  copilot: "copilot",
+  gemini: "gemini",
 };
 
 const SECONDARY_BTN =
@@ -119,32 +120,47 @@ function StepDots({
   );
 }
 
+/** 13 roles, grouped (WO03 — a flat grid stopped scanning well past ~7).
+ *  ROLE_GROUPS (canvas/roleMeta.ts) is the single taxonomy shared with the
+ *  Inspector's RoleField popup, so the two surfaces never drift apart. */
 function RolePicker({ role, onChange }: { role: NodeRole; onChange: (r: NodeRole) => void }) {
   return (
-    <div className="grid grid-cols-4 gap-2">
-      {NODE_ROLES.map((r) => {
-        const active = r === role;
-        return (
-          <button
-            key={r}
-            type="button"
-            onClick={() => onChange(r)}
-            aria-pressed={active}
-            className={`flex flex-col items-start gap-1 rounded border p-2 text-left transition-colors duration-fast ${
-              active ? "bg-surface-3" : "border-border bg-surface-2 hover:border-border-strong"
-            }`}
-            style={active ? { borderColor: roleVar(r) } : undefined}
-          >
-            <span className="flex items-center gap-1.5" style={{ color: roleVar(r) }}>
-              <RoleGlyph role={r} size={13} />
-              <span className="font-mono text-2xs uppercase tracking-wider">{r}</span>
-            </span>
-            <span className="truncate text-2xs leading-snug text-content-secondary" title={ROLE_DESCRIPTIONS[r]}>
-              {ROLE_DESCRIPTIONS[r]}
-            </span>
-          </button>
-        );
-      })}
+    <div className="flex flex-col gap-3">
+      {ROLE_GROUPS.map((group) => (
+        <div key={group.label}>
+          <div className="mb-1 font-mono text-2xs uppercase tracking-wider text-content-muted">
+            {group.label}
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {group.roles.map((r) => {
+              const active = r === role;
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => onChange(r)}
+                  aria-pressed={active}
+                  className={`flex flex-col items-start gap-1 rounded border p-2 text-left transition-colors duration-fast ${
+                    active ? "bg-surface-3" : "border-border bg-surface-2 hover:border-border-strong"
+                  }`}
+                  style={active ? { borderColor: roleVar(r) } : undefined}
+                >
+                  <span className="flex items-center gap-1.5" style={{ color: roleVar(r) }}>
+                    <RoleGlyph role={r} size={13} />
+                    <span className="font-mono text-2xs uppercase tracking-wider">{r}</span>
+                  </span>
+                  <span
+                    className="truncate text-2xs leading-snug text-content-secondary"
+                    title={ROLE_DESCRIPTIONS[r]}
+                  >
+                    {ROLE_DESCRIPTIONS[r]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

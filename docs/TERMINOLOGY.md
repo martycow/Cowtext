@@ -8,10 +8,13 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (51) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (54) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
+| `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
-| `src-tauri/src/compile.rs` | Three adapters (claude/agents/cursor), validation, topological order, write allowlist |
+| `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
+| `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
+| `src-tauri/src/lint.rs` | Linter v1: cycles, duplication, stale (lastVerified), conflict via explicit edges; reports as Problems |
 | `src-tauri/src/assemble.rs` | `claude -p` queue (FIFO, max 2), Runner trait seam, `set_claude_override` |
 | `src-tauri/src/hooks.rs` | Hooks preview/write into user `.claude/settings.json` (trust boundary) |
 | `src-tauri/src/hooks_server.rs` | axum on `127.0.0.1:4923`, `POST /event` → `BarnEvent` → emit |
@@ -30,7 +33,7 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (51)
+## Invoke commands (54)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -40,6 +43,8 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
 | agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
 | compile | `compile_preview`, `compile_write` |
+| import | `import_scan`, `import_apply` |
+| lint | `lint_run` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
 | settings | `read_app_settings`, `write_app_settings` |
@@ -73,13 +78,13 @@ React Flow and PixiJS never import each other.
 | Named Calf | Subagent sprite in the barn with stable identity across sessions via fnv1a32 hash of sessionId + ordinal, displaying unique coat pattern + accent role + tiny prop |
 | Roster bar | Bottom strip showing all live agent sessions (avatars, names, status dots, current tool); click a card to open agent panel with transcript stream and real token usage |
 | Identity hash | fnv1a32(seed) → avatar patch grid (8×8 mirrored), accent role (7 options via h2 % 7), calf patch bits (2–7 via popcount), visual identity tied to agent/calf name/type |
-| Node role | One of seven: `agent` (ex-`persona`; may be backed by `.claude/agents/*.md`), `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary` |
-| Edge kinds | `imports` (inline), `references` (soft link), `conditional` (glob/NL condition), `sequence` (order only) |
-| Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure |
+| Node role | One of 13: `agent`, `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary`, `command`, `invariant`, `trap`, `skill`, `snippet`, `style` |
+| Edge kinds | **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `conditional` (glob/NL condition), `supersedes`, `conflicts-with` |
+| Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure — **excludes `overrides`** (affects compile order, not pinned set) |
 | readOrder | Manual tie-break inside topological order (Kahn, pops by `(readOrder, id)`) |
-| BarnGraph | `graph.json` shape: `version: 2` (v1→v2 migration = persona→agent; v3 planned in WO03), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
-| Compile | One graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc`; never writes without diff-preview approval |
-| Compile target | `"claude" \| "agents" \| "cursor"` in `graph.json`; cursor off by default |
+| BarnGraph | `graph.json` shape: `version: 3` (v1→v2 = persona→agent; v2→v3 = roles 7→13, edges 4→7, tags/owner/meta, edge color), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
+| Compile | One graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` / `GEMINI.md`; never writes without diff-preview approval |
+| Compile target | `"claude" | "agents" | "cursor" | "copilot" | "gemini"` in `graph.json`; cursor/copilot/gemini off by default |
 | GENERATED header | First line of every compiled file; absence marks a file handwritten; `compile_write` refuses content without it |
 | Write allowlist | `compile_write` accepts only compile-output shapes — never a general write primitive |
 | Errors XOR files | `compile_preview` returns validation errors or preview files, never both |

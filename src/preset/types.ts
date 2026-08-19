@@ -36,6 +36,10 @@ export interface PresetNode {
   pinned: boolean;
   position: { x: number; y: number };
   scenePos?: { tx: number; ty: number };
+  /** v3 (WO03) — carried through so a saved preset round-trips a v3 graph's
+   *  metadata; absent on presets saved before this landed. */
+  tags?: string[];
+  owner?: string;
 }
 
 export interface PresetEdge {
@@ -45,10 +49,21 @@ export interface PresetEdge {
   kind: EdgeKind;
   condition?: string;
   note?: string;
+  /** v3 (WO03) — edge colour override, see MemoryEdge.color. */
+  color?: string;
 }
 
+/** Preset format version. The Rust side (preset.rs) now accepts and
+ *  auto-upgrades presets saved at 1, 2, or 3 (contract WO03 §"Graph v3
+ *  schema": "Preset format bumps in lockstep; preset_read/preset_apply
+ *  auto-upgrade v2 presets") — a bare `1` literal here rejected a valid v2/
+ *  v3 preset client-side before Rust ever saw it. `buildPreset` always
+ *  writes the CURRENT version; `parsePreset` accepts any version in range. */
+export type PresetVersion = 1 | 2 | 3;
+export const PRESET_VERSION: PresetVersion = 3;
+
 export interface CowtextPreset {
-  version: 1;
+  version: PresetVersion;
   kind: "cowtext-preset";
   name: string;
   savedAt: string;
@@ -65,7 +80,7 @@ export interface CowtextPreset {
 export function buildPreset(name: string): string {
   const s = useGraphStore.getState();
   const preset: CowtextPreset = {
-    version: 1,
+    version: PRESET_VERSION,
     kind: "cowtext-preset",
     name,
     savedAt: new Date().toISOString(),
@@ -83,6 +98,8 @@ export function buildPreset(name: string): string {
         ...(n.scenePos !== undefined
           ? { scenePos: { tx: n.scenePos.tx, ty: n.scenePos.ty } }
           : {}),
+        ...(n.tags !== undefined && n.tags.length > 0 ? { tags: [...n.tags] } : {}),
+        ...(n.owner !== undefined && n.owner !== "" ? { owner: n.owner } : {}),
       })),
     edges: [...s.edges]
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -93,6 +110,7 @@ export function buildPreset(name: string): string {
         kind: e.kind,
         ...(e.condition !== undefined && e.condition !== "" ? { condition: e.condition } : {}),
         ...(e.note !== undefined && e.note !== "" ? { note: e.note } : {}),
+        ...(e.color !== undefined && e.color !== "" ? { color: e.color } : {}),
       })),
     compileTargets: s.compileTargets,
   };
@@ -123,8 +141,13 @@ export function parsePreset(json: string): CowtextPreset {
     throw new Error("Preset is not an object");
   }
   const p = raw as Record<string, unknown>;
-  if (p.kind !== "cowtext-preset" || p.version !== 1) {
-    throw new Error("Not a version-1 Cowtext preset");
+  if (
+    p.kind !== "cowtext-preset" ||
+    typeof p.version !== "number" ||
+    p.version < 1 ||
+    p.version > PRESET_VERSION
+  ) {
+    throw new Error("Not a Cowtext preset in a supported version");
   }
   if (!Array.isArray(p.nodes) || !Array.isArray(p.edges)) {
     throw new Error("Preset is missing nodes/edges arrays");
@@ -160,6 +183,12 @@ export function parsePreset(json: string): CowtextPreset {
       ...(scene !== null && typeof scene.tx === "number" && typeof scene.ty === "number"
         ? { scenePos: { tx: scene.tx, ty: scene.ty } }
         : {}),
+      // v3 (WO03) — absent on v1/v2 presets, which is exactly "no tags"/
+      // "no owner" (same optional-field convention as the graph store).
+      ...(Array.isArray(n.tags) && n.tags.length > 0
+        ? { tags: n.tags.filter((t): t is string => typeof t === "string") }
+        : {}),
+      ...(typeof n.owner === "string" && n.owner !== "" ? { owner: n.owner } : {}),
     };
   });
   const ids = new Set(nodes.map((n) => n.id));
@@ -175,17 +204,21 @@ export function parsePreset(json: string): CowtextPreset {
           ? { condition: e.condition }
           : {}),
         ...(typeof e.note === "string" && e.note !== "" ? { note: e.note } : {}),
+        ...(typeof e.color === "string" && e.color !== "" ? { color: e.color } : {}),
       };
     })
     // Dangling edges would fail compile validation later — drop them here.
     .filter((e) => ids.has(e.source) && ids.has(e.target));
   const targets: CompileTarget[] = Array.isArray(p.compileTargets)
-    ? (["claude", "agents", "cursor"] as const).filter((t) =>
+    ? (["claude", "agents", "cursor", "copilot", "gemini"] as const).filter((t) =>
         (p.compileTargets as unknown[]).includes(t),
       )
     : ["claude"];
   return {
-    version: 1,
+    // Auto-upgrade on read (contract WO03 §"Graph v3 schema"): a v1/v2
+    // preset parses straight into the current shape — every new field is
+    // optional, so there is no migration step beyond stamping the version.
+    version: PRESET_VERSION,
     kind: "cowtext-preset",
     name: str(p.name),
     savedAt: str(p.savedAt),

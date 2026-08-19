@@ -1,12 +1,24 @@
 mod agents;
 mod assemble;
-mod compile;
+// `compile`/`import`/`lint`/`project` are `pub`: the `cowtext-cli` binary
+// (WO03 Lane C, src/bin/cowtext_cli.rs) is a separate crate target that
+// links against this one as a library (`cowtext_lib`) — a private `mod`
+// here makes its `pub fn`s invisible outside this crate root (E0603), so
+// each module that a non-GUI consumer needs to call must be re-exported at
+// this level too. `import` joins the other three non-GUI-callable modules
+// for symmetry: `project.rs`'s own module doc already names `import.rs`
+// alongside `compile.rs`/`lint.rs`/`cowtext-cli` as the four peer
+// consumers of the shared graph model, so a future `cowtext-cli import`
+// subcommand should not need a second lib.rs visibility pass to unlock it.
+pub mod compile;
 mod frontmatter;
 mod handoff;
 mod hooks;
 mod hooks_server;
+pub mod import;
+pub mod lint;
 mod preset;
-mod project;
+pub mod project;
 mod sessions;
 mod settings;
 mod tasks;
@@ -85,7 +97,10 @@ pub fn run() {
             sessions::agent_session_send,
             sessions::agent_session_kill,
             sessions::agent_session_restart,
-            sessions::agent_session_list
+            sessions::agent_session_list,
+            lint::lint_run,
+            import::import_scan,
+            import::import_apply
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

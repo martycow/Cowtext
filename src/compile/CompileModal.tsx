@@ -22,7 +22,15 @@ import type { CompilePreview, PreviewFile, ValidationError } from "./types";
 
 type Phase = "loading" | "errors" | "preview" | "writing" | "done" | "failed";
 
-const ALL_TARGETS: readonly CompileTarget[] = ["claude", "agents", "cursor"];
+// v3 (WO03): copilot/gemini are new targets, OFF by default (the store's
+// initial `compileTargets` stays `["claude"]` — see store/graph.ts).
+const ALL_TARGETS: readonly CompileTarget[] = [
+  "claude",
+  "agents",
+  "cursor",
+  "copilot",
+  "gemini",
+];
 
 /** The single top-level file each adapter treats as "the" budget gate.
  *  Cursor has no analogous root — its output is a set of `.mdc` rule files —
@@ -30,6 +38,8 @@ const ALL_TARGETS: readonly CompileTarget[] = ["claude", "agents", "cursor"];
 const ROOT_FILE: Partial<Record<CompileTarget, string>> = {
   claude: "CLAUDE.md",
   agents: "AGENTS.md",
+  copilot: ".github/copilot-instructions.md",
+  gemini: "GEMINI.md",
 };
 
 interface TargetBudget {

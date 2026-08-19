@@ -4,14 +4,19 @@ Active and recently completed work items. v2 replan 2026-08-19: v0.1.0 cut re-ba
 
 All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 2026-08-19 (103ac80). Current work: acceptance walks + WO03 dispatch.
 
-## Open — toward v2 / WO03
+## Open — toward v2 / WO03+
 
 | Name | Status | Priority | Tags | Agent | Created | Description |
 |---|---|---|---|---|---|---|
 | WO01 full acceptance walk (manual sections A-F + N) | new | high | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps. Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
 | WO02 acceptance walk (manual A-H, 61 steps) | new | high | wo02, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO02_TEST_MANUAL.md. WO02 committed as 103ac80; gates green. |
-| Dispatch WO03 — L1 moat hardening | new | critical | wo03, ultracode, compiler |  | 2026-08-19 | /ultracode dispatch per docs/design/WO03_CONTRACT.md: graph v3, copilot+gemini targets, cowtext-cli, importer MVP, linter v1. Landing = v0.1.0 cut. |
-| CSP runtime check under production build | new | medium | wo03, csp, qa |  | 2026-08-17 | Re-based: folded into the WO03 test manual as one step. Run `npm run tauri build`; verify invokes, SFX, fonts, Barn render, no CSP refusals. |
+| WO03 acceptance walk (manual A-H, 583 lines incl. CSP production-build step) | new | critical | wo03, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO03_TEST_MANUAL.md: 71 steps A–H including CSP production-build verification (replaced old v0.1.0 gate). All 14 defects fixed; audit observations recorded. Gates re-run green. |
+
+## Done — WO03 dispatch (2026-08-19)
+
+| Name | Status | Priority | Tags | Agent | Created | Description |
+|---|---|---|---|---|---|---|
+| Dispatch WO03 — L1 moat hardening | done | critical | wo03, ultracode, compiler |  | 2026-08-19 | /ultracode dispatch per docs/design/WO03_CONTRACT.md: 7 lanes A–G all delivered. Graph v3 (roles 7→13, edges 4→7, tags/owner/meta/color), compile targets 3→5, cowtext-cli, importer MVP, linter v1. Invoke 51→54. 14 defects found/fixed (2 CRITICAL + 2 not-in-audit). Manual written: 71 steps A–H. Awaiting acceptance walk. |
 
 ## Done — acceptance walks (2026-08-18)
 

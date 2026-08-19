@@ -1,6 +1,6 @@
 ---
 name: cowtext-terminology
-description: Canonical Cowtext vocabulary — module map, the 51 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
+description: Canonical Cowtext vocabulary — module map, the 54 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
 ---
 
 # Cowtext canonical terminology
@@ -13,9 +13,11 @@ synonyms for existing terms.
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (51) |
+| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (54) |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root` |
-| `src-tauri/src/compile.rs` | claude/agents/cursor adapters, validation, topological order, write allowlist |
+| `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
+| `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
+| `src-tauri/src/lint.rs` | Linter v1: cycles, duplication, stale (lastVerified), conflict via explicit edges; reports as Problems |
 | `src-tauri/src/assemble.rs` | `claude -p` queue (FIFO, max 2), Runner trait, `set_claude_override` |
 | `src-tauri/src/hooks.rs` + `hooks_server.rs` | Hooks trust boundary; axum on `127.0.0.1:4923` |
 | `src-tauri/src/settings.rs`, `preset.rs`, `handoff.rs` | App settings, presets (never-clobber), `HANDOFF.md` |
@@ -24,10 +26,12 @@ synonyms for existing terms.
 | `src/scene/` | Pixi barn + `sfx.ts` (howler confined here) |
 | `src/settings/`, `src/preset/`, `src/handoff/` | SettingsModal, preset & handoff UI |
 
-## Invoke commands (51) — byte-exact names
+## Invoke commands (54) — byte-exact names
 
 project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs`
 · compile: `compile_preview`, `compile_write`
+· import: `import_scan`, `import_apply`
+· lint: `lint_run`
 · assemble: `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel`
 · hooks: `hooks_preview`, `hooks_write`, `hooks_status`
 · settings: `read_app_settings`, `write_app_settings`
@@ -47,26 +51,24 @@ name). camelCase in JS ⇄ snake_case in Rust.
   → `useEventsStore.pushEvent` → canvas pulse + barn.
 - `assemble://status` — `AssembleProgress { nodeId, mode, status, error }`: assemble.rs
   → emit → `useGraphStore.setAssembleStatus`.
+- `fs://change` — `FsChange { relPath, modifiedMs, sizeBytes, kind }`: watcher → emit
+  → `useProjectStore.applyFsChange` → lens updates.
+- `agent://event` — `{ id, kind, status?, tool?, text?, usage?, ts }`: sessions.rs
+  → emit → event stream, inspector transcript, status badges.
 - One-way pipeline: Rust emits → store → both views react. React Flow and PixiJS
   never import each other.
 
 ## Canon terms (use exactly these)
 
 - **Memory Node** — graph node backed by a real `.md` file; the file on disk is the
-  content source of truth. Roles: `persona`, `rules`, `architecture`, `workflow`,
-  `task`, `reference`, `glossary`.
-- **Edge kinds** — `imports` (inline), `references` (soft link), `conditional`
-  (glob/NL condition), `sequence` (ordering only).
+  content source of truth. Roles: `agent`, `rules`, `architecture`, `workflow`,
+  `task`, `reference`, `glossary`, `command`, `invariant`, `trap`, `skill`, `snippet`, `style`.
+- **Edge kinds** — **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `conditional` (glob/NL condition), `supersedes`, `conflicts-with`.
 - **Pinned / effective-pinned** — always-in-context flag; effective set = pinned +
-  transitive `imports` closure. **readOrder** — manual tie-break inside Kahn's
-  topological order, pops by `(readOrder, id)`.
-- **BarnGraph** — `graph.json` shape (`version: 1`); any schema change bumps
-  `version` and adds a migration.
-- **Compile** — one graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc`; never
-  writes without diff-preview approval. **GENERATED header** — line 1 of every
-  compiled file; its absence marks a file handwritten. **Write allowlist** —
-  `compile_write` accepts only compile-output shapes. **Errors XOR files** —
-  `compile_preview` returns validation errors or preview files, never both.
+  transitive `imports` closure — **excludes `overrides`** (affects order, not pinned).
+- **readOrder** — manual tie-break inside Kahn's topological order, pops by `(readOrder, id)`.
+- **BarnGraph** — `graph.json` shape (`version: 3`); v2→v3 adds roles 7→13, edges 4→7, tags/owner/meta/color; any schema change bumps `version` and adds a migration.
+- **Compile** — one graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` / `GEMINI.md`; never writes without diff-preview approval. **GENERATED header** — line 1 of every compiled file; its absence marks a file handwritten. **Write allowlist** — `compile_write` accepts only compile-output shapes. **Errors XOR files** — `compile_preview` returns validation errors or preview files, never both.
 - **Assemble / Refine / Summarize** — brief → full file via headless `claude -p`
   (stdin prompt, `--output-format json`).
 - **Trust boundary** — any write into a user project's `.claude/settings.json`;

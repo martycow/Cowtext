@@ -19,7 +19,7 @@ Sequencing principles: L1 excellent before L2; proof layer (heatmap + drift) bef
 
 | Name | Status | Priority | Tags | Agent | When | Description |
 |---|---|---|---|---|---|---|
-| WO03 — L1 moat hardening | new | critical | wo03, l1, compiler |  | next | Graph v3 (12 roles, 7 edge kinds, tags/owner/meta, edge color), copilot + gemini compile targets, cowtext-cli compile --check, importer MVP, linter v1. Contract: docs/design/WO03_CONTRACT.md. Landing = v0.1.0 cut. |
+| WO03 — L1 moat hardening | done | critical | wo03, l1, compiler |  | 2026-08-19 | Graph v3 (13 roles, 7 edge kinds, tags/owner/meta, edge color), copilot + gemini compile targets, cowtext-cli compile --check, importer MVP, linter v1. 7 lanes delivered; 14 defects found/fixed (2 CRITICAL); audit 5 OBSERVATIONS. Awaiting Marty's acceptance walk. |
 | WO04 — L1 completion | new | high | wo04, l1, compiler |  | after WO03 | Hierarchy simulator (nearest-file-wins), Windows-safe symlink manager, SKILL.md target, full round-trip import, resolved-context preview, context loadouts, preset starter packs, GitHub Action, branch-aware graph. |
 | WO05 — L4 proof layer + barn | new | high | wo05, l4, heatmap, barn |  | after WO04 | Event persistence + usage heatmap (read-event lens), Reality Check drift lint, dead-node report, dust/cobwebs, session history, quota tracker, unmapped-read adopt, cowtext-hook shim (cut-line), sprites integration + GIF export + moo notification. |
 | WO06 — L2 orchestrator | new | high | wo06, l2, sessions |  | after WO05 | Task DAG, tasklinks sidecar (task↔node↔session), per-task subgraph injection + compile-on-launch, token ceilings with atomic hard-stop, session-to-node attribution, handoff→node, O1/O2/O3 fixes, barn mission control. |

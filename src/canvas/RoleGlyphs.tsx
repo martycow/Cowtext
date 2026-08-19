@@ -84,6 +84,73 @@ const PIXELS: Record<NodeRole, readonly string[]> = {
     "........",
     "###.....",
   ],
+  // v3 (WO03) — six more glyphs, same 8×8 hand-authored style.
+  // Prompt chevron + cursor bar — a command to run.
+  command: [
+    "........",
+    "..#.....",
+    "...#....",
+    "....#...",
+    "...#....",
+    "..#.....",
+    "........",
+    ".#####..",
+  ],
+  // Padlock — a fact that must stay locked/true.
+  invariant: [
+    "..####..",
+    "..#..#..",
+    "..#..#..",
+    ".######.",
+    ".######.",
+    ".######.",
+    ".######.",
+    ".######.",
+  ],
+  // Hollow hazard diamond — a known gotcha.
+  trap: [
+    "...##...",
+    "..#..#..",
+    ".#....#.",
+    "#......#",
+    "#......#",
+    ".#....#.",
+    "..#..#..",
+    "...##...",
+  ],
+  // Starburst badge — a learned capability.
+  skill: [
+    "...##...",
+    "...##...",
+    "..####..",
+    "########",
+    ".######.",
+    "..####..",
+    ".##..##.",
+    "##....##",
+  ],
+  // Hollow brackets — a reusable fragment.
+  snippet: [
+    "##....##",
+    "#......#",
+    "#......#",
+    "#......#",
+    "#......#",
+    "#......#",
+    "#......#",
+    "##....##",
+  ],
+  // Diagonal brush stroke — voice and formatting.
+  style: [
+    "......##",
+    ".....##.",
+    "....##..",
+    "...##...",
+    "..##....",
+    ".####...",
+    "####....",
+    "##......",
+  ],
 };
 
 function toPath(rows: readonly string[]): string {

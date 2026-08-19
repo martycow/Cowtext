@@ -14,7 +14,9 @@
 mod tests;
 
 use crate::watcher::note_self_write;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -259,6 +261,418 @@ pub(crate) fn checked_root(root: &str) -> Result<PathBuf, String> {
     }
     Ok(root_path)
 }
+
+// WO03 Lane A infrastructure: this schema/migration/serialization surface
+// has no caller yet inside this crate — it exists for Lanes B (compile.rs),
+// C (cowtext-cli), D (import.rs), and E (lint.rs) to consume once their
+// modules land (none of which are this lane's to touch or pre-wire). Until
+// then it is exercised only by this module's own tests, so the plain
+// (non-`--tests`) `cargo clippy -- -D warnings` gate sees it as dead code.
+// The allow is scoped to this submodule only, re-exported flat below so
+// callers still see `crate::project::MemoryNode` etc.
+#[allow(dead_code)]
+mod graph_v3 {
+    use super::*;
+
+    // ── Graph v3 schema (WO03) ──────────────────────────────────────────
+    // Canonical Rust model of `graph.json`, for Rust-only consumers that never
+    // go through the webview — the CLI (`cowtext-cli`, WO03 Lane C), importer
+    // (`import.rs`, Lane D), and linter (`lint.rs`, Lane E). `read_graph` /
+    // `write_graph` below stay raw string pass-through: `src/store/graph.ts`
+    // still owns serialization for the live app; this model mirrors it
+    // field-for-field (same names, same wire order, same default-omission
+    // rules) so the two never drift.
+    //
+    // Schema history: v1's node role `persona` was renamed to `agent` in v2
+    // (same semantics — an agent-role node may be backed by a real
+    // `.claude/agents/*.md` file). v3 (WO03) widens the node role and edge
+    // kind vocabularies and adds `tags` / `owner` / `meta` to nodes, `color`
+    // to edges, and two new compile targets (`copilot`, `gemini`).
+
+    /// Current `graph.json` schema version. Bumping this needs a migration
+    /// step in [`migrate_graph`] and the matching entry in `src/store/graph.ts`'s
+    /// `migrateGraph`.
+    pub const GRAPH_VERSION: u32 = 3;
+
+    /// Node role — 13 values (WO03_CONTRACT.md §"Graph v3 schema": 7
+    /// existing + 6 new; ratified at 13 in `docs/design/WO03_AUDIT.md`
+    /// §4.5).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum NodeRole {
+        /// May be backed by a real `.claude/agents/*.md` file (v1 name: `persona`).
+        Agent,
+        Rules,
+        Architecture,
+        Workflow,
+        Task,
+        Reference,
+        Glossary,
+        Command,
+        Invariant,
+        Trap,
+        Skill,
+        Snippet,
+        Style,
+    }
+
+    /// Every [`NodeRole`] value, in the contract's enumeration order. Used by
+    /// round-trip tests and available to any future exhaustive-role consumer.
+    pub const NODE_ROLES: [NodeRole; 13] = [
+        NodeRole::Agent,
+        NodeRole::Rules,
+        NodeRole::Architecture,
+        NodeRole::Workflow,
+        NodeRole::Task,
+        NodeRole::Reference,
+        NodeRole::Glossary,
+        NodeRole::Command,
+        NodeRole::Invariant,
+        NodeRole::Trap,
+        NodeRole::Skill,
+        NodeRole::Snippet,
+        NodeRole::Style,
+    ];
+
+    /// Edge kind. `overrides` is STRUCTURAL (participates in Kahn's algorithm
+    /// / cycle validation / topological ordering exactly like `imports`);
+    /// `supersedes` and `conflicts-with` are NON-structural (linter-only,
+    /// WO03 Lane E) — see [`EdgeKind::is_structural`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum EdgeKind {
+        Imports,
+        References,
+        Conditional,
+        Sequence,
+        Overrides,
+        Supersedes,
+        ConflictsWith,
+    }
+
+    /// Every [`EdgeKind`] value, in the contract's enumeration order.
+    pub const EDGE_KINDS: [EdgeKind; 7] = [
+        EdgeKind::Imports,
+        EdgeKind::References,
+        EdgeKind::Conditional,
+        EdgeKind::Sequence,
+        EdgeKind::Overrides,
+        EdgeKind::Supersedes,
+        EdgeKind::ConflictsWith,
+    ];
+
+    impl EdgeKind {
+        /// True for edge kinds that participate in Kahn's algorithm / cycle
+        /// validation / topological ordering — `imports` and `sequence`
+        /// (unchanged since v1) plus the new `overrides`. False for edge kinds
+        /// that exist only for the linter (`references`, `conditional`,
+        /// `supersedes`, `conflicts-with`) and never affect compile order.
+        /// Lanes B (`compile.rs`) and E (`lint.rs`) call this rather than
+        /// re-deriving the structural/non-structural split.
+        pub fn is_structural(self) -> bool {
+            matches!(self, EdgeKind::Imports | EdgeKind::Sequence | EdgeKind::Overrides)
+        }
+    }
+
+    /// Compile target. `copilot` / `gemini` are new in v3 and OFF by default —
+    /// [`default_compile_targets`] (used only when the key is absent) never
+    /// includes them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum CompileTarget {
+        Claude,
+        Agents,
+        Cursor,
+        Copilot,
+        Gemini,
+    }
+
+    fn default_compile_targets() -> Vec<CompileTarget> {
+        vec![CompileTarget::Claude]
+    }
+
+    /// `{ x, y }` canvas position. Always integers on disk — the webview
+    /// rounds before serializing (`Math.round`), so `i64` (not `f64`) keeps
+    /// Rust and JS number formatting identical (`80`, never `80.0`).
+    /// Deserialize accepts fractional input and rounds it (WO03 audit D6:
+    /// a hand-edited or historical `"x": 80.5` must not hard-fail
+    /// `migrate_graph` — the app itself only rounds on the way out,
+    /// `graph.ts`'s `stableNode`/canvas drag handlers, never on the way in).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+    pub struct Position {
+        pub x: i64,
+        pub y: i64,
+    }
+
+    impl<'de> Deserialize<'de> for Position {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            struct Raw {
+                x: f64,
+                y: f64,
+            }
+            let raw = Raw::deserialize(deserializer)?;
+            Ok(Position {
+                x: raw.x.round() as i64,
+                y: raw.y.round() as i64,
+            })
+        }
+    }
+
+    /// `{ tx, ty }` isometric tile coordinate for the barn scene. Same
+    /// fractional-input tolerance as [`Position`] (WO03 audit D6).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    pub struct ScenePos {
+        pub tx: i64,
+        pub ty: i64,
+    }
+
+    impl<'de> Deserialize<'de> for ScenePos {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            struct Raw {
+                tx: f64,
+                ty: f64,
+            }
+            let raw = Raw::deserialize(deserializer)?;
+            Ok(ScenePos {
+                tx: raw.tx.round() as i64,
+                ty: raw.ty.round() as i64,
+            })
+        }
+    }
+
+    /// `condition`/`note` treat an empty string the same as absent (matches
+    /// `stableEdge` in `src/store/graph.ts`): an edge that once had one and
+    /// lost it serializes without the key rather than as `""`.
+    fn is_empty_string_opt(o: &Option<String>) -> bool {
+        match o {
+            None => true,
+            Some(s) => s.is_empty(),
+        }
+    }
+
+    /// `meta` treats an empty map the same as absent, so a node that never
+    /// used the extension map never grows a stray `"meta": {}`.
+    fn is_none_or_empty_map(m: &Option<BTreeMap<String, Value>>) -> bool {
+        match m {
+            None => true,
+            Some(map) => map.is_empty(),
+        }
+    }
+
+    /// A Memory Node (v3 shape). Field declaration order here IS the wire
+    /// order — see [`serialize_graph`]. Mirrors `MemoryNode` in
+    /// `src/store/graph.ts`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MemoryNode {
+        pub id: String,
+        pub title: String,
+        pub role: NodeRole,
+        #[serde(default)]
+        pub brief: String,
+        pub file_path: String,
+        #[serde(default)]
+        pub read_order: i64,
+        #[serde(default)]
+        pub pinned: bool,
+        #[serde(default)]
+        pub position: Position,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub scene_pos: Option<ScenePos>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub last_verified: Option<String>,
+        /// v3: free-form labels; default empty, omitted from output at default
+        /// (contract: "new fields must be OMITTED when at default value").
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub tags: Vec<String>,
+        /// v3: optional owner/assignee.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub owner: Option<String>,
+        /// v3: reserved extension map. Keys serialize sorted — `BTreeMap`
+        /// (and `serde_json::Value`'s own default non-`preserve_order` `Map`,
+        /// used for nested object values) are both alphabetical — so output
+        /// stays deterministic without a v4 bump for new scalar-only usage.
+        #[serde(default, skip_serializing_if = "is_none_or_empty_map")]
+        pub meta: Option<BTreeMap<String, Value>>,
+    }
+
+    /// A Memory Edge (v3 shape). Field declaration order here IS the wire
+    /// order. Mirrors `MemoryEdge` in `src/store/graph.ts`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MemoryEdge {
+        pub id: String,
+        pub source: String,
+        pub target: String,
+        pub kind: EdgeKind,
+        /// Glob or natural-language condition (`conditional` edges only).
+        #[serde(default, skip_serializing_if = "is_empty_string_opt")]
+        pub condition: Option<String>,
+        /// Human hint rendered on the edge label.
+        #[serde(default, skip_serializing_if = "is_empty_string_opt")]
+        pub note: Option<String>,
+        /// v3: edge colour override (backlog "edge colour persistence" row).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub color: Option<String>,
+    }
+
+    /// `graph.json` shape (v3). Mirrors `BarnGraph` in `src/store/graph.ts`.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct BarnGraph {
+        pub version: u32,
+        #[serde(default)]
+        pub project_name: String,
+        pub nodes: Vec<MemoryNode>,
+        pub edges: Vec<MemoryEdge>,
+        #[serde(default = "default_compile_targets")]
+        pub compile_targets: Vec<CompileTarget>,
+    }
+
+    /// The 13 [`NodeRole`] wire values, as raw strings, used only by
+    /// [`migrate_graph`] tolerance pre-pass (WO03 audit D6), kept apart
+    /// from [`NODE_ROLES`] (typed values) so that pre-pass stays a plain
+    /// string comparison over raw JSON.
+    const KNOWN_NODE_ROLE_STRS: [&str; 13] = [
+        "agent", "rules", "architecture", "workflow", "task", "reference", "glossary", "command",
+        "invariant", "trap", "skill", "snippet", "style",
+    ];
+    /// The 7 [`EdgeKind`] wire values, as raw strings, same purpose as
+    /// [`KNOWN_NODE_ROLE_STRS`].
+    const KNOWN_EDGE_KIND_STRS: [&str; 7] = [
+        "imports", "references", "conditional", "sequence", "overrides", "supersedes",
+        "conflicts-with",
+    ];
+    /// The 5 [`CompileTarget`] wire values, as raw strings, same purpose as
+    /// [`KNOWN_NODE_ROLE_STRS`].
+    const KNOWN_COMPILE_TARGET_STRS: [&str; 5] = ["claude", "agents", "cursor", "copilot", "gemini"];
+
+    /// Migration harness (mirrors `migrateGraph` in `src/store/graph.ts`).
+    /// Accepts v1, v2, or v3 `graph.json` bytes and returns the current (v3)
+    /// shape in one read — a v1 graph migrates v1→v2→v3 without an
+    /// intermediate write. v1→v2: `persona` role renamed to `agent` (same
+    /// semantics). v2→v3: pure default-filling (new node/edge fields absent
+    /// ⇒ their v3 defaults; v2's 7 roles and 4 edge kinds are already valid
+    /// v3 values, so nothing else changes there). Idempotent: migrating an
+    /// already-v3 graph only re-normalizes to the typed shape (e.g. a stale
+    /// non-current `version` value is corrected). `Err` for unparseable JSON,
+    /// an out-of-range version, or a missing/non-array `nodes`/`edges` —
+    /// mirrors the TS function's strictness there (no silent default to `[]`).
+    ///
+    /// WO03 audit D6 — unrecognized role/kind/target strings are coerced,
+    /// not rejected. The app itself tolerates them (`compile.rs`'s
+    /// `RoleIn`/`EdgeKindIn`/`TargetIn` parse anything unrecognized into an
+    /// `Other`/`Unknown` fallback; the TS store casts without validating),
+    /// so a hand-edited `graph.json` with a typo in `role` loads, renders,
+    /// and compiles fine in the app; it must not then hard-fail
+    /// `migrate_graph` (and by extension `lint_run` / `import_apply` /
+    /// `cowtext-cli`) for an infrastructure reason. Unlike `compile.rs`,
+    /// [`NodeRole`]/[`EdgeKind`]/[`CompileTarget`] are deliberately CLOSED
+    /// enums here (no `#[serde(other)]` fallback variant): `import.rs`'s
+    /// `edge_kind_slug` and `lint.rs`'s `edge_kind_name` both exhaustively
+    /// match `EdgeKind` with no wildcard arm, outside this lane's zone;
+    /// widening the enum would require touching those files too. So
+    /// instead of preserving an unrecognized string, this coerces it to a
+    /// neutral default before typed deserialization: an unknown node role
+    /// becomes `reference` (matches `src/preset/types.ts`'s `asRole`
+    /// fallback), an unknown edge kind becomes `references`
+    /// (non-structural, same no-op-for-ordering class as `compile.rs`'s
+    /// `EdgeKindIn::Unknown`), and an unknown compile target is dropped
+    /// from the array. This is a deliberate, audit-flagged exception to
+    /// "preserve unknown values on round-trip" — the trade is documented
+    /// rather than silently made.
+    pub fn migrate_graph(raw: &str) -> Result<BarnGraph, String> {
+        let mut value: Value = serde_json::from_str(raw).map_err(|e| format!("graph.json: {e}"))?;
+
+        let version = value
+            .get("version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "graph.json: missing or non-numeric version".to_string())?;
+        if version < 1 || version > u64::from(GRAPH_VERSION) {
+            return Err(format!("Unsupported graph.json version: {version}"));
+        }
+
+        if !matches!(value.get("nodes"), Some(Value::Array(_)))
+            || !matches!(value.get("edges"), Some(Value::Array(_)))
+        {
+            return Err("graph.json is missing nodes/edges arrays".to_string());
+        }
+
+        // v1 → v2: "persona" role renamed to "agent"; D6: any other
+        // unrecognized role coerced to "reference" (see doc comment above).
+        if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
+            for node in nodes {
+                match node.get("role").and_then(Value::as_str) {
+                    Some("persona") => node["role"] = Value::String("agent".to_string()),
+                    Some(r) if !KNOWN_NODE_ROLE_STRS.contains(&r) => {
+                        node["role"] = Value::String("reference".to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // D6: unrecognized edge kind coerced to "references" (non-structural).
+        if let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) {
+            for edge in edges {
+                if let Some(k) = edge.get("kind").and_then(Value::as_str) {
+                    if !KNOWN_EDGE_KIND_STRS.contains(&k) {
+                        edge["kind"] = Value::String("references".to_string());
+                    }
+                }
+            }
+        }
+
+        // D6: unrecognized compile target dropped from the array.
+        if let Some(Value::Array(targets)) = value.get_mut("compileTargets") {
+            targets.retain(|t| t.as_str().is_some_and(|s| KNOWN_COMPILE_TARGET_STRS.contains(&s)));
+        }
+
+        let mut graph: BarnGraph =
+            serde_json::from_value(value).map_err(|e| format!("graph.json: {e}"))?;
+        graph.version = GRAPH_VERSION;
+        Ok(graph)
+    }
+
+    /// Deterministic serialization: nodes/edges sorted by id
+    /// (`String::cmp` — byte order, WO03 audit D5), fixed field order
+    /// (struct declaration order), 2-space indent, LF line endings,
+    /// trailing newline, new-at-default fields omitted. Mirrors
+    /// `serializeGraph` in `src/store/graph.ts` byte-for-byte, INCLUDING
+    /// sort order: `graph.ts` sorts with a byte-order `compareIds` helper,
+    /// not `localeCompare` — the two disagree on ids containing `-`
+    /// (every id does, `` `${base36}-${rand}` ``), which used to make this
+    /// doc comment's "mirrors" claim false and churn `nodes`/`edges` order
+    /// in the git diff on every alternating Rust/TS write. See
+    /// `serialize_sorts_hyphenated_ids_in_byte_order_matching_graph_ts`
+    /// below for the fixture pinning the previously-disagreeing pair.
+    pub fn serialize_graph(graph: &BarnGraph) -> String {
+        let mut nodes = graph.nodes.clone();
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut edges = graph.edges.clone();
+        edges.sort_by(|a, b| a.id.cmp(&b.id));
+        let stable = BarnGraph {
+            version: GRAPH_VERSION,
+            project_name: graph.project_name.clone(),
+            nodes,
+            edges,
+            compile_targets: graph.compile_targets.clone(),
+        };
+        let mut out = serde_json::to_string_pretty(&stable).expect("BarnGraph always serializes");
+        out.push('\n');
+        out
+    }
+}
+#[allow(unused_imports)]
+pub use graph_v3::*;
 
 /// Read `.cowtext/graph.json`. `Ok(None)` when the project has no graph yet.
 #[tauri::command]

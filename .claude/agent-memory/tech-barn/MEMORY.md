@@ -1,3 +1,4 @@
 - [WO01 Block F cross-lane sequencing](project_wo01-block-f-sequencing.md) — lane B/U can land ahead of lane R; expect `../store/sessions` / `../sessions/api` import errors until lane R lands.
 - [Unused required params: no underscore exemption](feedback_eslint-unused-params.md) — this repo's eslint has no `argsIgnorePattern`; use `void param;` in the body, not a `_` prefix.
 - [T6 bubble controller SFX decision](project_bubble-controller-silent.md) — flavor bubbles silent, real-event bubbles reuse existing per-event sfx.play() calls; don't add a new bubble-spawn cue without flagging it.
+- [WO03 v3 role→prop grouping](project_wo03-role-schema-v3-props.md) — 13 roles mapped onto 3 existing PropView shapes (cabinet/bookshelf/crate); revisit if props.ts/palette.ts ever get real per-role art.

@@ -11,7 +11,7 @@ decides conflicts directly.
 | tech-lead | Architect; frozen-contract author; adversarial auditor. Writes no app code | `docs/design/` (contracts), audit reports | Architecture, module boundaries | Active |
 | tech-general | Senior fullstack (core + feature modules). Runs as multiple instances with disjoint per-task file zones | `src-tauri/src/*`, `src/store/*`, non-UI `src/` logic — exact zone assigned per task | — | Active |
 | tech-ui | Senior frontend; builds and re-checks UI chrome per design tokens | `src/canvas/`, `src/inspector/`, `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `App.tsx` chrome | Interface | Active |
-| tech-barn | PixiJS / game programmer + sound designer; owns the Barn and SFX | `src/scene/` (incl. `sfx.ts` — the only howler importer) | — | Active |
+| tech-barn | PixiJS / game programmer + sound designer; owns the Barn and SFX | `src/scene/` (incl. `sfx.ts` — the only howler importer; WO03 sceneGraph.ts micro-lane) | — | Active |
 | tester | QA: manuals in the PHASE2 format, automated gates, adversarial audits. Edits no app code | `docs/testing/`; read-only everywhere else | Gate pass/fail | Active |
 | project-manager | Docs & tasks custodian; records every session; always the final agent | `docs/fleet/`, `docs/tasks/`, `docs/TERMINOLOGY*.md`, the CLAUDE.md Status line | — | Active — always final |
 | product-analyst | Product research: competitors, rankings, feature suggestions. **Outside the default fleet** — never launched by `/ultracode` | `docs/` (research docs, BACKLOG-ready tables) | — | On call |

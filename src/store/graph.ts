@@ -14,6 +14,8 @@ import { useReviewStore } from "./review";
 
 // v2: the former "persona" role IS the agent (Marty, 2026-08-18) — an
 // agent-role node may be backed by a real .claude/agents/*.md file.
+// v3 (WO03): six more roles — 13 total (WO03_CONTRACT.md §"Graph v3
+// schema"). Mirrors src-tauri/src/project.rs's NodeRole.
 export type NodeRole =
   | "agent"
   | "rules"
@@ -21,7 +23,13 @@ export type NodeRole =
   | "workflow"
   | "task"
   | "reference"
-  | "glossary";
+  | "glossary"
+  | "command"
+  | "invariant"
+  | "trap"
+  | "skill"
+  | "snippet"
+  | "style";
 
 export const NODE_ROLES: readonly NodeRole[] = [
   "agent",
@@ -31,6 +39,12 @@ export const NODE_ROLES: readonly NodeRole[] = [
   "task",
   "reference",
   "glossary",
+  "command",
+  "invariant",
+  "trap",
+  "skill",
+  "snippet",
+  "style",
 ];
 
 /** Is this node backed by a real Claude Code agent definition file? */
@@ -59,15 +73,39 @@ export interface MemoryNode {
    * pruning (FEATURES 6.9, phase 6). Approved by Marty 2026-08-16 (R11).
    */
   lastVerified?: string;
+  /** v3 (WO03): free-form labels. Absent/empty are both "no tags". */
+  tags?: string[];
+  /** v3 (WO03): optional owner/assignee. */
+  owner?: string;
+  /**
+   * v3 (WO03): reserved extension map, scalars only for now — never forces
+   * a v4 bump. Keys serialize sorted (see {@link serializeGraph}) so output
+   * stays deterministic regardless of insertion order.
+   */
+  meta?: Record<string, unknown>;
 }
 
-export type EdgeKind = "imports" | "references" | "conditional" | "sequence";
+// v3 (WO03): `overrides` is STRUCTURAL (participates in Kahn's algorithm /
+// cycle validation / topological ordering exactly like `imports` —
+// compile.rs's `EdgeKind::is_structural`); `supersedes` and `conflicts-with`
+// are NON-structural (linter-only).
+export type EdgeKind =
+  | "imports"
+  | "references"
+  | "conditional"
+  | "sequence"
+  | "overrides"
+  | "supersedes"
+  | "conflicts-with";
 
 export const EDGE_KINDS: readonly EdgeKind[] = [
   "imports",
   "references",
   "conditional",
   "sequence",
+  "overrides",
+  "supersedes",
+  "conflicts-with",
 ];
 
 export interface MemoryEdge {
@@ -79,11 +117,16 @@ export interface MemoryEdge {
   condition?: string;
   /** Human hint rendered on the edge label. */
   note?: string;
+  /** v3 (WO03): edge colour override (backlog "edge colour persistence"). */
+  color?: string;
 }
 
-export type CompileTarget = "claude" | "agents" | "cursor";
+// v3 (WO03): "copilot" (.github/copilot-instructions.md) and "gemini"
+// (GEMINI.md) are new and OFF by default — see the `useGraphStore` initial
+// `compileTargets` below, unchanged at `["claude"]`.
+export type CompileTarget = "claude" | "agents" | "cursor" | "copilot" | "gemini";
 
-export const GRAPH_VERSION = 2;
+export const GRAPH_VERSION = 3;
 
 export interface BarnGraph {
   version: typeof GRAPH_VERSION;
@@ -94,6 +137,14 @@ export interface BarnGraph {
 }
 
 // ── Serialization — stable field order + LF so git diffs stay small ───
+
+/** Sorted-key copy of a `meta` map — deterministic output regardless of
+ *  insertion order (mirrors project.rs's `BTreeMap`-backed `meta`). */
+function sortedMeta(meta: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(meta).sort()) out[k] = meta[k];
+  return out;
+}
 
 function stableNode(n: MemoryNode): MemoryNode {
   return {
@@ -107,6 +158,11 @@ function stableNode(n: MemoryNode): MemoryNode {
     position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
     ...(n.scenePos !== undefined ? { scenePos: { tx: n.scenePos.tx, ty: n.scenePos.ty } } : {}),
     ...(n.lastVerified !== undefined ? { lastVerified: n.lastVerified } : {}),
+    ...(n.tags !== undefined && n.tags.length > 0 ? { tags: [...n.tags] } : {}),
+    ...(n.owner !== undefined && n.owner !== "" ? { owner: n.owner } : {}),
+    ...(n.meta !== undefined && Object.keys(n.meta).length > 0
+      ? { meta: sortedMeta(n.meta) }
+      : {}),
   };
 }
 
@@ -118,31 +174,56 @@ function stableEdge(e: MemoryEdge): MemoryEdge {
     kind: e.kind,
     ...(e.condition !== undefined && e.condition !== "" ? { condition: e.condition } : {}),
     ...(e.note !== undefined && e.note !== "" ? { note: e.note } : {}),
+    ...(e.color !== undefined && e.color !== "" ? { color: e.color } : {}),
   };
+}
+
+/** Byte-order id comparator — deliberately NOT `localeCompare` (WO03 audit
+ *  D5). `localeCompare`'s ICU collation weakens punctuation and is
+ *  case-insensitive at the primary level; node/edge ids are
+ *  `` `${base36}-${rand}` `` (every id contains a `-`), which is exactly
+ *  where ICU and byte order disagree (`"m1abc-x9"` vs `"m1abcd-y9"`: byte
+ *  order keeps `-` before `d`, ICU ignores it and compares `x` vs `d` —
+ *  opposite results). Two serializers disagreeing on sort order churns the
+ *  whole `nodes`/`edges` array in the git diff every time a Rust write and
+ *  a TS write alternate, on a file where nothing changed. This must stay
+ *  byte-identical to `project.rs`'s `serialize_graph`, which sorts with
+ *  `String::cmp` (Rust's `Ord for str` — byte order); `<`/`>` on JS strings
+ *  compares UTF-16 code units, which equals byte order for the ASCII-only
+ *  alphanumeric-plus-hyphen alphabet `makeId()` produces. */
+function compareIds(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export function serializeGraph(g: BarnGraph): string {
   const stable: BarnGraph = {
     version: GRAPH_VERSION,
     projectName: g.projectName,
-    nodes: [...g.nodes].sort((a, b) => a.id.localeCompare(b.id)).map(stableNode),
-    edges: [...g.edges].sort((a, b) => a.id.localeCompare(b.id)).map(stableEdge),
+    nodes: [...g.nodes].sort((a, b) => compareIds(a.id, b.id)).map(stableNode),
+    edges: [...g.edges].sort((a, b) => compareIds(a.id, b.id)).map(stableEdge),
     compileTargets: g.compileTargets,
   };
   // JSON.stringify emits LF; trailing newline keeps POSIX tools quiet.
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
 
-/** Migration harness (backlog 9.2): version 2 is current.
- *  v1 → v2: the "persona" role was renamed to "agent" (same semantics,
- *  now unified with Claude Code agent files). Anything else must come
- *  through here with an explicit migration step. */
+/** Migration harness (backlog 9.2; v3 bump WO03 §"Graph v3 schema"):
+ *  version 3 is current. v1 → v2: the "persona" role was renamed to
+ *  "agent" (same semantics, now unified with Claude Code agent files).
+ *  v2 → v3: pure default-filling — the new node fields (`tags`/`owner`/
+ *  `meta`), new edge field (`color`), widened role/edge-kind vocabularies,
+ *  and two new compile targets are all optional on the TS types above, so
+ *  a v2 graph is already a structurally valid v3 graph; nothing here needs
+ *  to touch node/edge contents. A v1 graph migrates v1→v2→v3 in one call
+ *  (the persona→agent rewrite below, then the version stamp at the
+ *  bottom). Anything else must come through here with an explicit
+ *  migration step. Mirrors `migrate_graph` in `src-tauri/src/project.rs`. */
 export function migrateGraph(data: unknown): BarnGraph {
   if (typeof data !== "object" || data === null) {
     throw new Error("graph.json is not an object");
   }
   const g = data as { version?: unknown; projectName?: unknown; nodes?: unknown; edges?: unknown; compileTargets?: unknown };
-  if (g.version !== 1 && g.version !== GRAPH_VERSION) {
+  if (typeof g.version !== "number" || g.version < 1 || g.version > GRAPH_VERSION) {
     throw new Error(`Unsupported graph.json version: ${String(g.version)}`);
   }
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) {

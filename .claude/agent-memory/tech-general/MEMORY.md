@@ -1,1 +1,6 @@
 - [WO02 G1 tasks.rs three-way rule](wo02-g1-tasks-three-way-rule.md) — judgment calls behind task_append/task_move target-form-aware writes + priority buckets; read before re-touching tasks.rs
+- [WO03 Lane A graph v3 schema](wo03-lane-a-graph-v3-schema.md) — full Rust graph model, dead_code/-D-warnings trap, D5/D6/D10 audit fix round (sort collation, tolerant migrate_graph, cross-zone enum-widening constraint)
+- [WO03 Lane B compile targets](wo03-lane-b-compile-targets.md) — overrides ordering direction judgment call, LinkStyle refactor, exact pure-core surface for Lane Cs CLI extraction
+- [WO03 Lane E linter](wo03-lane-e-linter.md) — LintItem/Problems wire shape, 9 LintCode values; D9 differential test proves 0 disagreement with compile.rs's cycle detector
+- [WO03 Lane C blocked on lib.rs module visibility](wo03-lane-c-cowtext-cli-blocked-on-lib-visibility.md) — cowtext-cli won't build until project/compile/lint go `pub mod`
+- [cowtext-cli design record](wo03-cli-design.md) — subcommands, exit-code policy, --json shape for src-tauri/src/bin/cowtext_cli.rs

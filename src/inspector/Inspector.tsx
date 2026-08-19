@@ -2,13 +2,13 @@
 // form) + Markdown (CodeMirror on the node's file; explicit save writes to
 // disk through Rust). The file on disk is the content source of truth.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
+import { Check, Copy, FileCode, FolderOpen, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import {
   EDGE_KINDS,
   GRAPH_VERSION,
-  NODE_ROLES,
   isAgentFile,
   isRenameProtected,
   serializeGraph,
@@ -17,13 +17,15 @@ import {
   type AssembleStatus,
   type MemoryEdge,
   type MemoryNode,
+  type NodeRole,
 } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { useReviewStore } from "../store/review";
 import { useSettingsStore } from "../store/settings";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
+import { isStructuralEdgeKind } from "../canvas/edgeKind";
 import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
-import { ROLE_DESCRIPTIONS } from "../canvas/roleMeta";
+import { ROLE_DESCRIPTIONS, ROLE_GROUPS } from "../canvas/roleMeta";
 import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
 import { PRODUCER_FILE, useAgentsStore, type Selection as AgentsSelection } from "../store/agents";
@@ -47,7 +49,6 @@ import { CodeMirrorEditor, type AtMentionHandlers } from "./CodeMirrorEditor";
 import { ScanOverlay } from "../ui/ScanOverlay";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
-import type { MenuItem } from "../ui/menuTypes";
 
 // ── Small controls ────────────────────────────────────────────────────
 
@@ -308,12 +309,171 @@ function TitleField({ node }: { node: MemoryNode }) {
   );
 }
 
-/** Role popup (contract §7.5) — built on the shared menu primitive so it
- *  gets viewport-flip, keyboard nav and Escape/outside-close for free. The
- *  primitive's MenuItem.icon is typed to lucide's LucideIcon and can't carry
- *  the hand-drawn 8×8 role glyph, so rows show name + description only; the
- *  active role's glyph + description stay visible under the control, per
- *  the acceptance criterion, regardless of whether the popup is open. */
+/** Flattened role order, groups collapsed — the unit arrow-key navigation
+ *  moves over (module scope: ROLE_GROUPS is static, no need to recompute
+ *  per render/instance). */
+const ROLE_FLAT: readonly NodeRole[] = ROLE_GROUPS.flatMap((g) => g.roles);
+
+/** Grouped role popup (WO03) — 13 roles read poorly as one flat list, so
+ *  this renders ROLE_GROUPS' sections (canvas/roleMeta.ts, the same
+ *  taxonomy NodeWizard's step-1 grid uses). Bespoke rather than the shared
+ *  ContextMenu primitive: MenuItem has no "header" row, and every option
+ *  here needs BOTH the hand-drawn glyph and a description line, which the
+ *  primitive's icon slot (typed to lucide's LucideIcon) can't carry — same
+ *  viewport-flip / outside-close / Escape idiom as TagPicker's popup.
+ *
+ *  WO03 audit D4: this was originally focus-management-free — Tab from the
+ *  trigger skipped straight to the next Inspector control because the
+ *  portal renders at the end of `document.body`, so DOM order never puts
+ *  the 13 buttons next in line. `role="menu"` + `role="menuitemradio"`
+ *  promised arrow-key navigation it didn't implement — a WCAG 2.1.1
+ *  failure, not a style nit. Fixed with real roving-tabindex focus (one
+ *  button is a tab stop at a time, ArrowUp/Down/Home/End move it, mirroring
+ *  ui/ContextMenu.tsx's own arrow-key handling) rather than reusing
+ *  ContextMenu itself — see the header note above for why a bespoke popup
+ *  is still the right call; it just has to carry the same accessibility
+ *  ContextMenu gets for free. */
+function RolePopup({
+  anchor,
+  role,
+  onSelect,
+  onClose,
+}: {
+  anchor: { x: number; y: number };
+  role: NodeRole;
+  onSelect: (r: NodeRole) => void;
+  onClose: () => void;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [pos, setPos] = useState<{ left: number; top: number; ready: boolean }>({
+    left: anchor.x,
+    top: anchor.y,
+    ready: false,
+  });
+  const initialIndex = Math.max(0, ROLE_FLAT.indexOf(role));
+  const [activeIndex, setActiveIndex] = useState(initialIndex);
+
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchor.x;
+    let top = anchor.y;
+    if (left + rect.width > vw - 4) left = Math.max(4, vw - rect.width - 4);
+    if (top + rect.height > vh - 4) top = Math.max(4, vh - rect.height - 4);
+    setPos({ left, top, ready: true });
+  }, [anchor.x, anchor.y]);
+
+  // Focus follows open — without this, real Tab-order never reaches a
+  // document.body-portaled menu (WO03 audit D4). Mount-only: activeIndex
+  // starts at the current role and only changes via explicit arrow keys
+  // after that, so this must not re-fire on every activeIndex update.
+  useEffect(() => {
+    itemRefs.current[initialIndex]?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (popRef.current !== null && !popRef.current.contains(e.target as Node)) onClose();
+    };
+    const onScroll = () => onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const moveTo = (i: number) => {
+    setActiveIndex(i);
+    itemRefs.current[i]?.focus();
+  };
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const last = ROLE_FLAT.length - 1;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveTo(activeIndex >= last ? 0 : activeIndex + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveTo(activeIndex <= 0 ? last : activeIndex - 1);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      moveTo(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      moveTo(last);
+    }
+    // Enter/Space need no handling: each item is a real <button>, so the
+    // browser already fires its onClick. Escape is the window-level
+    // listener above (restores focus to the trigger via onClose).
+  };
+
+  return createPortal(
+    <div
+      ref={popRef}
+      role="menu"
+      onKeyDown={onMenuKeyDown}
+      style={{ position: "fixed", left: pos.left, top: pos.top, visibility: pos.ready ? "visible" : "hidden" }}
+      className="z-dropdown flex max-h-[380px] w-[280px] flex-col overflow-y-auto rounded-lg border border-border bg-surface-3 p-1 shadow-dropdown outline-none"
+    >
+      {ROLE_GROUPS.map((group) => (
+        <Fragment key={group.label}>
+          <div className="px-2 pb-1 pt-2 font-mono text-2xs uppercase tracking-wider text-content-muted">
+            {group.label}
+          </div>
+          {group.roles.map((r) => {
+            const flatIndex = ROLE_FLAT.indexOf(r);
+            return (
+              <button
+                key={r}
+                ref={(el) => {
+                  itemRefs.current[flatIndex] = el;
+                }}
+                type="button"
+                role="menuitemradio"
+                aria-checked={r === role}
+                tabIndex={flatIndex === activeIndex ? 0 : -1}
+                onFocus={() => setActiveIndex(flatIndex)}
+                onClick={() => {
+                  onSelect(r);
+                  onClose();
+                }}
+                className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left transition-colors duration-instant hover:bg-[var(--surface-hover)]"
+              >
+                <span className="mt-0.5 flex-none" style={{ color: roleVar(r) }}>
+                  <RoleGlyph role={r} size={12} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-sm capitalize text-content">{r}</span>
+                    {r === role && (
+                      <Check size={12} strokeWidth={2} className="flex-none text-accent-text" />
+                    )}
+                  </span>
+                  <span className="block text-2xs leading-snug text-content-disabled">
+                    {ROLE_DESCRIPTIONS[r]}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </Fragment>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 function RoleField({ node }: { node: MemoryNode }) {
   const updateNode = useGraphStore((s) => s.updateNode);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -324,15 +484,6 @@ function RoleField({ node }: { node: MemoryNode }) {
     if (rect === undefined) return;
     setOpen({ x: rect.left, y: rect.bottom + 4 });
   };
-
-  const items: MenuItem[] = NODE_ROLES.map((r) => ({
-    kind: "item",
-    id: r,
-    label: r,
-    hint: ROLE_DESCRIPTIONS[r],
-    checked: r === node.role,
-    onSelect: () => updateNode(node.id, { role: r }),
-  }));
 
   return (
     <div>
@@ -358,10 +509,10 @@ function RoleField({ node }: { node: MemoryNode }) {
         {ROLE_DESCRIPTIONS[node.role]}
       </p>
       {open !== null && (
-        <ContextMenu
-          x={open.x}
-          y={open.y}
-          items={items}
+        <RolePopup
+          anchor={open}
+          role={node.role}
+          onSelect={(r) => updateNode(node.id, { role: r })}
           onClose={() => {
             setOpen(null);
             btnRef.current?.focus();
@@ -414,6 +565,47 @@ function BriefField({ node }: { node: MemoryNode }) {
         style={{ height: briefHeight }}
         placeholder="One line for Assemble to expand later"
         className="min-h-[48px] max-h-[50vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-base leading-snug text-content placeholder:text-content-disabled focus:border-accent"
+      />
+    </div>
+  );
+}
+
+/** Tags editor (WO03 — new node field). Reuses tasks/TagPicker.tsx's
+ *  trigger-chips + popup pattern verbatim rather than a parallel
+ *  implementation; its "known tags" suggestion list is sourced from the
+ *  task board (useTasksStore), not from other memory nodes' tags — a node
+ *  tag and a task tag share one free-text vocabulary in this app, so that
+ *  reads as a feature (one suggestion pool) rather than a bug, but it's
+ *  flagged here since TagPicker itself is outside this lane's file zone
+ *  (src/tasks/) and can't be pointed at a node-tags union without editing
+ *  it — worth a tech-lead look if the two tag pools should ever merge. */
+function TagsField({ node }: { node: MemoryNode }) {
+  const updateNode = useGraphStore((s) => s.updateNode);
+  return (
+    <div>
+      <FieldLabel>Tags</FieldLabel>
+      <TagPicker
+        items={node.tags ?? []}
+        disabled={false}
+        onChange={(tags) => updateNode(node.id, { tags })}
+      />
+    </div>
+  );
+}
+
+/** Owner editor (WO03 — new node field). Free text, no roster to validate
+ *  against yet (no such directory exists in the app) — same trust level as
+ *  Brief. */
+function OwnerField({ node }: { node: MemoryNode }) {
+  const updateNode = useGraphStore((s) => s.updateNode);
+  return (
+    <div>
+      <FieldLabel>Owner</FieldLabel>
+      <input
+        value={node.owner ?? ""}
+        onChange={(e) => updateNode(node.id, { owner: e.target.value })}
+        placeholder="Unassigned"
+        className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content outline-none placeholder:text-content-muted focus:border-accent-border"
       />
     </div>
   );
@@ -1157,6 +1349,8 @@ function PropertiesTab({
       <TitleField key={node.id} node={node} />
       <RoleField node={node} />
       <BriefField node={node} />
+      <TagsField node={node} />
+      <OwnerField node={node} />
 
       <div className="flex items-center justify-between">
         <div>
@@ -1377,6 +1571,8 @@ function EdgePanel({ edge }: { edge: MemoryEdge }) {
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const title = (id: string) => nodes.find((n) => n.id === id)?.title ?? "?";
 
+  const structural = isStructuralEdgeKind(edge.kind);
+
   return (
     <div className="flex flex-col gap-3 p-3">
       <div>
@@ -1386,6 +1582,24 @@ function EdgePanel({ edge }: { edge: MemoryEdge }) {
           <span className="px-1 font-mono text-content-muted">—{edge.kind}→</span>
           <span className="text-content">{title(edge.target)}</span>
         </p>
+        {/* At-a-glance affordance (contract §"F — frontend"): does this edge
+            change what gets compiled, or is it advisory/lint-only? Right-click
+            the edge on the canvas to change its kind — the same grouped
+            structural/advisory list as the KindPicker. */}
+        <span
+          className={`mt-1.5 inline-flex h-[17px] items-center rounded-sm border px-1 font-mono text-micro uppercase tracking-wider ${
+            structural
+              ? "border-border-strong bg-surface-2 text-content-secondary"
+              : "border-border bg-surface-2 text-content-muted"
+          }`}
+          title={
+            structural
+              ? "Structural — participates in compile ordering and cycle checks"
+              : "Advisory — lint-only, never changes compiled output"
+          }
+        >
+          {structural ? "structural" : "advisory"}
+        </span>
       </div>
       {edge.kind === "conditional" && (
         <div>

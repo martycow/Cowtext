@@ -33,6 +33,25 @@ const SECTIONS: Record<NodeRole, Section[]> = {
     { heading: "Details", hint: "The lookup material itself." },
   ],
   glossary: [{ heading: "Terms", hint: "**Term** — what this project means by it." }],
+  // v3 (WO03) — six more roles, same terse skeleton style.
+  command: [
+    { heading: "Command", hint: "The exact command or invocation to run." },
+    { heading: "When to run it", hint: "The situation that calls for this." },
+  ],
+  invariant: [
+    { heading: "Invariant", hint: "The fact that must always hold, stated as one sentence." },
+    { heading: "Why it matters", hint: "What breaks if this stops being true." },
+  ],
+  trap: [
+    { heading: "The trap", hint: "What looks right but isn't." },
+    { heading: "What to do instead", hint: "The correct approach." },
+  ],
+  skill: [
+    { heading: "Skill", hint: "The capability, summarized in one line." },
+    { heading: "How to use it", hint: "Steps or technique." },
+  ],
+  snippet: [{ heading: "Snippet", hint: "The reusable fragment itself." }],
+  style: [{ heading: "Style rules", hint: "Formatting and voice conventions — one per line." }],
 };
 
 /** Pure — same inputs always produce the same markdown. Used for both the

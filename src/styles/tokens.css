@@ -75,13 +75,26 @@
   --role-task:         #8A8BEE;  /* 5.4:1 */
   --role-reference:    #C58BC9;  /* 6.1:1 */
   --role-glossary:     #A9A296;  /* 6.4:1 — deliberately achromatic */
+  /* v3 (WO03) — six more roles, same redundant-coding rule. */
+  --role-command:      #4FB8C4;  /* ~6.9:1 */
+  --role-invariant:    #9B82E8;  /* ~5.2:1 */
+  --role-trap:         #E36F86;  /* ~5.3:1 */
+  --role-skill:        #B8C24A;  /* ~8.3:1 */
+  --role-snippet:      #8CA0B8;  /* ~6.0:1 — desaturated, sits near glossary */
+  --role-style:        #D46FAE;  /* ~5.1:1 */
 
   /* ── Edges — neutral by rule. Kind is read from line style
-        and marker, never from hue (hue belongs to roles). */
+        and marker, never from hue (hue belongs to roles). Solid stroke =
+        STRUCTURAL (affects compile order — imports/sequence/overrides);
+        dashed/dotted = advisory / lint-only (references/conditional/
+        supersedes/conflicts-with). */
   --edge-imports:     #7A6D5F;  /* 1.75px solid, filled arrow */
   --edge-references:  #574E44;  /* 1.5px dash 5 4, open circle */
   --edge-conditional: #6E6155;  /* 1.5px dot 1.5 3.5, + condition chip */
   --edge-sequence:    #8E8477;  /* 1.5px solid, chevron + step dot */
+  --edge-overrides:      #A0916F;  /* 2px solid, filled arrow + bar — structural, "wins" */
+  --edge-supersedes:     #4A4137;  /* 1.5px dash 8 3, hollow square — advisory */
+  --edge-conflicts-with:  #857A6C;  /* 1.5px dash 1.5 1.5, cross marker — advisory */
   --edge-selected:    var(--accent);
 
   /* ── Typography ───────────────────────────────────────── */

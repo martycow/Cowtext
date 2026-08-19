@@ -8,6 +8,8 @@ import {
   FileText,
   FolderOpen,
   Folder,
+  Gem,
+  Import as ImportIcon,
   MousePointer2,
   Package,
   PanelLeftClose,
@@ -20,6 +22,7 @@ import {
   Settings,
   Undo2,
   Users,
+  Wand2,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -33,6 +36,7 @@ import { useReviewStore } from "./store/review";
 import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
+import { ProblemsPanel } from "./inspector/ProblemsPanel";
 import { RosterBar } from "./sessions/RosterBar";
 // Lazy-loaded for code splitting
 const Inspector = lazy(() => import("./inspector/Inspector").then(m => ({ default: m.Inspector })));
@@ -43,6 +47,9 @@ const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ def
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
 const TasksBoard = lazy(() => import("./tasks/TasksBoard").then(m => ({ default: m.TasksBoard })));
 const ReviewModal = lazy(() => import("./review/ReviewModal").then(m => ({ default: m.ReviewModal })));
+const ImportReviewModal = lazy(() =>
+  import("./import/ImportReviewModal").then((m) => ({ default: m.ImportReviewModal })),
+);
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { flushMetaSave, useAgentsStore } from "./store/agents";
 import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
@@ -229,8 +236,16 @@ const COMPILE_TARGET_META: Record<CompileTarget, { label: string; icon: LucideIc
   claude: { label: "CLAUDE.md", icon: Bot },
   agents: { label: "AGENTS.md", icon: Users },
   cursor: { label: ".cursor/rules", icon: MousePointer2 },
+  copilot: { label: ".github/copilot-instructions.md", icon: Wand2 },
+  gemini: { label: "GEMINI.md", icon: Gem },
 };
-const COMPILE_TARGET_ORDER: readonly CompileTarget[] = ["claude", "agents", "cursor"];
+const COMPILE_TARGET_ORDER: readonly CompileTarget[] = [
+  "claude",
+  "agents",
+  "cursor",
+  "copilot",
+  "gemini",
+];
 
 function CompileSplitButton({
   onCompile,
@@ -302,6 +317,7 @@ function TopBar({
   onSettings,
   onPresets,
   onHandoff,
+  onImport,
   view,
   onViewChange,
 }: {
@@ -309,6 +325,7 @@ function TopBar({
   onSettings: () => void;
   onPresets: () => void;
   onHandoff: () => void;
+  onImport: () => void;
   view: View;
   onViewChange: (v: View) => void;
 }) {
@@ -340,6 +357,15 @@ function TopBar({
       {root !== null && <SaveIndicator />}
       {root !== null && <UndoRedoButtons />}
       {root !== null && <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />}
+      {root !== null && (
+        <button
+          onClick={onImport}
+          title="Scan CLAUDE.md / AGENTS.md / .cursor/rules for un-managed context to adopt"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <ImportIcon size={14} strokeWidth={1.5} />
+        </button>
+      )}
       {root !== null && (
         <button
           onClick={onPresets}
@@ -1234,6 +1260,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [view, setView] = useState<View>("canvas");
 
   // A new project always opens on the canvas.
@@ -1294,6 +1321,7 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
+        onImport={() => setImportOpen(true)}
         view={view}
         onViewChange={setView}
       />
@@ -1317,6 +1345,7 @@ export default function App() {
           <ReviewBanner />
           <Workspace root={root} view={view} />
           <RosterBar root={root} />
+          <ProblemsPanel root={root} onNavigate={() => setView("canvas")} />
           <EventLog root={root} />
           <StatusBar />
         </>
@@ -1351,6 +1380,11 @@ export default function App() {
       {handoffOpen && root !== null && (
         <Suspense fallback={null}>
           <HandoffModal root={root} onClose={() => setHandoffOpen(false)} />
+        </Suspense>
+      )}
+      {importOpen && root !== null && (
+        <Suspense fallback={null}>
+          <ImportReviewModal root={root} onClose={() => setImportOpen(false)} />
         </Suspense>
       )}
     </div>

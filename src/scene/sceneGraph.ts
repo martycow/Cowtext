@@ -90,17 +90,34 @@ const DECOR_ITEMS: DecorSpec[] = [
   { id: "mouse-hole", tile: { tx: 0, ty: 0 }, make: makeMouseHole, label: "A tiny mouse hole — someone else lives here too", tall: false },
 ];
 
+/** v3 (WO03): 13 roles map onto the 3 existing PropView shapes (no new
+ *  sprites — palette.ts/props.ts are out of this lane's file zone). Grouped
+ *  by function, mirroring the pre-existing ties within bookshelf/crate:
+ *  cabinet = governance/guardrail content (rules to follow, invariants that
+ *  must hold, traps/hazards to avoid — all filed as official caution notices
+ *  alongside the agent's own rules); bookshelf = browsable reference/knowledge
+ *  (architecture, reference, glossary, skill manuals, style guides); crate =
+ *  active/work items (tasks, workflows, invocable commands, reusable
+ *  snippets — loose papers, not bound volumes). `invariant`/`trap` fall back
+ *  to the cabinet's default (straw) accent same as `rules` — an intentional
+ *  near-duplicate for the closest-matching existing role, not a bug. */
 function propForRole(role: NodeRole): PropView {
   switch (role) {
     case "rules":
     case "agent":
+    case "invariant":
+    case "trap":
       return makeCabinet(role);
     case "architecture":
     case "reference":
     case "glossary":
+    case "skill":
+    case "style":
       return makeBookshelf();
     case "task":
     case "workflow":
+    case "command":
+    case "snippet":
       return makeCrate();
   }
 }
