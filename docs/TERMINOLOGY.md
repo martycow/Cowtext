@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (50) |
+| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (51) |
 | `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/compile.rs` | Three adapters (claude/agents/cursor), validation, topological order, write allowlist |
@@ -77,7 +77,7 @@ React Flow and PixiJS never import each other.
 | Edge kinds | `imports` (inline), `references` (soft link), `conditional` (glob/NL condition), `sequence` (order only) |
 | Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure |
 | readOrder | Manual tie-break inside topological order (Kahn, pops by `(readOrder, id)`) |
-| BarnGraph | `graph.json` shape: `version: 1`, `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
+| BarnGraph | `graph.json` shape: `version: 2` (v1→v2 migration = persona→agent; v3 planned in WO03), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
 | Compile | One graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc`; never writes without diff-preview approval |
 | Compile target | `"claude" \| "agents" \| "cursor"` in `graph.json`; cursor off by default |
 | GENERATED header | First line of every compiled file; absence marks a file handwritten; `compile_write` refuses content without it |

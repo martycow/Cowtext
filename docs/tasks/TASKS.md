@@ -1,16 +1,17 @@
 # Tasks
 
-Active and recently completed work items toward v0.1.0. Schema: Name | Status | Priority | Tags | Agent | Created | Description.
+Active and recently completed work items. v2 replan 2026-08-19: v0.1.0 cut re-based to the WO03 landing (see ROADMAP.md). Schema: Name | Status | Priority | Tags | Agent | Created | Description.
 
-All seven phases (0–6) are accepted as of 2026-08-18; WO01 is now fully closed. Only v0.1.0 release work remains.
+All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 2026-08-19 (103ac80). Current work: acceptance walks + WO03 dispatch.
 
-## Open — toward v0.1.0
+## Open — toward v2 / WO03
 
 | Name | Status | Priority | Tags | Agent | Created | Description |
 |---|---|---|---|---|---|---|
-| WO01 full acceptance walk (manual sections A–F + N) | new | critical | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps (task-format, @mention, manager mode, status bar). Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
-| CSP runtime check under production build | new | high | v0.1.0, csp, qa |  | 2026-08-17 | Run `npm run tauri build` against production CSP; verify invokes, SFX, fonts, Barn render, no CSP refusals in console. |
-| Cut v0.1.0 | new | high | v0.1.0, release |  | 2026-08-18 | Real sprites landed, CSP check green, then verified production build + tagged release commit. |
+| WO01 full acceptance walk (manual sections A-F + N) | new | high | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps. Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
+| WO02 acceptance walk (manual A-H, 61 steps) | new | high | wo02, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO02_TEST_MANUAL.md. WO02 committed as 103ac80; gates green. |
+| Dispatch WO03 — L1 moat hardening | new | critical | wo03, ultracode, compiler |  | 2026-08-19 | /ultracode dispatch per docs/design/WO03_CONTRACT.md: graph v3, copilot+gemini targets, cowtext-cli, importer MVP, linter v1. Landing = v0.1.0 cut. |
+| CSP runtime check under production build | new | medium | wo03, csp, qa |  | 2026-08-17 | Re-based: folded into the WO03 test manual as one step. Run `npm run tauri build`; verify invokes, SFX, fonts, Barn render, no CSP refusals. |
 
 ## Done — acceptance walks (2026-08-18)
 

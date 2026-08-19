@@ -1,66 +1,97 @@
 # Backlog
 
-Post-phase work, now that all seven phases (0–6) are accepted (2026-08-18). One item gates the v0.1.0 cut (real sprites); everything else is post-v0.1.0 product work.
+Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 context graph (the moat), L2 orchestrator, L3 workflows, L4 observability + barn, plus platform bets. Each row carries its target work order in Tags (`wo03`…`wo08`); unassigned rows are unscheduled. Deck steal-list items (Blume/Chorus/Paperclip) are merged in. Schema: Name | Status | Priority | Tags | Agent | Description.
 
-## Open
+## L1 — Context graph (WO03–WO04)
 
 | Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| Replace placeholder sprites with Aseprite originals | new | critical | phase-5, art, assets, v0.1.0 |  | One asset gate for v0.1.0: replace programmatic Graphics with 16-bit originals per ART_DIRECTION.md. Marty-side. |
-| Streaming assemble output into the node | new | high | assemble, ux, product |  | Stream token output during Assemble (cuts perceived wait 55–70%); buffer incomplete markdown. |
-| Surface token-cost counts during Assemble/Compile | new | high | product, tokens |  | Token-cost display in Compile modal and Assemble flow per ai-context-kit linting baseline. |
-| Resolved-context preview (FEATURES 4.6) | new | high | product, moat, compile |  | Show exact bytes agent sees, imports expanded inline, with total token count. |
-| Unmapped-read → one-click adopt (FEATURES 6.7) | new | high | product, feed |  | Turn "not on graph" event rows into one-click adopt action; live-feed acquisition loop. |
-| Node usage heatmap (FEATURES 6.9) | new | high | product, moat, feed |  | Aggregate live-feed events into per-node usage heat; foundation for moat bets. |
-| Event feed hygiene: retention + layered status | new | medium | feed, perf |  | Feed anatomy: per-row metadata, virtualize if ring cap rises, layered status (badge/panel/alert). |
+| Edge colour persistence | new | medium | edges, graph, wo03 |  | Absorbed into the WO03 graph v2→v3 bump (`color?` on MemoryEdge) alongside tags/owner/meta and the 3 new edge kinds. |
+| Problems list (FEATURES 9.3) | new | high | lint, ui, wo03 |  | Unified Problems payload: cycles, missing files, dangling edges + linter v1 findings (conflict/duplication/stale). WO03 Lane E/F. |
+| Orphan & dead-node lint (FEATURES 2.9) | new | medium | lint, wo03 |  | Structural half in WO03 linter v1; usage-driven half depends on the WO05 heatmap. |
+| Reverse-import (FEATURES 1.6) | new | high | import, moat, wo03, wo04 |  | MVP in WO03 (CLAUDE.md/AGENTS.md/.cursor rules → proposed changeset, never auto-writes); full round-trip incl. copilot/gemini parse-back in WO04. |
+| cowtext-cli compile --check | new | high | ci, cli, wo03 |  | Second cargo binary; exit 1 on graph↔output drift; `lint` subcommand; `--json`. GitHub Action wrapper lands WO04. |
+| Hierarchy simulator | new | high | compile, wo04 |  | Global `~/.claude/CLAUDE.md` → project → directory nearest-file-wins preview per path. Deck L1; absorbs FEATURES 1.10. |
+| Windows-safe symlink manager | new | high | compile, windows, wo04 |  | AGENTS.md master pattern via junction/hardlink/copy fallback ladder; never a broken symlink on NTFS. Deck L1. |
+| SKILL.md frontmatter compile target | new | medium | compile, skills, wo04 |  | Sixth target: skill nodes compile to `.claude/skills/*/SKILL.md` frontmatter shape. Deck L1. |
+| Resolved-context preview (FEATURES 4.6) | new | high | product, moat, compile, wo04 |  | Show exact bytes agent sees, imports expanded inline, with total token count. |
+| Surface token-cost counts during Assemble/Compile | new | high | product, tokens, wo04 |  | Token-cost display in Compile modal and Assemble flow (pairs with FEATURES 3.6). |
+| Context loadouts | new | medium | profiles, compile, wo04 |  | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides. |
+| Preset starter packs per stack (FEATURES 8.6) | new | medium | presets, wo04 |  | Built-in starter set: Rust, Tauri, Next.js, Python packs. |
+| Branch-aware graph | new | high | git, branches, wo04 |  | Watch .git/HEAD per project; reload graph on checkout; warn via GENERATED header hash on branch mismatch. |
+| graph.json schema migration discipline | new | medium | data-model, persistence, wo03 |  | Standing rule: any schema change bumps version and adds migration. Exercised by the WO03 v2→v3 bump. |
+
+## L4 — Observability + barn (WO05)
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Node usage heatmap (FEATURES 6.9) | new | high | product, moat, feed, wo05 |  | Persist events (JSONL in `.cowtext/events/`), aggregate reads per node, 4th lens driven by read events. Foundation for all proof-layer bets. |
+| Reality Check (drift lint) | new | high | drift, lint, git, wo05 |  | Static lint checking every file path, command, script, port cited in a node against the live repo. Red badges on broken claims. Blume-class differentiator. |
+| Context audit changeset | new | high | heatmap, prune, tokens, wo05 |  | N sessions of hook data → changeset: unpin never-read, adopt unmapped hot files. Reviewed like a compile diff. |
+| Dead-node report | new | high | heatmap, prune, wo05 |  | Never-read-across-N-sessions report with one-click prune. Deck L4. |
+| Unmapped-read → one-click adopt (FEATURES 6.7) | new | high | product, feed, wo05 |  | Turn "not on graph" event rows into one-click adopt action; live-feed acquisition loop. |
+| Sessions view + timeline (FEATURES 6.10) | new | medium | sessions, feed, wo05 |  | Session history: list, tools used, files touched, duration. |
+| Provider quota / token-burn tracker | new | medium | tokens, quota, wo05 |  | Aggregate real session Usage across sessions; surface burn rate. Blume-class. Cross-provider later. |
+| cowtext-hook shim | new | medium | hooks, multi-agent, wo05 |  | Tiny Rust bin translating Cursor/Codex/Gemini/OpenCode hook payloads → POST :4923. Cut-line item if WO05 overruns. |
+| Event feed hygiene: retention + layered status | new | medium | feed, perf, wo05 |  | Per-row metadata, virtualize if ring cap rises, layered status (badge/panel/alert). |
+| Dust and cobwebs | new | medium | staleness, heatmap, barn, wo05 |  | Unread nodes gather dust/cobwebs; desaturate as lastVerified falls behind. First UI reader of lastVerified. Depends: heatmap. |
+| Merge sentry | new | medium | git, review-inbox, wo05 |  | After merge, queue affected nodes into review inbox. Clear by re-verifying (bump lastVerified) or editing. Stretch. |
+| Replace placeholder sprites with Aseprite originals | new | high | art, assets, barn, wo05 |  | Marty-side asset track (can start anytime); integration lands WO05, per ART_DIRECTION.md. No longer the v0.1.0 gate. |
+| Screenshot / GIF export (FEATURES 7.11) | new | high | barn, viral, wo05 |  | One-click GIF/screenshot of a session — the viral loop. Ships with sprites in WO05. |
+| The moo is the notification | new | high | audio, ambient, opt-in, wo05 |  | Opt-in: while hidden/minimized, only turn-complete happy moo plays quietly. |
+| Resolution cap with measurement gate (V4) | new | high | barn, perf, wo05 |  | Cap Barn renderer at min(devicePixelRatio, 2) only after FPS <50 measured at DPR>2, with A/B screenshots. |
+| Background chill 16-bit music | new | medium | audio, assets, barn |  | Looping calm-mode music. Asset (Marty) + sfx.ts channel (tech-barn). Unscheduled. |
+
+## L2 — Orchestrator (WO06)
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Per-task subgraph injection + compile-on-launch | new | high | sessions, tasks, moat, wo06 |  | The L2 differentiator: task pulls exactly the subgraph it needs; session starts with a context file compiled for that task alone. |
+| Tasklinks sidecar (task↔node↔session) | new | high | tasks, data-model, wo06 |  | `.cowtext/tasklinks.json` v1 `{taskId, nodeIds[], sessionIds[], parentTaskId?}`; task lines get stable `id:t-xxxxxx` tags. Goal ancestry via parentTaskId. |
+| Task DAG / dependencies | new | high | tasks, dag, wo06 |  | Dependency modelling + cycle detection in the task format and board; blocked-by visualisation. Chorus-class. |
+| Per-task/per-agent token ceilings with atomic hard-stop | new | high | sessions, budgets, wo06 |  | Paperclip-class budgets: spend cap enforced in sessions.rs; session stops dead at the limit. |
+| Session-to-node attribution | new | medium | sessions, heatmap, wo06 |  | Which rules were live for this run: sessionIds × resolveNodeId aggregation on WO05 event data. |
+| Handoff → node | new | medium | handoff, graph, wo06 |  | Session outcome becomes a new Memory Node wired into the graph (provenance recorded). |
+| Streaming assemble output into the node | new | high | assemble, ux, wo06 |  | Stream token output during Assemble (cuts perceived wait 55–70%); buffer incomplete markdown. |
+| 'Run Claude' launcher window | new | medium | assemble, ui, process, wo06 |  | Interactive launcher for `claude -p` flags, folded into session spawn options. |
+| Agent-card live session status | new | medium | ui, agents, wo06 |  | Agent card shows spawned/running dot via useSessionsStore (cross-store subscription). |
+| Barn mission control | new | medium | multi-agent, sessions, barn, wo06 |  | Concurrent sessions get own stall and full cow; per-session color lanes; chalkboard lists subagents. |
+
+## L3 — Workflows & governance (WO07)
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Heartbeat-scheduled agents | new | high | scheduler, sessions, wo07 |  | Paperclip-class: agents wake on schedule, check queue, act; auto-expiry + dangling-checkout cleanup. |
+| Event triggers | new | medium | scheduler, hooks, wo07 |  | Trigger workflows on file change, PR opened, CI failure, test regression. Local-only by default. |
+| Approval gates + dual-path verification | new | high | workflows, governance, wo07 |  | Plan-before-execute gates; agent self-check plus human sign-off. Chorus-class. |
+| Permission grids (resources × actions) | new | high | governance, sessions, wo07 |  | Per-agent scoped permissions; deny-by-default; presets plus custom. Chorus-class. |
+| Agent squads | new | medium | multi-agent, wo07 |  | Named roles with scoped permissions running as a group. |
+| Auto-promote (Memory Inbox) | new | high | memory, curation, moat, wo07 |  | Ingest Claude Code auto-memory + repeated chat instructions; one-click promote to Memory Node or dismiss; flag contradictions. The sleeper feature: agents run, the graph learns. |
+| Transcript mining for context gaps | new | high | sessions, gaps, wo07 |  | Parse transcripts for gaps: agent rereads, unresolved questions. Surface as cards with one-click fixes. |
+| Revisioned config with rollback | new | medium | governance, history, wo07 |  | `.cowtext/history/`: graph change revisions, safe rollback. Absorbs FEATURES 4.10 + tamper detection 4.8. |
+| Workflow packs | new | medium | packs, sharing, wo07 |  | Export/import chains + squads with secret scrubbing; provenance on every node. |
+
+## Platform & distribution (WO08)
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Fleet dashboard | new | high | multi-project, home, wo08 |  | Home screen listing projects as status cards (hook health, drift, last session, token total). Tray badge sums problems. |
+| cowtext-mcp | new | high | mcp, runtime, moat, wo08 |  | Bundled MCP server exposing Memory Nodes as resources/tools for runtime demand-loading. Hooks log fetches. |
+| Skill Studio | new | high | skills, authoring, wo08 |  | Author skills/agents/commands as graph nodes; trigger simulator, one-click export as Claude Code plugin. |
+| Context packages | new | medium | teams, sharing, versioning, wo08 |  | Export subgraph as versioned package; imports render locked with approval-gated diffs. |
+| Cowtext as a plugin | new | medium | distribution, hooks, wo08 |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
+| Barn Raising | new | high | progression, retention, barn, wo08 |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
+
+## Unscheduled
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
 | Digest Claude Design prototype into docs/design | new | medium | design, docs |  | Extract remaining tokens/idioms from Cowtext Prototype.dc.html so future UI work doesn't drift. |
 | RU/EN localization | new | medium | i18n, product |  | Hand-rolled i18n layer: string extraction, locale store, translation file format. |
-| Background chill 16-bit music | new | medium | audio, assets, barn |  | Looping calm-mode music for barn. Asset work (Marty) for track; code half (sfx.ts channel) is tech-barn's zone. |
-| 'Run Claude' launcher window | new | medium | assemble, ui, process |  | Interactive launcher for `claude -p` flags, replacing hardcoded spawn. Needs own contract. |
-| Edge colour persistence | new | medium | edges, graph, ui |  | Persist color field on MemoryEdge in graph.json. Requires v1→v2 schema bump + migration + preset upgrade. |
 | Dockable markdown panel / separate editor window | new | low | markdown, editor, windows |  | Second Tauri WebviewWindow with cross-window Zustand sync. Architecture work of its own. |
-| graph.json schema migration discipline | new | medium | data-model, persistence |  | Standing rule: any schema change bumps version and adds migration in v1 harness. |
-| Comprehensive sub-agent management UI | done | high | multi-agent, barn, ui |  | Delivered 2026-08-18 (Agents Suite). UI chrome for CRUD, rename, reveal, identity/avatar/influence. |
-| Resolution cap with measurement gate (V4) | new | high | barn, perf |  | Cap Barn renderer at Math.min(devicePixelRatio, 2) only after FPS <50 on default scene at DPR>2, with A/B screenshots. |
 | Shared popup shell if third TagPicker caller appears (V3) | new | high | ui, components |  | Extract popup shell if third caller needs input-bearing popup (V3 follow-up). |
-| Agent-card live session status | new | medium | ui, agents |  | Agent card shows spawned/running dot via useSessionsStore (backlog, cross-store subscription). |
-
-## Triaged from docs/Brainstorm_Features.md (Product Analyst pass, triaged 2026-08-17)
-
-All 18 brainstorm ideas accepted into backlog; none rejected. Priorities from analyst ranking.
-
-### Quick wins
-
-| Name | Status | Priority | Tags | Agent | Description |
-|---|---|---|---|---|---|
-| The moo is the notification | new | high | audio, ambient, opt-in |  | Opt-in: while hidden/minimized, only turn-complete happy moo plays quietly. Barn becomes Claude-is-done sound. |
+| Comprehensive sub-agent management UI | done | high | multi-agent, barn, ui |  | Delivered 2026-08-18 (Agents Suite). UI chrome for CRUD, rename, reveal, identity/avatar/influence. |
 | Named calves | done | high | multi-agent, identity, barn |  | fnv1a32 identity hash, avatar params (8×8 grid), calf look, cap-4 lifecycle, session-ordinal spawning. |
-| Branch-aware graph | new | high | git, branches |  | Watch .git/HEAD per project; reload graph on checkout; warn via GENERATED header hash on branch mismatch. |
-| Dust and cobwebs | new | medium | staleness, heatmap, barn |  | Unread nodes gather dust/cobwebs; desaturate on canvas as lastVerified falls behind. Depends: heatmap. |
-
-### Moat bets
-
-| Name | Status | Priority | Tags | Agent | Description |
-|---|---|---|---|---|---|
-| Reality Check (drift lint) | new | high | drift, lint, git |  | Static lint checking every file path, command, script, port cited in node against live repo. Red badges on broken claims. |
-| Context audit changeset | new | high | heatmap, prune, tokens |  | N sessions of hook data → changeset: unpin never-read, adopt unmapped hot files. Reviewed like compile diff. |
-| Memory Inbox | new | high | memory, curation |  | Ingest Claude Code auto-memory; one-click promote to Memory Node or dismiss. Flag contradictions with existing nodes. |
-| Transcript mining for context gaps | new | high | sessions, gaps |  | Parse transcripts for gaps: agent rereads, unresolved questions. Surface as cards with one-click fixes. |
-| Context loadouts | new | medium | profiles, compile |  | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides. |
-| Merge sentry | new | medium | git, review-inbox |  | After merge, queue affected nodes into review inbox. Clear by re-verifying (bump lastVerified) or editing. |
-
-### Platform & distribution
-
-| Name | Status | Priority | Tags | Agent | Description |
-|---|---|---|---|---|---|
-| cowtext check (CI drift gate) | new | high | ci, cli, teams |  | Verify-only CLI + GitHub Action: fails PR when CLAUDE.md/AGENTS.md don't match graph.json or have drift-lint breakage. |
-| Fleet dashboard | new | high | multi-project, home |  | Home screen listing projects as status cards (hook health, drift, last session, token total). Tray badge sums problems. |
-| Barn Raising | new | high | progression, retention, barn |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
-| cowtext-mcp | new | high | mcp, runtime, moat |  | Bundled MCP server exposing Memory Nodes as resources/tools for runtime demand-loading. Hooks log fetches. |
-| Skill Studio | new | high | skills, authoring |  | Author skills/agents/commands as graph nodes; trigger simulator, one-click export as Claude Code plugin. |
-| Barn mission control | new | medium | multi-agent, sessions, barn |  | Concurrent sessions get own stall and full cow; per-session color lanes; chalkboard lists subagents. |
-| Context packages | new | medium | teams, sharing, versioning |  | Export subgraph as versioned package; imports render locked with approval-gated diffs. |
-| Cowtext as a plugin | new | medium | distribution, hooks |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
 
 ## Observations (from WO02 audit) — watching items
 

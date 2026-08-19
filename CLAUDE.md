@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # COWTEXT — desktop context-graph editor (Tauri 2 + React + PixiJS)
 
-A desktop app where an AI-agent context is a visual graph of Memory Nodes — each node is a real `.md` file in the user's project. Wire nodes together, **Compile** to generate `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` from one source of truth, **Assemble** to expand one-line briefs into full files via headless `claude -p`. On top sits a 16-bit isometric PixiJS barn scene driven live by Claude Code hooks.
+**Cowtext is a context compiler for AI coding agents** (positioning per the 2026-08-19 v2 replan; orchestration is a feature, not the pitch). An AI-agent context is a visual graph of Memory Nodes — each node is a real `.md` file in the user's project. Wire nodes together, **Compile** to generate `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` from one source of truth, **Assemble** to expand one-line briefs into full files via headless `claude -p`. On top sits a 16-bit isometric PixiJS barn scene driven live by Claude Code hooks.
 
 ## Hard rules
 
@@ -58,12 +58,12 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 ## Docs & fleet
 
-- `docs/` layout: `TERMINOLOGY.md` is the canon (module map, 27 invoke commands, events, key terms — keep ≤ 120 lines); full definitions live in `TERMINOLOGY_REFERENCE.md`. `tasks/` holds exactly TASKS / BACKLOG / BUGS / ROADMAP (milestones and the sprint log are sections inside ROADMAP.md; the feature inventory is a section inside BACKLOG.md). `design/` = design specs, `testing/` = manual test scripts, `fleet/` = ROSTER.md + ACTIVITY_LOG.md (three most recent sessions only).
+- `docs/` layout: `TERMINOLOGY.md` is the canon (module map, the invoke commands (51), the four Tauri events, key terms — keep ≤ 120 lines); full definitions live in `TERMINOLOGY_REFERENCE.md`. `tasks/` holds exactly TASKS / BACKLOG / BUGS / ROADMAP (milestones and the sprint log are sections inside ROADMAP.md; the feature inventory is a section inside BACKLOG.md). `design/` = design specs, `testing/` = manual test scripts, `fleet/` = ROSTER.md + ACTIVITY_LOG.md (three most recent sessions only).
 - `docs/_archive/` is history: files get there only via `git mv` (contracts/, research/, superseded/) — never delete docs, archive them.
 - The agent fleet is 6+1 agents in `.claude/agents/` (tech-lead, tech-general, tech-ui, tech-barn, tester, project-manager + product-analyst outside the default fleet), dispatched by the `/ultracode` skill; domain knowledge is preloaded via the skills in `.claude/skills/` (cowtext-terminology, design-tokens, art-direction, sound-design, manual-format, task-format). Roster and lanes: `docs/fleet/ROSTER.md`.
 
 ## Status
 
-**ALL SEVEN PHASES (0–6) CODE-COMPLETE AND ACCEPTED** — milestones M0–M6 reached; **WO01 FULLY CLOSED** (Blocks A–F landed); **WO02 DELIVERED** (7 build lanes: G1/G2/G3/U1/U2/U3/B1 all landed, tech-lead audit complete, 51/51 invoke contract verified, gates green). **Current version v0.1.0** (first public cut; declared 2026-08-18); production CSP, code-split 1,334→207 kB, ESLint 10, task-format canonical grids, priority buckets (critical/high/medium/low), BUGS.md as 5th convention file, agent-memory ensure command, TagPicker UI, FPS overlay, board segments. Defects D1/D2/D3 all fixed by owning lanes. **Toward v0.1.0 release**: (1) Marty's acceptance walk (WO01 manual A–F + N-suite; known-issues: Windows notify rename MAJOR, flush TOCTOU MINOR); (2) WO02 manual walk (61 steps A–H); (3) CSP runtime check on production `tauri build`; (4) Real sprites (Marty-side asset, P1 backlog). WO02 uncommitted awaiting dispatcher.
+**V2 REPLAN IN EFFECT (2026-08-19)** — positioning: *Cowtext is a context compiler for AI coding agents*; four-layer plan (L1 graph / L2 orchestrator / L3 workflows / L4 observability+barn) in ROADMAP.md, strategy per `Cowtext_Strategy_2026.pdf`. All seven phases (0–6) accepted; WO01 closed; **WO02 committed `103ac80`** (7 lanes, 51/51 invoke contract, gates green). **v0.1.0 cut re-based = WO03 landing** (old sprites/CSP gate dissolved; sprites now a parallel Marty-side track for WO05). **Next: dispatch WO03 — L1 moat hardening** per `docs/design/WO03_CONTRACT.md` (graph v3: 12 roles/7 edge kinds/tags+owner+meta, copilot+gemini targets, `cowtext-cli compile --check`, importer MVP, linter v1; invokes 51→54). Open QA: WO01 walk (A–F+N), WO02 walk (61 steps A–H).
 
 Update this line at the end of every session.
