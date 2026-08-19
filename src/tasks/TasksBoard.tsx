@@ -1,19 +1,30 @@
-// Tasks tab body (TASKBOARD_BATCH_CONTRACT.md Rev 2, R1/R2) — mounted by
-// App.tsx's Workspace when `view === "tasks"`, filling the center area
-// beside the rail and Inspector (no modal shell anymore). Reads/writes
-// exclusively through `useTasksStore` (lane L2's frozen interface) — this
-// file owns no invoke calls.
+// Tasks tab body (TASKBOARD_BATCH_CONTRACT.md Rev 2, R1/R2; restructured per
+// WO02_CONTRACT.md §7.11 item #14) — mounted by App.tsx's Workspace when
+// `view === "tasks"`, filling the center area beside the rail and Inspector
+// (no modal shell anymore). Reads/writes exclusively through `useTasksStore`
+// (lane L2's frozen interface) — this file owns no invoke calls.
 //
-// Main area: TASKS.md items ONLY, grouped into swimlanes by `section` (null
-// → "No sprint"), each broken into the four STATUS columns (New · In
-// production · In testing · Done) via `statusOf`. Side panel: BACKLOG and
-// ROADMAP as flat lists. Selecting a card/row drives both the tasks store's
-// `selected` (Inspector → TaskPanel) and clears the graph selection so the
-// panel is immediately visible.
+// A segmented control (TASKS · BACKLOG · ROADMAP · BUGS) picks which single
+// convention file fills the full-width board area below it — there is no
+// more fixed always-visible side panel. TASKS renders the swimlane board,
+// grouped by `section` (null → "No sprint") and broken into the four STATUS
+// columns (New · In production · In testing · Done) via `statusOf`; the
+// other three render as a flat list, `showWhen` on for ROADMAP only.
+// Selecting a card/row drives both the tasks store's `selected` (Inspector →
+// TaskPanel) and clears the graph selection so the panel is immediately
+// visible. Segment choice is local state, deliberately not persisted.
 
 import { useEffect, useState } from "react";
 import { MoreVertical, Plus } from "lucide-react";
-import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
+import {
+  normalizePriority,
+  PRIORITY_LABELS,
+  STATUS_LABELS,
+  TASK_STATUSES,
+  statusOf,
+  useTasksStore,
+  type TaskStatus,
+} from "../store/tasks";
 import type { TaskFileInfo, TaskItem } from "../tasks/api";
 import { PRODUCER_FILE, seedFor, type AgentMeta, useAgentsStore } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
@@ -59,14 +70,27 @@ function columnLabel(relPath: string): string {
 
 function PriorityBadge({ priority }: { priority: string | null }) {
   if (priority === null || priority.trim() === "") return null;
-  const norm = priority.trim().toUpperCase();
+  const bucket = normalizePriority(priority);
+  if (bucket === null) {
+    return (
+      <span className="flex-none rounded-sm border border-border bg-surface-2 px-1 font-mono text-micro text-content-secondary">
+        {priority.trim()}
+      </span>
+    );
+  }
   const cls =
-    norm === "P0"
+    bucket === "critical"
       ? "border-danger bg-danger-surface text-danger-text"
-      : norm === "P1"
+      : bucket === "high"
         ? "border-amber-border bg-amber-surface text-amber-text"
-        : "border-border bg-surface-2 text-content-secondary";
-  return <span className={`flex-none rounded-sm border px-1 font-mono text-micro ${cls}`}>{norm}</span>;
+        : bucket === "medium"
+          ? "border-border bg-surface-2 text-content-secondary"
+          : "border-border-subtle text-content-muted";
+  return (
+    <span className={`flex-none rounded-sm border px-1 font-mono text-micro ${cls}`}>
+      {PRIORITY_LABELS[bucket]}
+    </span>
+  );
 }
 
 function WhenChip({ when }: { when: string | null }) {
@@ -199,6 +223,33 @@ function StatusCard({
         <div className="min-w-[6px] flex-1" />
         <AgentChip agentRaw={task.agent} agents={agents} meta={meta} />
       </div>
+    </div>
+  );
+}
+
+// #14 — the always-visible right panel (BACKLOG/ROADMAP) is gone; this
+// segmented control picks which single file fills the full-width board
+// area. Same idiom as App.tsx's ViewToggle (2px padding frame on surface-2,
+// active segment surface-3, 24px segments).
+const BOARD_SEGMENTS = ["TASKS", "BACKLOG", "ROADMAP", "BUGS"] as const;
+type BoardSegment = (typeof BOARD_SEGMENTS)[number];
+
+function BoardSegmentToggle({ value, onChange }: { value: BoardSegment; onChange: (v: BoardSegment) => void }) {
+  return (
+    <div className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
+      {BOARD_SEGMENTS.map((seg) => (
+        <button
+          key={seg}
+          type="button"
+          onClick={() => onChange(seg)}
+          aria-pressed={value === seg}
+          className={`flex h-control-sm items-center rounded-sm px-3 font-mono text-2xs tracking-wider transition-colors duration-fast ${
+            value === seg ? "bg-surface-3 font-medium text-content" : "text-content-muted hover:text-content-secondary"
+          }`}
+        >
+          {seg}
+        </button>
+      ))}
     </div>
   );
 }
@@ -458,6 +509,9 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   const meta = useAgentsStore((s) => s.meta);
   const [textFilter, setTextFilter] = useState("");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  // #14 — local, deliberately not persisted (WO02_CONTRACT.md §1.3): resets
+  // to TASKS on remount.
+  const [segment, setSegment] = useState<BoardSegment>("TASKS");
 
   // Board state loads on tab mount (contract R1) — every time this
   // component mounts (view switched to "tasks") and whenever the project
@@ -481,7 +535,7 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
     }
     if (textFilter.trim() !== "") {
       const q = textFilter.trim().toLowerCase();
-      const hay = `${t.name} ${t.description} ${t.tags.join(" ")}`.toLowerCase();
+      const hay = `${t.name} ${t.description ?? ""} ${t.tags.join(" ")}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -490,10 +544,12 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
   const tasksFile = fileFor(files, "TASKS.md");
   const backlogFile = fileFor(files, "BACKLOG.md");
   const roadmapFile = fileFor(files, "ROADMAP.md");
+  const bugsFile = fileFor(files, "BUGS.md");
 
   const taskItems = allTasks.filter((t) => tasksFile !== undefined && t.relPath === tasksFile.relPath && matches(t));
   const backlogItems = allTasks.filter((t) => backlogFile !== undefined && t.relPath === backlogFile.relPath && matches(t));
   const roadmapItems = allTasks.filter((t) => roadmapFile !== undefined && t.relPath === roadmapFile.relPath && matches(t));
+  const bugsItems = allTasks.filter((t) => bugsFile !== undefined && t.relPath === bugsFile.relPath && matches(t));
 
   const bySection = new Map<string, TaskItem[]>();
   const sectionOrder: string[] = [];
@@ -528,6 +584,9 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
           onNewTask={() => setNewTaskOpen(true)}
         />
       )}
+      <div className="flex h-row-comfy flex-none items-center border-b border-border-subtle bg-surface-1 px-3">
+        <BoardSegmentToggle value={segment} onChange={setSegment} />
+      </div>
       {error !== null && (
         <div className="border-b border-border-subtle border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
           {error}
@@ -535,67 +594,53 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
       )}
       {loading ? (
         <p className="px-4 py-6 text-center text-sm text-content-muted">loading…</p>
-      ) : (
-        <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div className="sticky top-0 z-[1] grid grid-cols-4 border-b border-border-subtle bg-surface-1">
-              {STATUS_ORDER.map((status) => (
-                <ColumnHeader
-                  key={status}
-                  status={status}
-                  count={taskItems.filter((t) => statusOf(t) === status).length}
-                />
-              ))}
-            </div>
-            {tasksFile !== undefined && !tasksFile.exists && (
-              <p className="px-3 py-6 text-center text-sm text-content-muted">
-                No TASKS.md yet — add a task to create it.
-              </p>
-            )}
-            {tasksFile !== undefined && tasksFile.exists && taskItems.length === 0 && (
-              <p className="px-3 py-6 text-center text-sm text-content-muted">No tasks match.</p>
-            )}
-            {sectionOrder.map((sec) => (
-              <Swimlane
-                key={sec}
-                label={sec}
-                tasks={bySection.get(sec) ?? []}
-                statusOf={statusOf}
-                agents={agents}
-                meta={meta}
-                otherFiles={tasksFile !== undefined ? otherFilesFor(tasksFile.relPath) : []}
-                selectedId={selectedId}
-                onSelect={pick}
-                onSetStatus={(t, s) => void setStatus(t, s)}
-                onMove={(t, to) => void move(t, to)}
+      ) : segment === "TASKS" ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="sticky top-0 z-[1] grid grid-cols-4 border-b border-border-subtle bg-surface-1">
+            {STATUS_ORDER.map((status) => (
+              <ColumnHeader
+                key={status}
+                status={status}
+                count={taskItems.filter((t) => statusOf(t) === status).length}
               />
             ))}
           </div>
-          <div className="flex w-[300px] flex-none flex-col overflow-hidden border-l border-border-subtle">
-            <FlatListPanel
-              label="BACKLOG"
-              file={backlogFile}
-              tasks={backlogItems}
-              showWhen={false}
+          {tasksFile !== undefined && !tasksFile.exists && (
+            <p className="px-3 py-6 text-center text-sm text-content-muted">
+              No TASKS.md yet — add a task to create it.
+            </p>
+          )}
+          {tasksFile !== undefined && tasksFile.exists && taskItems.length === 0 && (
+            <p className="px-3 py-6 text-center text-sm text-content-muted">No tasks match.</p>
+          )}
+          {sectionOrder.map((sec) => (
+            <Swimlane
+              key={sec}
+              label={sec}
+              tasks={bySection.get(sec) ?? []}
+              statusOf={statusOf}
               agents={agents}
               meta={meta}
+              otherFiles={tasksFile !== undefined ? otherFilesFor(tasksFile.relPath) : []}
               selectedId={selectedId}
               onSelect={pick}
-              onToggle={(t, done) => void toggle(t, done)}
+              onSetStatus={(t, s) => void setStatus(t, s)}
+              onMove={(t, to) => void move(t, to)}
             />
-            <FlatListPanel
-              label="ROADMAP"
-              file={roadmapFile}
-              tasks={roadmapItems}
-              showWhen
-              agents={agents}
-              meta={meta}
-              selectedId={selectedId}
-              onSelect={pick}
-              onToggle={(t, done) => void toggle(t, done)}
-            />
-          </div>
+          ))}
         </div>
+      ) : (
+        <FlatListPanel
+          label={segment}
+          file={segment === "BACKLOG" ? backlogFile : segment === "ROADMAP" ? roadmapFile : bugsFile}
+          tasks={segment === "BACKLOG" ? backlogItems : segment === "ROADMAP" ? roadmapItems : bugsItems}
+          showWhen={segment === "ROADMAP"}
+          agents={agents}
+          meta={meta}
+          selectedId={selectedId}
+          onSelect={pick}
+          onToggle={(t, done) => void toggle(t, done)}
+        />
       )}
       {newTaskOpen && (
         <NewTaskDialog root={root} files={files} agents={agents} onClose={() => setNewTaskOpen(false)} />

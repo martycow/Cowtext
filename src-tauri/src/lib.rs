@@ -45,6 +45,7 @@ pub fn run() {
             project::probe_project_dirs,
             agents::agents_scan,
             agents::agent_create,
+            agents::agent_memory_ensure,
             agents::agent_save,
             agents::agent_rename,
             agents::agent_delete,

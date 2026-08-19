@@ -22,7 +22,8 @@ fn parses_table_with_alias_columns() {
     let t = &tasks[0];
     assert_eq!(t.source, TaskSource::Table);
     assert_eq!(t.name, "Ship it");
-    assert_eq!(t.priority.as_deref(), Some("P1"));
+    // WO02 §2.4: legacy "P1" cell text normalizes to the "high" bucket.
+    assert_eq!(t.priority.as_deref(), Some("high"));
     assert_eq!(t.description.as_deref(), Some("wire the thing up"));
     assert_eq!(t.agent.as_deref(), Some("tech-general"));
     assert_eq!(t.status.as_deref(), Some("in-production"));
@@ -60,7 +61,8 @@ fn checklist_extracts_tag_agent_priority_and_done_state() {
     assert_eq!(t.source, TaskSource::Checklist);
     assert_eq!(t.tags, vec!["backend".to_string(), "urgent".to_string()]);
     assert_eq!(t.agent.as_deref(), Some("tech-general"));
-    assert_eq!(t.priority.as_deref(), Some("P1"));
+    // WO02 §2.4: legacy bare "P1" token normalizes to the "high" bucket.
+    assert_eq!(t.priority.as_deref(), Some("high"));
 }
 
 #[test]
@@ -113,7 +115,7 @@ fn tasks_scan_discovery_order_root_before_docs_before_docs_tasks() {
     fs::write(dir.join("docs/tasks/SPRINT.md"), "- [ ] deep sprint loses\n").unwrap();
 
     let scan = tasks_scan(dir.to_string_lossy().into_owned()).unwrap();
-    assert_eq!(scan.files.len(), 4);
+    assert_eq!(scan.files.len(), 5);
     assert_eq!(scan.files[0].rel_path, "TASKS.md");
     assert!(scan.files[0].exists);
     assert_eq!(scan.files[1].rel_path, "docs/SPRINT.md");
@@ -126,7 +128,7 @@ fn tasks_scan_discovery_order_root_before_docs_before_docs_tasks() {
 fn tasks_scan_missing_files_report_default_root_location() {
     let dir = temp_project("scan-missing");
     let scan = tasks_scan(dir.to_string_lossy().into_owned()).unwrap();
-    assert_eq!(scan.files.len(), 4);
+    assert_eq!(scan.files.len(), 5);
     for (f, name) in scan.files.iter().zip(CONVENTION_NAMES.iter()) {
         assert!(!f.exists);
         assert_eq!(f.task_count, 0);
@@ -194,18 +196,28 @@ fn task_toggle_rejects_non_convention_path() {
 
 // ---- task_append ---------------------------------------------------------
 
+// WO02 §2.3 case 3: a missing file gets the canonical table, not a
+// checklist line — this supersedes the pre-WO02 header+checklist shape.
 #[test]
-fn task_append_creates_missing_file_with_header() {
+fn task_append_creates_missing_file_with_canonical_table() {
     let dir = temp_project("append-new");
     let root = dir.to_string_lossy().into_owned();
 
     let item = task_append(root, "TASKS.md".to_string(), "brand new task".to_string()).unwrap();
     assert_eq!(item.name, "brand new task");
+    assert_eq!(item.source, TaskSource::Table);
+    assert_eq!(item.status.as_deref(), Some("new"));
     assert!(!item.done);
 
     let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
-    assert_eq!(on_disk, "# TASKS\n\n- [ ] brand new task\n");
-    assert_eq!(item.line, 3);
+    assert_eq!(
+        on_disk,
+        "# TASKS\n\n\
+         | Name | Status | Priority | Tags | Agent | Description |\n\
+         |---|---|---|---|---|---|\n\
+         | brand new task | new |  |  |  |  |\n"
+    );
+    assert_eq!(item.line, 5);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -222,6 +234,92 @@ fn task_append_to_existing_file_appends_last_line() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// WO02 §2.3 case 1: a name-mapped table already exists — the new row lands
+// right after the last data row, not at EOF, with the same cell count and
+// pipe style, and the Priority cell carries the normalized bucket.
+#[test]
+fn task_append_into_existing_table_inserts_row_after_last_data_row() {
+    let dir = temp_project("append-table-existing");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Status | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A | new | low |\n\
+         | Row B | new | medium |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_append(root, "TASKS.md".to_string(), "New Task !high".to_string()).unwrap();
+    assert_eq!(item.source, TaskSource::Table);
+    assert_eq!(item.priority.as_deref(), Some("high"));
+    assert_eq!(item.status.as_deref(), Some("new"));
+    assert_eq!(item.line, 5);
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        "| Name | Status | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A | new | low |\n\
+         | Row B | new | medium |\n\
+         | New Task !high | new | high |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// WO02 §2.3 case 1: columns the appended row doesn't map to (here `Notes`)
+// get a single space, and pre-existing rows' cells — mapped or not — stay
+// byte-exact.
+#[test]
+fn task_append_into_existing_table_preserves_unmapped_columns_byte_exact() {
+    let dir = temp_project("append-table-unmapped");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Notes | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A |   keep me exact  | low |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_append(root, "TASKS.md".to_string(), "Row B".to_string()).unwrap();
+    assert_eq!(item.name, "Row B");
+    assert_eq!(item.line, 4);
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        "| Name | Notes | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A |   keep me exact  | low |\n\
+         | Row B | | |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// WO02 §2.3 item #14: BUGS.md is the 5th convention file — scanned and
+// writable exactly like the other four.
+#[test]
+fn bugs_md_scanned_and_writable() {
+    let dir = temp_project("bugs-md");
+    fs::write(dir.join("BUGS.md"), "- [ ] squash it\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let scan = tasks_scan(root.clone()).unwrap();
+    assert_eq!(scan.files.len(), 5);
+    assert_eq!(scan.files[4].rel_path, "BUGS.md");
+    assert!(scan.files[4].exists);
+    assert_eq!(scan.files[4].task_count, 1);
+
+    let item = task_append(root, "BUGS.md".to_string(), "new bug".to_string()).unwrap();
+    assert_eq!(item.name, "new bug");
+    assert_eq!(item.line, 2);
+    let on_disk = fs::read_to_string(dir.join("BUGS.md")).unwrap();
+    assert_eq!(on_disk, "- [ ] squash it\n- [ ] new bug\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn task_append_rejects_non_convention_path() {
     let dir = temp_project("append-bad-path");
@@ -233,27 +331,99 @@ fn task_append_rejects_non_convention_path() {
 
 // ---- task_move -------------------------------------------------------------
 
+// WO02 §2.3: target-form-aware — a checklist-only target still gets a
+// checklist line (the composed-fields shape, always unchecked/"new"). Uses
+// a "canonical" source line free of embedded #tag/@agent/Pn text, same
+// caveat as `task_update_checklist_roundtrip_unchanged_for_canonical_line`:
+// `split_name_desc` doesn't strip metadata tokens out of name/description,
+// so a source line that already embeds one would double it up once
+// `compose_checklist_text` re-appends it from the separately-extracted field.
 #[test]
-fn task_move_checklist_verbatim() {
+fn task_move_into_checklist_only_target_appends_checklist_line() {
     let dir = temp_project("move-checklist");
-    fs::write(dir.join("TASKS.md"), "- [ ] move me #keep\n").unwrap();
-    fs::write(dir.join("SPRINT.md"), "# SPRINT\n\n").unwrap();
+    fs::write(dir.join("TASKS.md"), "- [ ] move me\n").unwrap();
+    fs::write(dir.join("SPRINT.md"), "- [ ] already here\n").unwrap();
     let root = dir.to_string_lossy().into_owned();
 
     let moved = task_move(root, "TASKS.md".to_string(), 1, "SPRINT.md".to_string()).unwrap();
-    assert_eq!(moved.name, "move me #keep");
-    assert_eq!(moved.tags, vec!["keep".to_string()]);
+    assert_eq!(moved.source, TaskSource::Checklist);
+    assert_eq!(moved.name, "move me");
     assert_eq!(moved.rel_path, "SPRINT.md");
+    assert!(!moved.done);
 
     let from_on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
     assert_eq!(from_on_disk, "");
     let to_on_disk = fs::read_to_string(dir.join("SPRINT.md")).unwrap();
-    assert_eq!(to_on_disk, "# SPRINT\n\n- [ ] move me #keep\n");
+    assert_eq!(to_on_disk, "- [ ] already here\n- [ ] move me\n");
     let _ = fs::remove_dir_all(&dir);
 }
 
+// WO02 §2.3: a table row's tags/agent/priority (separate columns, so no
+// embedded-token double-up risk) survive a move into a checklist-only
+// target, composed via `compose_checklist_text` as `!<bucket>`.
 #[test]
-fn task_move_table_row_converted_to_checklist() {
+fn task_move_table_row_into_checklist_target_preserves_tags_agent_priority() {
+    let dir = temp_project("move-table-fields");
+    fs::write(
+        dir.join("BACKLOG.md"),
+        "| Name | Tags | Agent | Priority |\n\
+         | --- | --- | --- | --- |\n\
+         | Big idea | research, ux | tech-ui | P1 |\n",
+    )
+    .unwrap();
+    fs::write(dir.join("SPRINT.md"), "- [ ] already here\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let moved = task_move(root, "BACKLOG.md".to_string(), 3, "SPRINT.md".to_string()).unwrap();
+    assert_eq!(moved.source, TaskSource::Checklist);
+    // No dash/period boundary in the composed line, so (as elsewhere in
+    // this parser) `name` still carries the trailing token text verbatim —
+    // `tags`/`agent`/`priority` are extracted separately regardless.
+    assert_eq!(moved.name, "Big idea #research #ux @tech-ui !high");
+    assert_eq!(moved.tags, vec!["research".to_string(), "ux".to_string()]);
+    assert_eq!(moved.agent.as_deref(), Some("tech-ui"));
+    assert_eq!(moved.priority.as_deref(), Some("high"));
+
+    let to_on_disk = fs::read_to_string(dir.join("SPRINT.md")).unwrap();
+    assert_eq!(
+        to_on_disk,
+        "- [ ] already here\n- [ ] Big idea #research #ux @tech-ui !high\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// WO02 §2.3 case 1: moving into a target that already has a name-mapped
+// table inserts a row after its last data row, same as `task_append`.
+#[test]
+fn task_move_into_existing_table_target_inserts_row() {
+    let dir = temp_project("move-into-table");
+    fs::write(dir.join("TASKS.md"), "- [ ] Ship it #api\n").unwrap();
+    fs::write(
+        dir.join("BACKLOG.md"),
+        "| Name | Tags |\n| --- | --- |\n| Old | keep |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let moved = task_move(root, "TASKS.md".to_string(), 1, "BACKLOG.md".to_string()).unwrap();
+    assert_eq!(moved.source, TaskSource::Table);
+    assert_eq!(moved.tags, vec!["api".to_string()]);
+    assert_eq!(moved.line, 4);
+
+    let from_on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(from_on_disk, "");
+    let to_on_disk = fs::read_to_string(dir.join("BACKLOG.md")).unwrap();
+    assert_eq!(
+        to_on_disk,
+        "| Name | Tags |\n| --- | --- |\n| Old | keep |\n| Ship it #api | api |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// WO02 §2.3 case 3: a missing/taskless target gets a fresh canonical
+// table — this supersedes the pre-WO02 table-row-to-checklist conversion.
+#[test]
+fn task_move_table_row_into_empty_target_creates_canonical_table() {
     let dir = temp_project("move-table");
     fs::write(
         dir.join("BACKLOG.md"),
@@ -263,12 +433,19 @@ fn task_move_table_row_converted_to_checklist() {
     let root = dir.to_string_lossy().into_owned();
 
     let moved = task_move(root, "BACKLOG.md".to_string(), 3, "TASKS.md".to_string()).unwrap();
-    assert_eq!(moved.source, TaskSource::Checklist);
+    assert_eq!(moved.source, TaskSource::Table);
     assert_eq!(moved.name, "Big idea");
     assert_eq!(moved.description.as_deref(), Some("do research"));
+    assert_eq!(moved.status.as_deref(), Some("new"));
 
     let to_on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
-    assert_eq!(to_on_disk, "# TASKS\n\n- [ ] Big idea — do research\n");
+    assert_eq!(
+        to_on_disk,
+        "# TASKS\n\n\
+         | Name | Status | Priority | Tags | Agent | Description |\n\
+         |---|---|---|---|---|---|\n\
+         | Big idea | new |  |  |  | do research |\n"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -346,6 +523,86 @@ fn table_status_cell_synonym_mapping() {
     assert_eq!(tasks[3].status.as_deref(), Some("done"));
     assert!(tasks[3].done);
     assert_eq!(tasks[4].status.as_deref(), Some("new"));
+}
+
+// ---- WO02 §2.4: priority buckets --------------------------------------------
+
+#[test]
+fn bucket_for_priority_input_normalizes_all_aliases() {
+    assert_eq!(bucket_for_priority_input("low"), Some("low"));
+    assert_eq!(bucket_for_priority_input("L"), Some("low"));
+    assert_eq!(bucket_for_priority_input("P3"), Some("low"));
+    assert_eq!(bucket_for_priority_input("  Medium  "), Some("medium"));
+    assert_eq!(bucket_for_priority_input("med"), Some("medium"));
+    assert_eq!(bucket_for_priority_input("normal"), Some("medium"));
+    assert_eq!(bucket_for_priority_input("p2"), Some("medium"));
+    assert_eq!(bucket_for_priority_input("HIGH"), Some("high"));
+    assert_eq!(bucket_for_priority_input("h"), Some("high"));
+    assert_eq!(bucket_for_priority_input("P1"), Some("high"));
+    assert_eq!(bucket_for_priority_input("critical"), Some("critical"));
+    assert_eq!(bucket_for_priority_input("Crit"), Some("critical"));
+    assert_eq!(bucket_for_priority_input("blocker"), Some("critical"));
+    assert_eq!(bucket_for_priority_input("Urgent"), Some("critical"));
+    assert_eq!(bucket_for_priority_input("p0"), Some("critical"));
+    assert_eq!(bucket_for_priority_input(""), None);
+    assert_eq!(bucket_for_priority_input("whenever"), None);
+    assert_eq!(bucket_for_priority_input("p4"), None);
+}
+
+#[test]
+fn checklist_priority_bang_token_recognizes_buckets_case_insensitive_and_legacy_p_code() {
+    let content = "\
+- [ ] a !low
+- [ ] b !MEDIUM
+- [ ] c !High
+- [ ] d !critical
+- [ ] e P0
+- [ ] f !bogus
+";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 6);
+    assert_eq!(tasks[0].priority.as_deref(), Some("low"));
+    assert_eq!(tasks[1].priority.as_deref(), Some("medium"));
+    assert_eq!(tasks[2].priority.as_deref(), Some("high"));
+    assert_eq!(tasks[3].priority.as_deref(), Some("critical"));
+    assert_eq!(tasks[4].priority.as_deref(), Some("critical")); // legacy P0
+    assert_eq!(tasks[5].priority, None); // unrecognized — never invented
+}
+
+#[test]
+fn task_update_checklist_priority_writes_bucket_or_raw() {
+    let dir = temp_project("update-priority-recognized");
+    fs::write(dir.join("TASKS.md"), "- [ ] Task one\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+    let patch = TaskPatch {
+        name: Some("Task one".to_string()),
+        priority: Some("p1".to_string()),
+        ..Default::default()
+    };
+    let updated = task_update(root, "TASKS.md".to_string(), 1, patch).unwrap();
+    assert_eq!(updated.priority.as_deref(), Some("high"));
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, "- [ ] Task one !high\n");
+    let _ = fs::remove_dir_all(&dir);
+
+    let dir = temp_project("update-priority-raw");
+    fs::write(dir.join("TASKS.md"), "- [ ] Task two\n").unwrap();
+    let root = dir.to_string_lossy().into_owned();
+    let patch = TaskPatch {
+        name: Some("Task two".to_string()),
+        priority: Some("urgent-note".to_string()),
+        ..Default::default()
+    };
+    // "urgent-note" doesn't normalize (it's not one of the recognized
+    // aliases once "-" becomes a space) — the raw trimmed value is written
+    // bare, nothing invented or dropped from the on-disk bytes. (A bare
+    // trailing token like this isn't recognizable as a priority token on
+    // the next scan — same "canonical fixture" caveat as the checklist
+    // round-trip test above — so this test checks the write side only.)
+    task_update(root, "TASKS.md".to_string(), 1, patch).unwrap();
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(on_disk, "- [ ] Task two urgent-note\n");
+    let _ = fs::remove_dir_all(&dir);
 }
 
 // ---- Rev 2 parser: section attribution --------------------------------------
@@ -504,12 +761,13 @@ fn task_update_table_row_preserves_unmapped_cells_byte_exact() {
     };
     let updated = task_update(root, "TASKS.md".to_string(), 3, patch).unwrap();
     assert_eq!(updated.name, "New Name");
-    assert_eq!(updated.priority.as_deref(), Some("P1"));
+    // WO02 §2.4: the legacy "P1" input normalizes to the "high" bucket on write.
+    assert_eq!(updated.priority.as_deref(), Some("high"));
 
     let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
     assert_eq!(
         on_disk,
-        "| Name | Notes | Priority |\n| --- | --- | --- |\n| New Name |   keep me exactly  | P1 |\n"
+        "| Name | Notes | Priority |\n| --- | --- | --- |\n| New Name |   keep me exactly  | high |\n"
     );
     let _ = fs::remove_dir_all(&dir);
 }

@@ -23,10 +23,11 @@
 // MUST come before any other pixi.js import: patches the renderer to use
 // static uniform sync so Pixi works under the production CSP (no 'unsafe-eval').
 import "pixi.js/unsafe-eval";
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { Application, Container } from "pixi.js";
 import { useGraphStore, type MemoryNode } from "../store/graph";
 import { useEventsStore } from "../store/events";
+import { useSettingsStore } from "../store/settings";
 import { PALETTE } from "./palette";
 import { buildLayout, COW_HOME_TILE } from "./sceneGraph";
 import { Cow, type IdleStage } from "./cow";
@@ -89,9 +90,39 @@ function SessionTicker(): ReactElement {
   );
 }
 
+/** WO02 #7 — Barn FPS overlay (§7.4). Samples app.ticker.FPS on a 500 ms
+ *  interval, active only while showFps && ready, so it costs nothing when
+ *  off: no interval, no state updates, no extra ticker work (gate 11). */
+function FpsOverlay({ appRef, ready }: { appRef: RefObject<Application | null>; ready: boolean }): ReactElement | null {
+  const showFps = useSettingsStore((s) => s.showFps);
+  const [fps, setFps] = useState(0);
+  const [idle, setIdle] = useState(false);
+
+  useEffect(() => {
+    if (!showFps || !ready) return;
+    const app = appRef.current;
+    if (app === null) return;
+    const sample = (): void => {
+      setFps(Math.round(app.ticker.FPS));
+      setIdle(app.ticker.maxFPS === 12);
+    };
+    sample();
+    const id = setInterval(sample, 500);
+    return () => clearInterval(id);
+  }, [showFps, ready, appRef]);
+
+  if (!showFps || !ready) return null;
+  return (
+    <div className="absolute left-2 top-2 z-[1] font-pixel text-2xs text-[var(--amber)]">
+      {fps} fps{idle ? " · idle" : ""}
+    </div>
+  );
+}
+
 export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const demoRef = useRef<DemoPlayer | null>(null);
+  const appRef = useRef<Application | null>(null);
   const connectRef = useRef<BarnEventSource | undefined>(connectEvents);
   connectRef.current = connectEvents;
   const autoDemoRef = useRef(autoDemo);
@@ -119,6 +150,7 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         return;
       }
       initialized = true;
+      appRef.current = app;
       host.appendChild(app.canvas);
       sfx.setSceneMounted(true);
       cleanups.push(() => sfx.setSceneMounted(false));
@@ -385,6 +417,7 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       disposed = true;
       for (const fn of cleanups.reverse()) fn();
       demoRef.current = null;
+      appRef.current = null;
       setReady(false);
       if (initialized) app.destroy(true, { children: true, texture: true });
     };
@@ -392,6 +425,7 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
 
   return (
     <div ref={hostRef} style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
+      <FpsOverlay appRef={appRef} ready={ready} />
       {ready && (
         <>
           <button

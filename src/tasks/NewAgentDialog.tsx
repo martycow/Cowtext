@@ -4,10 +4,11 @@
 // nickname to the sidecar via `updateMeta` (debounced autosave, same as the
 // rest of the agent editor).
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useAgentsStore, type Selection } from "../store/agents";
 import { FieldLabel, ModelPicker, Stepper } from "../agents/AgentEditor";
+import { normalizeFileName, slugForFile } from "../wizard/paths";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -17,6 +18,29 @@ const SECONDARY_BTN =
 
 const PRIMARY_BTN =
   "flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled";
+
+/** 34×19 pill toggle — amber, mirrors NodeWizard's AmberToggle. "Create
+ *  memory folder" is a promise about agent behaviour, not a user action on
+ *  the UI itself, so amber is correct per the accent law (contract §7.3). */
+function AmberToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast ${
+        checked ? "border-amber-border bg-amber-surface" : "border-border-strong bg-surface-2"
+      }`}
+    >
+      <span
+        className={`absolute top-[2px] h-[13px] w-[13px] rounded-pill transition-all duration-fast ${
+          checked ? "left-[16px] bg-amber" : "left-[2px] bg-content-muted"
+        }`}
+      />
+    </button>
+  );
+}
 
 const TOOL_OPTIONS = [
   "Read",
@@ -37,11 +61,16 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const saveDoc = useAgentsStore((s) => s.saveDoc);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const skills = useAgentsStore((s) => s.skills);
+  const agents = useAgentsStore((s) => s.agents);
   const panelRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   const [name, setName] = useState("");
   const [nickname, setNickname] = useState("");
+  const [description, setDescription] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [fileNameTouched, setFileNameTouched] = useState(false);
+  const [withMemory, setWithMemory] = useState(true);
   const [model, setModel] = useState<string | null>("sonnet");
   const [priority, setPriority] = useState(3);
   const [influence, setInfluence] = useState(50);
@@ -63,6 +92,20 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // File name auto-slugs from Name until the user edits it directly (the
+  // fileNameTouched idiom from NodeWizard — contract §7.3).
+  useEffect(() => {
+    if (fileNameTouched) return;
+    setFileName(`${slugForFile(name)}.md`);
+  }, [name, fileNameTouched]);
+
+  const normalizedFileName = normalizeFileName(fileName, slugForFile(name));
+  const memoryStem = normalizedFileName.replace(/\.md$/i, "");
+  const collision = useMemo(
+    () => agents.some((a) => a.fileName.toLowerCase() === normalizedFileName.toLowerCase()),
+    [agents, normalizedFileName],
+  );
+
   const toggleTool = (t: string) => {
     setTools((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
   };
@@ -71,28 +114,28 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     setSkillNames((cur) => (cur.includes(name_) ? cur.filter((x) => x !== name_) : [...cur, name_]));
   };
 
-  const canSubmit = name.trim() !== "" && !busy;
+  const canSubmit = name.trim() !== "" && !collision && !busy;
 
   const submit = () => {
     setBusy(true);
     setError(null);
     void (async () => {
-      const err = await createAgent(name.trim());
+      const err = await createAgent(name.trim(), { fileName: normalizedFileName, withMemory });
       if (err !== null) throw new Error(err);
       const sel = useAgentsStore.getState().selection;
       if (sel === null || sel.kind !== "agent") return;
-      const fileName = sel.key;
-      const doc = useAgentsStore.getState().agents.find((a) => a.fileName === fileName);
+      const createdFileName = sel.key;
+      const doc = useAgentsStore.getState().agents.find((a) => a.fileName === createdFileName);
       if (doc !== undefined) {
-        const patchedSel: Selection = { kind: "agent", key: fileName };
+        const patchedSel: Selection = { kind: "agent", key: createdFileName };
         updateDraft(patchedSel, {
-          fields: { ...doc.fields, model, tools, skills: skillNames },
+          fields: { ...doc.fields, description: description.trim() === "" ? null : description.trim(), model, tools, skills: skillNames },
           body: duties,
         });
         const saveErr = await saveDoc(patchedSel);
         if (saveErr !== null) throw new Error(saveErr);
       }
-      updateMeta(fileName, { nickname, priority, influence });
+      updateMeta(createdFileName, { nickname, priority, influence });
     })()
       .then(onClose)
       .catch((e: unknown) => {
@@ -148,6 +191,44 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
                 className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent"
               />
             </div>
+          </div>
+          <div>
+            <FieldLabel>Description</FieldLabel>
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="optional — one line, shown in the frontmatter"
+              className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent"
+            />
+          </div>
+          <div>
+            <FieldLabel>File</FieldLabel>
+            <input
+              value={fileName}
+              onChange={(e) => {
+                setFileNameTouched(true);
+                setFileName(e.target.value);
+              }}
+              placeholder="agent.md"
+              className="h-control w-full rounded border border-border bg-surface-2 px-2 font-mono text-sm text-content focus:border-accent"
+            />
+            <p className="mt-1 font-mono text-2xs text-content-muted">
+              .claude/agents/{normalizedFileName}
+            </p>
+            {collision && (
+              <p className="mt-1 text-xs leading-snug text-danger-text">
+                An agent file named {normalizedFileName} already exists — choose a different name.
+              </p>
+            )}
+          </div>
+          <div className="flex items-center justify-between border-t border-border-subtle pt-3">
+            <div>
+              <FieldLabel>Memory folder</FieldLabel>
+              <p className="font-mono text-2xs text-content-muted">
+                .claude/agent-memory/{memoryStem}/
+              </p>
+            </div>
+            <AmberToggle checked={withMemory} onChange={setWithMemory} />
           </div>
           <div>
             <FieldLabel>Model</FieldLabel>

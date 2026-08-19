@@ -1,28 +1,30 @@
 # Cowtext Roadmap
 
-Source of truth for phase order: `COWTEXT_VIBECODE_PLAN.md` §9. **All seven phases
-(0–6) are code-complete and accepted** — the phased build is finished. This roadmap
-now tracks the road to the first public cut, **v0.1.0**.
+**All seven phases (0–6) are code-complete and accepted** — the phased build is finished. This roadmap now tracks the road to the first public cut, **v0.1.0**.
 
-## App version
+## Current work toward v0.1.0
 
-**Current: v0.0.0007** (as of 2026-08-18) · **Next: v0.1.0** — the first
-public-shippable cut.
+| Name | Status | Priority | Tags | Agent | When | Description |
+|---|---|---|---|---|---|---|
+| Real sprites (Aseprite originals) | new | critical | phase-5, art, assets, v0.1.0 |  | v0.1.0 | Replace programmatic Graphics with 16-bit originals per ART_DIRECTION.md. Marty-side. |
+| CSP runtime check under production build | new | high | v0.1.0, csp, qa |  | v0.1.0 | Run `npm run tauri build`; verify invokes, SFX, fonts, Barn render; no CSP refusals in console. |
+| Cut v0.1.0 | new | high | v0.1.0, release |  | v0.1.0 | Tagged release commit with verified production build. |
 
-Scheme `v0.0.NNNN`: the last field increments once per landing (code complete and
-verified by automated checks); manual acceptance gates *closing* a phase, not the
-bump. The v0.0.0004 shared bump (Phases 3+4 landed in one session) remains a
-documented one-off, not the norm.
+## App version (historical)
+
+**Current: v0.0.0007** · **Target: v0.1.0** (first public-shippable cut).
+
+Scheme `v0.0.NNNN`: increments once per landing (code complete + verified); manual acceptance gates *close* phases, not the bump.
 
 | Version | Landed | What it covers |
 |---|---|---|
 | v0.0.0001 | Phase 0 | Tauri 2 skeleton, dark shell, open folder, `.md` scan |
 | v0.0.0002 | Phase 1 | Graph canvas, inspector, `.cowtext/graph.json` persistence |
-| v0.0.0003 | Phase 2 | Compile: `compile.rs` adapters, diff-preview modal, cycle validation |
-| v0.0.0004 | Phases 3+4 (+ Barn prototype) | Assemble: `claude -p` queue, per-node Assemble/Refine/Summarize. Live feed: axum hooks server on :4923, `barn://event` pipeline, event log, canvas pulse, hooks confirmation diff. Early Barn prototype (Pixi 8, demo mode, Canvas⇄Barn toggle) |
-| v0.0.0005 | Phase 5 | The Barn completed: full SFX layer (`sfx.ts`, 14+3 cues, ducking/cooldowns/gates), Settings modal, SNES juice pass, calm mode + mute, pause-when-hidden, demo filtering |
-| v0.0.0006 | Phase 6 | Presets & Handoff: `preset.rs`/`handoff.rs` (never-clobber, GENERATED header), preset & handoff UI, Chat/Code/Design clipboard variants |
-| v0.0.0007 | v0.1.0 ship-prep (`cb770d4`) | Production CSP + relaxed devCsp (`tauri.conf.json` version pre-bumped to 0.1.0), code-split (main chunk 1,334 → 207 kB), ESLint 10 flat config + `npm run lint`, `pixi.js/unsafe-eval` CSP fix |
+| v0.0.0003 | Phase 2 | Compile: adapters, diff-preview modal, cycle validation |
+| v0.0.0004 | Phases 3+4 | Assemble: `claude -p` queue. Live feed: axum on :4923, hooks, event log, Barn prototype. |
+| v0.0.0005 | Phase 5 | The Barn: full SFX, Settings modal, juice pass, calm mode, demo filtering |
+| v0.0.0006 | Phase 6 | Presets & Handoff: never-clobber, GENERATED header, UI, clipboard variants |
+| v0.0.0007 | ship-prep | Production CSP, code-split (1,334→207 kB), ESLint 10, `pixi.js/unsafe-eval` fix |
 
 ## Phases & milestones — all closed
 

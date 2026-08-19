@@ -120,6 +120,11 @@ export interface PropEntry {
   /** J5 — read this session; prop renders its ajar/popped/lifted frame. */
   opened: boolean;
   setOpened: (b: boolean) => void;
+  /** Precomputed hover-bubble label (Task-Board §9). Built once here, at
+   *  rebuild time, instead of re-templated by hover.ts's sync() every
+   *  ticker frame — WO02 #8 perf pass: title/role/filePath never change
+   *  without a rebuild, so the string never needs to. */
+  hoverLabel: string;
 }
 
 export interface BarnLayout {
@@ -401,6 +406,7 @@ export function buildLayout(): BarnLayout {
           opened: false, // session accumulation resets on rebuild (accepted);
           // BarnScene re-derives it from the event ring right after.
           setOpened: pv.setOpened,
+          hoverLabel: `${node.title} — ${node.role} node (${node.filePath})`,
         });
       }
     },

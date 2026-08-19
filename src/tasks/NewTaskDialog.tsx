@@ -7,11 +7,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { STATUS_LABELS, TASK_FILE_NAMES, TASK_STATUSES, useTasksStore, type TaskStatus } from "../store/tasks";
+import {
+  PRIORITY_LABELS,
+  STATUS_LABELS,
+  TASK_FILE_NAMES,
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  useTasksStore,
+  type TaskPriority,
+  type TaskStatus,
+} from "../store/tasks";
 import type { TaskFileInfo } from "../tasks/api";
 import { PRODUCER_FILE } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
-import { ChipEditor, FieldLabel } from "../agents/AgentEditor";
+import { FieldLabel } from "../agents/AgentEditor";
+import { TagPicker } from "./TagPicker";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -23,7 +33,7 @@ const PRIMARY_BTN =
   "flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled";
 
 type FileChoice = (typeof TASK_FILE_NAMES)[number];
-const PRIORITIES = ["none", "P0", "P1", "P2", "P3"] as const;
+const PRIORITIES = ["none", ...TASK_PRIORITIES] as const;
 const STATUS_ORDER = TASK_STATUSES;
 
 function Segmented<T extends string>({
@@ -55,12 +65,18 @@ function Segmented<T extends string>({
   );
 }
 
-function composeLine(name: string, description: string, tags: string[], agent: string, priority: string | null): string {
+function composeLine(
+  name: string,
+  description: string,
+  tags: string[],
+  agent: string,
+  priority: TaskPriority | null,
+): string {
   let line = name.trim();
   if (description.trim() !== "") line += ` — ${description.trim()}`;
   for (const tag of tags) line += ` #${tag}`;
   if (agent.trim() !== "") line += ` @${agent.trim()}`;
-  if (priority !== null) line += ` ${priority}`;
+  if (priority !== null) line += ` !${priority}`;
   return line;
 }
 
@@ -84,7 +100,7 @@ export function NewTaskDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
-  const [priority, setPriority] = useState<string | null>(null);
+  const [priority, setPriority] = useState<TaskPriority | null>(null);
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState<TaskStatus>("new");
   const [busy, setBusy] = useState(false);
@@ -117,7 +133,7 @@ export function NewTaskDialog({
     }
     setBusy(true);
     setError(null);
-    const text = composeLine(name, description, tags, agent, priority === "none" ? null : priority);
+    const text = composeLine(name, description, tags, agent, priority);
     void (async () => {
       const err = await append(relPath, text);
       if (err !== null) throw new Error(err);
@@ -196,12 +212,17 @@ export function NewTaskDialog({
           </div>
           <div>
             <FieldLabel>Tags</FieldLabel>
-            <ChipEditor items={tags} disabled={false} placeholder="tag…" onChange={setTags} />
+            <TagPicker items={tags} disabled={false} onChange={setTags} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <FieldLabel>Priority</FieldLabel>
-              <Segmented value={priority ?? "none"} options={PRIORITIES} onChange={(v) => setPriority(v === "none" ? null : v)} />
+              <Segmented
+                value={priority ?? "none"}
+                options={PRIORITIES}
+                labels={PRIORITY_LABELS}
+                onChange={(v) => setPriority(v === "none" ? null : v)}
+              />
             </div>
             <div>
               <FieldLabel>Agent</FieldLabel>

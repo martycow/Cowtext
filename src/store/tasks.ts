@@ -1,6 +1,6 @@
 // Tasks store (TASKBOARD_BATCH_CONTRACT.md §7) — state behind the SCRUM-like
-// board. Tasks are lines in the four convention files (TASKS/SPRINT/BACKLOG/
-// ROADMAP.md); every mutation goes through the Rust line-surgery commands and
+// board. Tasks are lines in the five convention files (TASKS/SPRINT/BACKLOG/
+// ROADMAP/BUGS.md); every mutation goes through the Rust line-surgery commands and
 // the store re-adopts the returned item. fs://change events on those files
 // (external edits, incl. Claude Code sessions) trigger a debounced reload via
 // onTaskFileChange, called from the events.ts listener.
@@ -46,13 +46,83 @@ export function statusOf(item: TaskItem): TaskStatus {
   return item.done ? "done" : "new";
 }
 
-export const TASK_FILE_NAMES = ["TASKS.md", "SPRINT.md", "BACKLOG.md", "ROADMAP.md"] as const;
+// #14 — order MUST match Rust CONVENTION_NAMES exactly (positional coupling,
+// WO02_CONTRACT.md §7.11). BUGS.md is appended last; never reorder.
+export const TASK_FILE_NAMES = [
+  "TASKS.md",
+  "SPRINT.md",
+  "BACKLOG.md",
+  "ROADMAP.md",
+  "BUGS.md",
+] as const;
 
-/** Is this relPath one of the four convention files (any allowed dir)? */
+// #13 — canonical priority buckets (mirrors Rust bucket_for_priority_input).
+export type TaskPriority = "low" | "medium" | "high" | "critical";
+
+export const TASK_PRIORITIES: readonly TaskPriority[] = ["low", "medium", "high", "critical"];
+
+export const PRIORITY_LABELS: Record<TaskPriority, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  critical: "CRITICAL",
+};
+
+/** Mirrors Rust bucket_for_priority_input: trim, ASCII-lowercase, -/_ -> space,
+ *  collapse whitespace, then match against the canonical vocabulary and its
+ *  aliases. null = no priority / unrecognized. */
+export function normalizePriority(raw: string | null): TaskPriority | null {
+  if (raw === null) return null;
+  const norm = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  switch (norm) {
+    case "low":
+    case "l":
+    case "p3":
+      return "low";
+    case "medium":
+    case "med":
+    case "normal":
+    case "m":
+    case "p2":
+      return "medium";
+    case "high":
+    case "h":
+    case "p1":
+      return "high";
+    case "critical":
+    case "crit":
+    case "blocker":
+    case "urgent":
+    case "p0":
+      return "critical";
+    default:
+      return null;
+  }
+}
+
+/** Unique tags across every scanned task, case-insensitively deduped
+ *  (first-seen casing wins), sorted alphabetically (localeCompare). */
+export function allTags(tasks: TaskItem[]): string[] {
+  const seen = new Map<string, string>();
+  for (const t of tasks) {
+    for (const tag of t.tags) {
+      const key = tag.toLowerCase();
+      if (!seen.has(key)) seen.set(key, tag);
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/** Is this relPath one of the five convention files (any allowed dir)? */
 export function isTaskFile(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
   const base = (normalized.split("/").pop() ?? "").toUpperCase();
-  if (!(TASK_FILE_NAMES as readonly string[]).includes(base)) return false;
+  if (!TASK_FILE_NAMES.some((n) => n.toUpperCase() === base)) return false;
   const dir = normalized.slice(0, normalized.length - base.length).toLowerCase();
   return dir === "" || dir === "docs/" || dir === "docs/tasks/";
 }

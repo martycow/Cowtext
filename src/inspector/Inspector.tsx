@@ -28,9 +28,19 @@ import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../asse
 import { revealPath } from "../fs/api";
 import { PRODUCER_FILE, useAgentsStore, type Selection as AgentsSelection } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
-import { AgentEditor, ChipEditor } from "../agents/AgentEditor";
+import { AgentEditor } from "../agents/AgentEditor";
 import { SkillEditor } from "../agents/SkillEditor";
-import { STATUS_LABELS, TASK_STATUSES, statusOf, useTasksStore, type TaskStatus } from "../store/tasks";
+import {
+  normalizePriority,
+  PRIORITY_LABELS,
+  STATUS_LABELS,
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  statusOf,
+  useTasksStore,
+  type TaskStatus,
+} from "../store/tasks";
+import { TagPicker } from "../tasks/TagPicker";
 import { useSessionsStore } from "../store/sessions";
 import { AgentPanel } from "../sessions/AgentPanel";
 import { CodeMirrorEditor, type AtMentionHandlers } from "./CodeMirrorEditor";
@@ -344,7 +354,7 @@ function RoleField({ node }: { node: MemoryNode }) {
         </span>
         <span className="min-w-0 flex-1 capitalize">{node.role}</span>
       </button>
-      <p className="mt-1 text-xs leading-snug text-content-muted">
+      <p className="mt-1 text-xs leading-snug text-content-secondary">
         {ROLE_DESCRIPTIONS[node.role]}
       </p>
       {open !== null && (
@@ -901,7 +911,7 @@ function StandaloneAgentsPanel({ root }: { root: string }) {
 // ── Task panel (contract Rev 2, R4) ─────────────────────────────────────
 
 const STATUS_ORDER = TASK_STATUSES;
-const PRIORITY_OPTIONS = ["none", "P0", "P1", "P2", "P3"] as const;
+const PRIORITY_OPTIONS = ["none", ...TASK_PRIORITIES] as const;
 
 function Segmented<T extends string>({
   value,
@@ -1000,7 +1010,7 @@ function TaskPanel({ root }: { root: string }) {
   useEffect(() => {
     if (item === null) return;
     setName(item.name);
-    setDescription(item.description);
+    setDescription(item.description ?? "");
     setTags(item.tags);
     setPriority(item.priority);
     setPhase(item.phase ?? "");
@@ -1073,11 +1083,16 @@ function TaskPanel({ root }: { root: string }) {
         </div>
         <div>
           <FieldLabel>Tags</FieldLabel>
-          <ChipEditor items={tags} disabled={false} placeholder="tag…" onChange={setTags} />
+          <TagPicker items={tags} disabled={false} onChange={setTags} />
         </div>
         <div>
           <FieldLabel>Priority</FieldLabel>
-          <Segmented value={priority ?? "none"} options={PRIORITY_OPTIONS} onChange={(v) => setPriority(v === "none" ? null : v)} />
+          <Segmented
+            value={normalizePriority(priority) ?? "none"}
+            options={PRIORITY_OPTIONS}
+            labels={PRIORITY_LABELS}
+            onChange={(v) => setPriority(v === "none" ? null : v)}
+          />
         </div>
         <div>
           <FieldLabel>Agent</FieldLabel>

@@ -13,6 +13,7 @@ import {
   agentConvert,
   agentCreate,
   agentDelete,
+  agentMemoryEnsure,
   agentRename,
   agentSave,
   agentsMetaWrite,
@@ -80,7 +81,9 @@ export interface AgentsState {
   updateDraft(sel: Selection, patch: Partial<DocDraft>): void;
   revertDraft(sel: Selection): void;
   saveDoc(sel: Selection): Promise<string | null>; // null = success, else message
-  createAgent(name: string): Promise<string | null>;
+  createAgent(name: string, opts?: { fileName?: string; withMemory?: boolean }): Promise<string | null>;
+  /** Idempotent backfill for an existing agent. null = success, else the message. */
+  ensureMemory(fileName: string): Promise<string | null>;
   createSkill(name: string): Promise<string | null>;
   renameSelected(newName: string): Promise<string | null>;
   /** Selection-independent agent rename (graph-store rename routing).
@@ -415,13 +418,14 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     }
   },
 
-  createAgent: async (name) => {
+  createAgent: async (name, opts) => {
     const s = get();
     if (s.busy) return "Busy";
     if (s.root === null) return "No project open";
+    const root = s.root;
     set({ busy: true, opError: null });
     try {
-      const doc = await agentCreate(s.root, name);
+      const doc = await agentCreate(root, name, opts?.fileName ?? null);
       // The reclaimed fileName may still be sitting in the orphan bucket
       // (external delete + in-app recreate under the same name): drop it
       // from orphan bookkeeping and, if it carried metadata, promote it
@@ -436,6 +440,32 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         meta: reconciled !== undefined ? { ...st.meta, [doc.fileName]: reconciled } : st.meta,
       }));
       if (reconciled !== undefined) scheduleMetaSave();
+      if (opts?.withMemory !== false) {
+        // A memory-folder failure must not fail the create: the agent has
+        // already landed. Surface the message through opError only.
+        try {
+          await agentMemoryEnsure(root, doc.fileName);
+        } catch (e) {
+          set({ opError: String(e) });
+        }
+      }
+      return null;
+    } catch (e) {
+      const msg = String(e);
+      set({ opError: msg });
+      return msg;
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  ensureMemory: async (fileName) => {
+    const s = get();
+    if (s.busy) return "Busy";
+    if (s.root === null) return "No project open";
+    set({ busy: true, opError: null });
+    try {
+      await agentMemoryEnsure(s.root, fileName);
       return null;
     } catch (e) {
       const msg = String(e);

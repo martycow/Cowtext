@@ -1,82 +1,91 @@
 # Backlog
 
-Post-phase work, now that all seven phases (0–6) are accepted (2026-08-18). One item gates the v0.1.0 cut (real sprites); everything else is post-v0.1.0 product work. Pull items into TASKS.md when work picks them up.
-
-Priority scale: P0 blocker · P1 high · P2 medium · P3 low.
+Post-phase work, now that all seven phases (0–6) are accepted (2026-08-18). One item gates the v0.1.0 cut (real sprites); everything else is post-v0.1.0 product work.
 
 ## Open
 
-| Name | Tags | Description | Priority | Date Created | Status |
+| Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| Replace placeholder sprites with Aseprite originals | phase-5, art, assets, v0.1.0 | The one asset gate for the v0.1.0 cut: replace programmatic placeholder Graphics with original 16-bit assets per docs/design/ART_DIRECTION.md (18-sheet inventory). Sprites are assets, not code — never base64 into source. Marty-side. | P1 (raised from P3 2026-08-18 — blocks v0.1.0) | 2026-08-16 | 🔲 Backlog |
-| Streaming assemble output into the node | assemble, ux, product | 2026 UX bar: stream token output into the node during Assemble (cuts perceived wait 55–70%); buffer incomplete markdown (half-open fences). Per-node Stop/Cancel + progress states landed in Phase 3; streaming did not. | P1 | 2026-08-16 | 🔲 Backlog |
-| Surface token-cost counts during Assemble/Compile | product, tokens | Token-cost display is table stakes (ai-context-kit lints token cost across CLAUDE.md/AGENTS.md/.cursor/rules). Surface FEATURES 3.6 counts in the Compile modal and Assemble flow. | P1 | 2026-08-16 | 🔲 Backlog |
-| Resolved-context preview (FEATURES 4.6) | product, moat, compile | Moat feature per competitor scan — the exact bytes the agent sees, imports expanded, total tokens. No competitor pairs a visual graph editor with compile + live hooks. | P1 | 2026-08-16 | 🔲 Backlog |
-| Unmapped-read → one-click adopt (FEATURES 6.7) | product, feed | Turn "not on graph" event rows into a one-click adopt action — makes the live feed an acquisition loop no competitor has. | P1 | 2026-08-16 | 🔲 Backlog |
-| Node usage heatmap (FEATURES 6.9) | product, moat, feed | Aggregate live-feed events into per-node usage heat — second moat item; foundation for several moat bets below. | P2 | 2026-08-16 | 🔲 Backlog |
-| Event feed hygiene: retention + layered status | feed, perf | Feed anatomy: per-row metadata; virtualize if the 200-event ring cap rises; layered status (ambient badge → glanceable panel → interrupting alert). | P2 | 2026-08-16 | 🔲 Backlog |
-| Digest Claude Design prototype into docs/design | design, docs | The Claude Design prototype (source of UI truth) has not been fully digested: `Cowtext Prototype.dc.html` (screen prototype) remains; extract remaining tokens/idioms so future UI work doesn't drift. | P2 | 2026-08-16 | 🔲 Backlog |
-| RU/EN localization | i18n, product | Hand-rolled i18n layer (no libraries may be added; stack is fixed) requiring string-extraction pass over all components, locale store, translation file format. Own batch-scale effort. | P2 | 2026-08-18 | 🔲 Backlog |
-| Background chill 16-bit music | audio, assets, barn | Looping calm-mode-aware music channel for the Barn. Asset work (Marty-side per CLAUDE.md sprites/SFX rule) for the original track; code half (new music channel in `src/scene/sfx.ts`) is tech-barn's zone. | P2 | 2026-08-18 | 🔲 Backlog |
-| 'Run Claude' launcher window | assemble, ui, process | Interactive launcher window with user-selected flags for `claude -p`, replacing the hardcoded headless spawn. Process-spawn surface with trust-boundary questions (which flags may a click hand to a child process). Needs its own contract. | P2 | 2026-08-18 | 🔲 Backlog |
-| Edge colour persistence | edges, graph, ui | Persist `color` field on `MemoryEdge` in `graph.json`. Requires schema bump (v1 → v2), migration in v1 harness, and a preset-version upgrade — `preset.rs:61` currently hard-rejects any preset with `version != 1`, so every saved preset after the bump would be refused until upgraded. Needs Rust + preset migration + tests. Deferred from UX batch. | P2 | 2026-08-18 | 🔲 Backlog |
-| Dockable markdown panel / separate editor window | markdown, editor, windows | Requires second Tauri WebviewWindow and cross-window Zustand store synchronization — each window has its own store, so the graph store needs an event bridge. Architecture work of its own. | P3 | 2026-08-18 | 🔲 Backlog |
-| Comprehensive sub-agent management UI | multi-agent, barn, ui | Whole product surface: new persisted entity (roles, tools, skills, priority, influence) plus avatars (asset work, Marty-side). Needs product-analyst input and a phase of its own. | P1 | 2026-08-18 | ✅ Delivered 2026-08-18 (Agents Suite lane C) — UI chrome for agent/skill CRUD, rename, file reveal, identity/avatar/influence; awaiting manual walk 2026-08-18 |
-| graph.json schema migration discipline | data-model, persistence | Standing rule, tracked so it survives context loss: any schema change to `graph.json` bumps `version` and adds a migration in the v1 harness (`src/store/graph.ts`). | P2 | 2026-08-16 | 🔲 Standing rule |
+| Replace placeholder sprites with Aseprite originals | new | critical | phase-5, art, assets, v0.1.0 |  | One asset gate for v0.1.0: replace programmatic Graphics with 16-bit originals per ART_DIRECTION.md. Marty-side. |
+| Streaming assemble output into the node | new | high | assemble, ux, product |  | Stream token output during Assemble (cuts perceived wait 55–70%); buffer incomplete markdown. |
+| Surface token-cost counts during Assemble/Compile | new | high | product, tokens |  | Token-cost display in Compile modal and Assemble flow per ai-context-kit linting baseline. |
+| Resolved-context preview (FEATURES 4.6) | new | high | product, moat, compile |  | Show exact bytes agent sees, imports expanded inline, with total token count. |
+| Unmapped-read → one-click adopt (FEATURES 6.7) | new | high | product, feed |  | Turn "not on graph" event rows into one-click adopt action; live-feed acquisition loop. |
+| Node usage heatmap (FEATURES 6.9) | new | high | product, moat, feed |  | Aggregate live-feed events into per-node usage heat; foundation for moat bets. |
+| Event feed hygiene: retention + layered status | new | medium | feed, perf |  | Feed anatomy: per-row metadata, virtualize if ring cap rises, layered status (badge/panel/alert). |
+| Digest Claude Design prototype into docs/design | new | medium | design, docs |  | Extract remaining tokens/idioms from Cowtext Prototype.dc.html so future UI work doesn't drift. |
+| RU/EN localization | new | medium | i18n, product |  | Hand-rolled i18n layer: string extraction, locale store, translation file format. |
+| Background chill 16-bit music | new | medium | audio, assets, barn |  | Looping calm-mode music for barn. Asset work (Marty) for track; code half (sfx.ts channel) is tech-barn's zone. |
+| 'Run Claude' launcher window | new | medium | assemble, ui, process |  | Interactive launcher for `claude -p` flags, replacing hardcoded spawn. Needs own contract. |
+| Edge colour persistence | new | medium | edges, graph, ui |  | Persist color field on MemoryEdge in graph.json. Requires v1→v2 schema bump + migration + preset upgrade. |
+| Dockable markdown panel / separate editor window | new | low | markdown, editor, windows |  | Second Tauri WebviewWindow with cross-window Zustand sync. Architecture work of its own. |
+| graph.json schema migration discipline | new | medium | data-model, persistence |  | Standing rule: any schema change bumps version and adds migration in v1 harness. |
+| Comprehensive sub-agent management UI | done | high | multi-agent, barn, ui |  | Delivered 2026-08-18 (Agents Suite). UI chrome for CRUD, rename, reveal, identity/avatar/influence. |
+| Resolution cap with measurement gate (V4) | new | high | barn, perf |  | Cap Barn renderer at Math.min(devicePixelRatio, 2) only after FPS <50 on default scene at DPR>2, with A/B screenshots. |
+| Shared popup shell if third TagPicker caller appears (V3) | new | high | ui, components |  | Extract popup shell if third caller needs input-bearing popup (V3 follow-up). |
+| Agent-card live session status | new | medium | ui, agents |  | Agent card shows spawned/running dot via useSessionsStore (backlog, cross-store subscription). |
 
 ## Triaged from docs/Brainstorm_Features.md (Product Analyst pass, triaged 2026-08-17)
 
-All 18 brainstorm ideas accepted into backlog; none rejected. Priorities kept from the analyst ranking. Grouped by sequencing, not priority: quick wins can slot into any sprint; moat bets mostly depend on the usage-heatmap foundation (FEATURES 6.9, above); platform bets are post-v0.1.0 scope.
+All 18 brainstorm ideas accepted into backlog; none rejected. Priorities from analyst ranking.
 
-### Quick wins (small, self-contained — candidates for any pre-v0.1.0 sprint)
+### Quick wins
 
-| Name | Tags | Description | Priority | Date Created | Status |
+| Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| The moo is the notification | audio, ambient, opt-in | Opt-in setting: while the app is hidden/minimized, only the turn-complete happy moo (plus optional low moo on tool errors) still plays quietly — the barn becomes the user's Claude-is-done sound. Everything else stays silent when hidden. Builds on the existing sfx.ts hidden gate. | P1 | 2026-08-17 | 🔲 Backlog |
-| Named calves | multi-agent, identity, barn | Each subagent name/type hashes to a stable calf appearance (coat patch pattern + tiny prop), identical across sessions, so a six-agent fleet reads as six recurring characters instead of interchangeable sprites. | P1 | 2026-08-17 | ✅ Delivered 2026-08-18 (Agents Suite lane D) — fnv1a32 identity hash, avatar params (8×8 grid), calf look (accent + patch 2–7 bits), CalfHerd cap-4 lifecycle, session-ordinal spawning, demo beats with fixed sessionIds for stable identity |
-| Branch-aware graph | git, branches | Watch `.git/HEAD` per project; on checkout reload graph.json from the new branch, show the branch in the title bar, and warn via the GENERATED header hash when the on-disk CLAUDE.md was compiled from a different branch, offering one-click recompile. | P1 | 2026-08-17 | 🔲 Backlog |
-| Dust and cobwebs | staleness, heatmap, barn | Nodes unread for many sessions gather visible dust/cobwebs on their barn cabinets and gently desaturate on canvas as lastVerified falls behind churn; heavily-read cabinets stay polished. Purely ambient, no toasts. Depends on: Node usage heatmap (FEATURES 6.9). | P2 | 2026-08-17 | 🔲 Backlog |
+| The moo is the notification | new | high | audio, ambient, opt-in |  | Opt-in: while hidden/minimized, only turn-complete happy moo plays quietly. Barn becomes Claude-is-done sound. |
+| Named calves | done | high | multi-agent, identity, barn |  | fnv1a32 identity hash, avatar params (8×8 grid), calf look, cap-4 lifecycle, session-ordinal spawning. |
+| Branch-aware graph | new | high | git, branches |  | Watch .git/HEAD per project; reload graph on checkout; warn via GENERATED header hash on branch mismatch. |
+| Dust and cobwebs | new | medium | staleness, heatmap, barn |  | Unread nodes gather dust/cobwebs; desaturate on canvas as lastVerified falls behind. Depends: heatmap. |
 
-### Moat bets (core differentiators — most need hook-data/heatmap foundations first)
+### Moat bets
 
-| Name | Tags | Description | Priority | Date Created | Status |
+| Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| Reality Check (drift lint) | drift, lint, git | Static lint checking every file path, command, script and port cited in a node against the live repo, with an optional `claude -p` pass for semantic claims; broken claims get a red drift badge and a Problems entry quoting the exact lie. Runs on project open and after git operations. | P1 | 2026-08-17 | 🔲 Backlog |
-| Context audit changeset | heatmap, prune, tokens | Turns N sessions of hook data into one applyable changeset — unpin never-read nodes, adopt unmapped hot files, split partially-read rules — each line quoting its weekly token cost; reviewed and applied like a compile diff, atomically. Superset of: Unmapped-read one-click adopt (FEATURES 6.7); depends on: Node usage heatmap (FEATURES 6.9). | P1 | 2026-08-17 | 🔲 Backlog |
-| Memory Inbox | memory, curation | Ingest Claude Code auto-memory (MEMORY.md) as an inbox lane on the canvas; one click promotes a machine-written fact into a real git-synced Memory Node or dismisses it, flagging duplicates/contradictions with existing nodes, and showing which memories exist only on this machine. | P1 | 2026-08-17 | 🔲 Backlog |
-| Transcript mining for context gaps | sessions, gaps | Opt-in, local-only parsing of `~/.claude` project transcripts to find context failure signatures (agent grepping for facts an unpinned node contains, re-reading a file 4+ times, asking questions a node answers), each surfaced as a gap card with a one-click fix (pin, edge, new node). | P1 | 2026-08-17 | 🔲 Backlog |
-| Context loadouts | profiles, compile | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides; switching recompiles, the header records the active loadout, and hook sessions are tagged with it so the usage heatmap can compare per-loadout. | P2 | 2026-08-17 | 🔲 Backlog |
-| Merge sentry | git, review-inbox | After a pull/merge/rebase, diff incoming commits against a path-to-node index and queue affected nodes into a review inbox ("this merge touched 14 files under src/auth — auth-rules.md may be stale"); items clear by re-verifying (bumps lastVerified) or editing. | P2 | 2026-08-17 | 🔲 Backlog |
+| Reality Check (drift lint) | new | high | drift, lint, git |  | Static lint checking every file path, command, script, port cited in node against live repo. Red badges on broken claims. |
+| Context audit changeset | new | high | heatmap, prune, tokens |  | N sessions of hook data → changeset: unpin never-read, adopt unmapped hot files. Reviewed like compile diff. |
+| Memory Inbox | new | high | memory, curation |  | Ingest Claude Code auto-memory; one-click promote to Memory Node or dismiss. Flag contradictions with existing nodes. |
+| Transcript mining for context gaps | new | high | sessions, gaps |  | Parse transcripts for gaps: agent rereads, unresolved questions. Surface as cards with one-click fixes. |
+| Context loadouts | new | medium | profiles, compile |  | Named pinned-set profiles per project (frontend work, release, debugging) with readOrder overrides. |
+| Merge sentry | new | medium | git, review-inbox |  | After merge, queue affected nodes into review inbox. Clear by re-verifying (bump lastVerified) or editing. |
 
-### Platform & distribution bets (bigger scope — post-v0.1.0)
+### Platform & distribution
 
-| Name | Tags | Description | Priority | Date Created | Status |
+| Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
-| cowtext check (CI drift gate) | ci, cli, teams | Verify-only CLI plus a published GitHub Action that fails a PR when generated CLAUDE.md/AGENTS.md/.cursor/rules no longer match graph.json, were hand-edited (header hash), or contain drift-lint breakage, posting a graph-level diff as the PR comment. Makes the graph canonical by policy. | P1 | 2026-08-17 | 🔲 Backlog |
-| Fleet dashboard | multi-project, home | Home screen listing every known project as a status card (hook health, drift-lint count, last session time, pinned-token total, unreviewed unmapped reads); tray badge sums problems across the fleet. Optional farmstead skin renders each project as a small barn. | P1 | 2026-08-17 | 🔲 Backlog |
-| Barn Raising | progression, retention, barn | Barn size and furnishing derive deterministically from real project history — node count adds cabinets, total sessions weather the wood, git age adds a loft — so a year-old project opens to a big lived-in barn. No XP, no unlocks, no notifications. Builds on the Phase 5 session-accumulation layer. | P1 | 2026-08-17 | 🔲 Backlog |
-| cowtext-mcp | mcp, runtime, moat | Bundled MCP server exposing Memory Nodes as resources/tools so any agent (Claude Code, Cursor, Codex) pulls nodes on demand at runtime instead of eating the whole pinned set; role and conditional-glob metadata become retrieval hints, and hooks log which nodes were fetched. | P1 | 2026-08-17 | 🔲 Backlog |
-| Skill Studio | skills, authoring | Author skills, agents and commands as graph nodes, with a trigger simulator (type a hypothetical prompt, see which skills would load and their token cost) plus one-click export as an installable Claude Code plugin bundle. | P1 | 2026-08-17 | 🔲 Backlog |
-| Barn mission control | multi-agent, sessions, barn | Concurrent Claude Code sessions each get their own stall and full cow (peer, not calf) with per-session color lanes in the event log and tinted canvas pulses; a chalkboard lists active subagents with task brief and working/done/stalled ticks. | P2 | 2026-08-17 | 🔲 Backlog |
-| Context packages | teams, sharing, versioning | Export a subgraph (org TS standards, security rules) as a versioned package other projects import by git URL; imports render as a locked group with approval-gated update diffs, and local edits fork the node with a diverged-from-upstream marker. | P2 | 2026-08-17 | 🔲 Backlog |
-| Cowtext as a plugin | distribution, hooks | Package the hook configuration plus a small graph-respecting skill (report unmapped reads, suggest node updates) as an installable Claude Code plugin, so a teammate without the desktop app wires the hooks feed with one install and the app detects/adopts it — replacing hand-edited settings.json onboarding. | P2 | 2026-08-17 | 🔲 Backlog |
+| cowtext check (CI drift gate) | new | high | ci, cli, teams |  | Verify-only CLI + GitHub Action: fails PR when CLAUDE.md/AGENTS.md don't match graph.json or have drift-lint breakage. |
+| Fleet dashboard | new | high | multi-project, home |  | Home screen listing projects as status cards (hook health, drift, last session, token total). Tray badge sums problems. |
+| Barn Raising | new | high | progression, retention, barn |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
+| cowtext-mcp | new | high | mcp, runtime, moat |  | Bundled MCP server exposing Memory Nodes as resources/tools for runtime demand-loading. Hooks log fetches. |
+| Skill Studio | new | high | skills, authoring |  | Author skills/agents/commands as graph nodes; trigger simulator, one-click export as Claude Code plugin. |
+| Barn mission control | new | medium | multi-agent, sessions, barn |  | Concurrent sessions get own stall and full cow; per-session color lanes; chalkboard lists subagents. |
+| Context packages | new | medium | teams, sharing, versioning |  | Export subgraph as versioned package; imports render locked with approval-gated diffs. |
+| Cowtext as a plugin | new | medium | distribution, hooks |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
+
+## Observations (from WO02 audit) — watching items
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Grid-only files lose checkbox on flat-list rows (O1) | new | low | ui, ux |  | FlatListPanel has no checkbox for BACKLOG/ROADMAP/BUGS items (gated on source=checklist). Complete only from Inspector. |
+| Missing convention file creates at root (O2) | new | low | tasks, ui |  | NewTaskDialog.relPathFor creates missing file at root, not under docs/tasks/. Pre-existing for all files. |
+| task_move writes status=new on moved items (O3) | new | low | tasks, rust |  | Done rows moved to BACKLOG arrive as New. Pre-existing; now explicit in spec. |
 
 ## Completed (rolled up)
 
 Former backlog rows delivered during the phased build; detail in TASKS.md history and git.
 
-| Name | Tags | Resolution |
-|---|---|---|
-| Tighten CSP before shipping | security, tauri | ✅ Production `csp` + relaxed `devCsp` in the v0.0.0007 ship-prep (`cb770d4`) |
-| Add ESLint + `npm run lint` script | tooling, lint | ✅ ESLint 10 flat config + lint script, v0.0.0007 |
-| Code-split main JS chunk | frontend, perf | ✅ 1,334 → 207 kB via React.lazy + manualChunks, v0.0.0007 |
-| Verify React 19 vs plan-era integration notes | frontend, react | ✅ Implicitly verified — all six phases (React Flow 12 + Pixi 8) built and accepted on React 19.1 |
-| Phase 3 Assemble prep · Phase 4 hooks pipeline prep | rust | ✅ Delivered in the 2026-08-16 fleet session (Sprint 3) |
-| Remove `greet` placeholder command | cleanup | ✅ Verified absent |
-| Mute + calm mode from day one of the Barn | a11y, sound | ✅ Sprint 4 — SettingsModal toggles + calm/mute gates in sfx.ts |
-| Phase 6 presets & handoff | presets, handoff | ✅ Sprint 4 — preset.rs/handoff.rs + UI |
-| AGENTS.md positioning note in docs | docs | ✅ Added to README.md |
-| Demo-event filtering · Barn HUD on tokens · idle-throttle ticker (UX debt ×3) | feed, barn, perf | ✅ Sprint 4 — Lane C juice pass + `LogEvent.demo` filtering |
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Tighten CSP before shipping | done | high | security, tauri |  | Production CSP + relaxed devCSP in v0.0.0007 ship-prep. |
+| Add ESLint + `npm run lint` script | done | high | tooling, lint |  | ESLint 10 flat config + lint script, v0.0.0007. |
+| Code-split main JS chunk | done | high | frontend, perf |  | 1,334 → 207 kB via React.lazy + manualChunks, v0.0.0007. |
+| Verify React 19 vs plan-era integration notes | done | medium | frontend, react |  | Verified: all phases (React Flow 12 + Pixi 8) built and accepted on React 19.1. |
+| Phase 3 Assemble prep · Phase 4 hooks pipeline prep | done | high | rust |  | Delivered in 2026-08-16 fleet session (Sprint 3). |
+| Remove `greet` placeholder command | done | low | cleanup |  | Verified absent. |
+| Mute + calm mode from day one of the Barn | done | high | a11y, sound |  | SettingsModal toggles + calm/mute gates in sfx.ts (Sprint 4). |
+| Phase 6 presets & handoff | done | high | presets, handoff |  | preset.rs/handoff.rs + UI (Sprint 4). |
+| AGENTS.md positioning note in docs | done | low | docs |  | Added to README.md. |
+| Demo-event filtering · Barn HUD on tokens · idle-throttle ticker | done | high | feed, barn, perf |  | Lane C juice pass + LogEvent.demo filtering (Sprint 4). |
 
 ## Feature inventory
 

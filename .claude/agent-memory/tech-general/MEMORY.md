@@ -1,0 +1,1 @@
+- [WO02 G1 tasks.rs three-way rule](wo02-g1-tasks-three-way-rule.md) — judgment calls behind task_append/task_move target-form-aware writes + priority buckets; read before re-touching tasks.rs

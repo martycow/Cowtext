@@ -134,8 +134,10 @@ export class HoverController {
   private hoverId: string | null = null;
   private hoverMs = 0;
   private shownId: string | null = null;
-  /** Discovery-order calf ids/labels — see module header. */
-  private readonly calfIds = new WeakMap<Container, number>();
+  /** Discovery-order calf ids/labels — see module header. WO02 #8 perf: the
+   *  id/label strings are templated once per calf (on first discovery), not
+   *  re-templated every ticker frame for every already-known calf. */
+  private readonly calfIds = new WeakMap<Container, { id: string; label: string }>();
   private calfOrdinal = 0;
 
   constructor() {
@@ -173,7 +175,9 @@ export class HoverController {
         kind: "prop",
         x: entry.view.position.x,
         y: entry.view.position.y,
-        label: `${entry.title} — ${entry.role} node (${entry.filePath})`,
+        // WO02 #8 perf: precomputed at rebuild time (sceneGraph.ts), not
+        // re-templated here on every ticker frame.
+        label: entry.hoverLabel,
       });
     }
 
@@ -199,18 +203,18 @@ export class HoverController {
         targets.push({ id: `agent:${child.uid}`, kind: "calf", x: child.position.x, y: child.position.y, label: agentLabel });
         continue;
       }
-      let n = this.calfIds.get(child);
-      if (n === undefined) {
+      let cached = this.calfIds.get(child);
+      if (cached === undefined) {
         this.calfOrdinal += 1;
-        n = this.calfOrdinal;
-        this.calfIds.set(child, n);
+        cached = { id: `calf:${this.calfOrdinal}`, label: `Calf — subagent #${this.calfOrdinal}` };
+        this.calfIds.set(child, cached);
       }
       targets.push({
-        id: `calf:${n}`,
+        id: cached.id,
         kind: "calf",
         x: child.position.x,
         y: child.position.y,
-        label: `Calf — subagent #${n}`,
+        label: cached.label,
       });
     }
 

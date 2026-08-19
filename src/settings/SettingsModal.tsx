@@ -93,6 +93,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const claudeBinaryPath = useSettingsStore((s) => s.claudeBinaryPath);
   const syncFileName = useSettingsStore((s) => s.syncFileName);
   const managerMode = useSettingsStore((s) => s.managerMode);
+  const showFps = useSettingsStore((s) => s.showFps);
   const persistError = useSettingsStore((s) => s.persistError);
   const setMasterVolume = useSettingsStore((s) => s.setMasterVolume);
   const setBarnSounds = useSettingsStore((s) => s.setBarnSounds);
@@ -102,6 +103,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setClaudeBinaryPath = useSettingsStore((s) => s.setClaudeBinaryPath);
   const setSyncFileName = useSettingsStore((s) => s.setSyncFileName);
   const setManagerMode = useSettingsStore((s) => s.setManagerMode);
+  const setShowFps = useSettingsStore((s) => s.setShowFps);
 
   const root = useProjectStore((s) => s.root);
 
@@ -262,6 +264,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <HelperLine>
               Hides the Barn view and never loads the Pixi scene — a pure context-graph and
               agents UI.
+            </HelperLine>
+
+            <Row label="FPS counter">
+              <Toggle checked={showFps} onChange={setShowFps} label="FPS counter" />
+            </Row>
+            <HelperLine>
+              Shows the Barn&rsquo;s frame rate in the scene overlay. The Barn deliberately drops
+              to 12 fps while idle, so a low number there is not a bug.
             </HelperLine>
           </section>
 

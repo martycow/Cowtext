@@ -15,7 +15,7 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { ChevronDown, FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
+import { FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { revealPath } from "../fs/api";
@@ -27,6 +27,7 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import type { CanvasEdge, CanvasNode } from "./types";
+import { NODE_CARD_H, NODE_CARD_W, viewportCenterPosition } from "./viewport";
 
 const NodeWizard = lazy(() =>
   import("../wizard/NodeWizard").then((m) => ({ default: m.NodeWizard })),
@@ -42,23 +43,25 @@ function CanvasInner() {
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const beginConnection = useGraphStore((s) => s.beginConnection);
-  const createNode = useGraphStore((s) => s.createNode);
   const setSelection = useGraphStore((s) => s.setSelection);
   const root = useProjectStore((s) => s.root);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdge>([]);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getViewport } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const paneMenu = useContextMenu();
-  const newNodeMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op."
   const [revealError, setRevealError] = useState<string | null>(null);
-  // New Node wizard (WO01 Block D §T5) — position is captured at open time
-  // (viewport center for the toolbar entry, click point for the pane menu),
-  // same idiom as newNodeAtCenter/onPaneContextMenu below. null = closed.
-  const [wizardPos, setWizardPos] = useState<{ x: number; y: number } | null>(null);
+  // Contract §7.7 (#9/#16): every creation entry point opens the wizard.
+  // The centre entry point stores a thunk so the position re-derives at
+  // Confirm (pan-while-open stays true to "current viewport centre"); the
+  // positional entry points (double-click, pane menu) store a fixed value
+  // captured at the click point. null = closed.
+  const [wizardPos, setWizardPos] = useState<
+    { x: number; y: number } | (() => { x: number; y: number }) | null
+  >(null);
 
   // Store → RF nodes. Keep in-flight drag positions and RF-side selection;
   // brand-new nodes take their selection from the store (createNode selects).
@@ -107,44 +110,34 @@ function CanvasInner() {
     });
   }, [domainEdges, domainNodes, setEdges]);
 
-  const newNodeAtCenter = () => {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    if (rect === undefined) return;
-    const pos = screenToFlowPosition({
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
+  // Centre entry point (toolbar): stores a thunk that re-derives the
+  // viewport centre from the pane's own size + the live RF transform at
+  // Confirm time, never client left/top (contract §7.7 helper contract).
+  const wizardAtCenter = () => {
+    setWizardPos(() => () => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const size = rect !== undefined ? { width: rect.width, height: rect.height } : { width: 0, height: 0 };
+      return viewportCenterPosition(getViewport(), size);
     });
-    void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
   };
 
-  const wizardAtCenter = () => {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    if (rect === undefined) return;
-    const pos = screenToFlowPosition({
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    });
-    setWizardPos({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
+  const wizardAtPoint = (clientX: number, clientY: number) => {
+    const pos = screenToFlowPosition({ x: clientX, y: clientY });
+    setWizardPos({ x: Math.round(pos.x - NODE_CARD_W / 2), y: Math.round(pos.y - NODE_CARD_H / 2) });
   };
 
   const onPaneContextMenu = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (!target.classList.contains("react-flow__pane")) return;
-    const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const clientX = e.clientX;
+    const clientY = e.clientY;
     const items: MenuItem[] = [
       {
         kind: "item",
-        id: "new-node",
-        label: "New node here",
-        icon: Plus,
-        onSelect: () => void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) }),
-      },
-      {
-        kind: "item",
         id: "new-node-wizard",
-        label: "New node wizard…",
+        label: "New node here…",
         icon: Sparkles,
-        onSelect: () => setWizardPos({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) }),
+        onSelect: () => wizardAtPoint(clientX, clientY),
       },
       {
         kind: "item",
@@ -178,8 +171,7 @@ function CanvasInner() {
       onDoubleClick={(e) => {
         const target = e.target as HTMLElement;
         if (!target.classList.contains("react-flow__pane")) return;
-        const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-        void createNode({ x: Math.round(pos.x - 122), y: Math.round(pos.y - 48) });
+        wizardAtPoint(e.clientX, e.clientY);
       }}
       onContextMenu={onPaneContextMenu}
     >
@@ -237,35 +229,16 @@ function CanvasInner() {
         />
         <Panel position="top-left">
           <div className="flex items-center gap-2">
-            {/* Split button: click = quick node (old one-click behaviour),
-                chevron = wizard entry (WO01 Block D §T5). */}
-            <div className="flex h-control items-stretch overflow-hidden rounded border border-border bg-surface-2 shadow-card transition-colors duration-fast hover:border-border-strong">
-              <button
-                onClick={newNodeAtCenter}
-                title="New memory node (or double-click the canvas)"
-                className="flex items-center gap-1.5 px-3 text-sm text-content hover:bg-surface-3"
-              >
-                <Plus size={14} strokeWidth={1.5} />
-                New node
-              </button>
-              <button
-                onClick={(e) =>
-                  newNodeMenu.openAt(e, [
-                    {
-                      kind: "item",
-                      id: "wizard",
-                      label: "New node wizard…",
-                      icon: Sparkles,
-                      onSelect: wizardAtCenter,
-                    },
-                  ])
-                }
-                title="More ways to create a node"
-                className="flex items-center border-l border-border px-1.5 text-content-muted hover:bg-surface-3 hover:text-content"
-              >
-                <ChevronDown size={12} strokeWidth={1.5} />
-              </button>
-            </div>
+            {/* Contract §7.7 (#9): the split button collapses to one plain
+                entry — every creation path opens the wizard now. */}
+            <button
+              onClick={wizardAtCenter}
+              title="New memory node (or double-click the canvas)"
+              className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content shadow-card transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+            >
+              <Plus size={14} strokeWidth={1.5} />
+              New node
+            </button>
             <LensControl />
           </div>
         </Panel>
@@ -293,14 +266,6 @@ function CanvasInner() {
           y={paneMenu.menu.y}
           items={paneMenu.menu.items}
           onClose={paneMenu.close}
-        />
-      )}
-      {newNodeMenu.menu !== null && (
-        <ContextMenu
-          x={newNodeMenu.menu.x}
-          y={newNodeMenu.menu.y}
-          items={newNodeMenu.menu.items}
-          onClose={newNodeMenu.close}
         />
       )}
       {wizardPos !== null && root !== null && (

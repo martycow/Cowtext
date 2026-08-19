@@ -48,6 +48,8 @@ export interface AppSettings {
   // N3: hides the Barn segment (and never mounts BarnScene/Pixi) for a pure
   // manager UI. Additive, tolerant-merge field — default false.
   managerMode: boolean;
+  /** WO02 #7: Barn FPS overlay. Additive, tolerant-merge field — default false. */
+  showFps: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   syncFileName: true,
   lens: "none",
   managerMode: false,
+  showFps: false,
 };
 
 export interface SettingsState extends AppSettings {
@@ -92,6 +95,7 @@ export interface SettingsState extends AppSettings {
   setSyncFileName: (b: boolean) => void;
   setLens: (l: LensMode) => void;
   setManagerMode: (b: boolean) => void;
+  setShowFps: (b: boolean) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -161,6 +165,7 @@ function mergeSettings(raw: unknown): AppSettings {
     out.lens = r.lens as LensMode;
   }
   if (typeof r.managerMode === "boolean") out.managerMode = r.managerMode;
+  if (typeof r.showFps === "boolean") out.showFps = r.showFps;
   return out;
 }
 
@@ -187,6 +192,7 @@ function persistNow(): void {
     syncFileName: s.syncFileName,
     lens: s.lens,
     managerMode: s.managerMode,
+    showFps: s.showFps,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -314,6 +320,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setManagerMode: (b) => {
     set({ managerMode: b });
+    schedulePersist();
+  },
+  setShowFps: (b) => {
+    set({ showFps: b });
     schedulePersist();
   },
 }));

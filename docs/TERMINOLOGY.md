@@ -30,7 +30,7 @@
 | `src/settings/` | `SettingsModal.tsx` |
 | `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (50)
+## Invoke commands (51)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -38,7 +38,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Group | Commands |
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
-| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
+| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
 | compile | `compile_preview`, `compile_write` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |

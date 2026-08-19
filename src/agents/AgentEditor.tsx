@@ -22,7 +22,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
-import { companyFor, MODEL_CATALOG } from "./modelCatalog";
+import { companyFor, MODEL_CATALOG, MODEL_NOTES } from "./modelCatalog";
 
 const SAVE_BTN =
   "h-control-sm flex-none rounded bg-accent px-3 text-xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled";
@@ -159,41 +159,50 @@ export function ModelPicker({
     if (def !== undefined && def.models.length > 0) onChange(def.models[0]);
   };
 
+  const effectiveValue = value ?? companyDef.models[0];
+  const note = MODEL_NOTES[effectiveValue];
+
   return (
-    <div className="flex items-center gap-2">
-      <select
-        value={company}
-        disabled={disabled}
-        onChange={(e) => pickCompany(e.target.value)}
-        className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
-      >
-        {MODEL_CATALOG.map((c) => (
-          <option key={c.company} value={c.company}>
-            {c.company}
-          </option>
-        ))}
-      </select>
-      {isOther ? (
-        <input
-          value={value ?? ""}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="model id"
-          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
-        />
-      ) : (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
         <select
-          value={value ?? companyDef.models[0]}
+          value={company}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+          onChange={(e) => pickCompany(e.target.value)}
+          className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
         >
-          {companyDef.models.map((m) => (
-            <option key={m} value={m}>
-              {m}
+          {MODEL_CATALOG.map((c) => (
+            <option key={c.company} value={c.company}>
+              {c.company}
             </option>
           ))}
         </select>
+        {isOther ? (
+          <input
+            value={value ?? ""}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="model id"
+            className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+          />
+        ) : (
+          <select
+            value={effectiveValue}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+          >
+            {/* the option's title mirrors the helper line under this select */}
+            {companyDef.models.map((m) => (
+              <option key={m} value={m} title={MODEL_NOTES[m]}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {note !== undefined && (
+        <p className="text-2xs leading-snug text-content-muted">{note}</p>
       )}
     </div>
   );
@@ -268,6 +277,7 @@ export function AgentEditor({
   const updateDraft = useAgentsStore((s) => s.updateDraft);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const renameSelected = useAgentsStore((s) => s.renameSelected);
+  const ensureMemory = useAgentsStore((s) => s.ensureMemory);
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const files = useProjectStore((s) => s.files);
@@ -275,6 +285,8 @@ export function AgentEditor({
 
   const displayName = doc.fields.name !== null && doc.fields.name !== "" ? doc.fields.name : doc.fileName;
   const m = metaOrDefault(meta, doc.fileName);
+  const memoryStem = doc.fileName.replace(/\.md$/i, "");
+  const memoryPath = `.claude/agent-memory/${memoryStem}/`;
 
   const [nameDraft, setNameDraft] = useState(displayName);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -319,6 +331,13 @@ export function AgentEditor({
 
   const patchFields = (patch: Partial<FmFields>) => {
     updateDraft(sel, { fields: { ...draft.fields, ...patch } });
+  };
+
+  const doEnsureMemory = () => {
+    setSaveError(null);
+    void ensureMemory(doc.fileName).then((err) => {
+      if (err !== null) setSaveError(err);
+    });
   };
 
   const doSave = () => {
@@ -488,6 +507,21 @@ export function AgentEditor({
               intent only.
             </p>
             <SkillsChecklist fileName={doc.fileName} draftSkills={draft.fields.skills} disabled={disabled} />
+          </div>
+
+          <div>
+            <FieldLabel>Memory</FieldLabel>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-content-secondary">{memoryPath}</span>
+              <button
+                type="button"
+                onClick={doEnsureMemory}
+                disabled={disabled}
+                className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled"
+              >
+                Create memory folder
+              </button>
+            </div>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col gap-1.5">

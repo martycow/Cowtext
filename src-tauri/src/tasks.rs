@@ -1,14 +1,14 @@
-//! Task-file convention (TASKBOARD_BATCH_CONTRACT.md §1-4, Rev 2 §R2-R3): a
-//! tolerant, read-mostly markdown task parser over four well-known files —
-//! `TASKS.md`, `SPRINT.md`, `BACKLOG.md`, `ROADMAP.md` — searched in this
-//! directory order: project root, `docs/`, `docs/tasks/` (first hit per
-//! name wins).
+//! Task-file convention (TASKBOARD_BATCH_CONTRACT.md §1-4, Rev 2 §R2-R3;
+//! WO02 §2.3/§2.4/§7.8/§7.11): a tolerant, read-mostly markdown task parser
+//! over five well-known files — `TASKS.md`, `SPRINT.md`, `BACKLOG.md`,
+//! `ROADMAP.md`, `BUGS.md` — searched in this directory order: project
+//! root, `docs/`, `docs/tasks/` (first hit per name wins).
 //!
 //! A "task" is either a markdown pipe-table row (header-driven column
 //! mapping) or a checklist line (`- [ ] text` / `- [x] text` / `- [>] text`
 //! / `- [?] text`). The parser never errors on weird markdown — lines that
 //! don't match either shape are simply not tasks. All writes are line-based
-//! surgery through [`project::write_atomic`], confined to the four
+//! surgery through [`project::write_atomic`], confined to the five
 //! convention files.
 //!
 //! Rev 2 adds a normalized status bucket (`"new"` | `"in-production"` |
@@ -16,6 +16,14 @@
 //! status cells, two scan-only fields (`section`, `when`), and the
 //! [`task_update`] command that regenerates a line canonically from a full
 //! editable field set.
+//!
+//! WO02 adds a normalized priority bucket (`"low"` | `"medium"` | `"high"`
+//! | `"critical"`, see [`bucket_for_priority_input`]) shared by checklist
+//! `!bucket` / legacy `P0`-`P3` tokens and table priority cells, and makes
+//! [`task_append`]/[`task_move`] target-form-aware: a name-mapped pipe
+//! table gets a new row, a checklist-only file gets a new checklist line,
+//! and an empty/missing/taskless file gets a fresh canonical table (see
+//! [`write_task_text`]).
 
 #[cfg(test)]
 mod tests;
@@ -25,9 +33,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-/// The four convention file names, in board-column order — also the order
-/// `tasks_scan` reports them in.
-const CONVENTION_NAMES: [&str; 4] = ["TASKS.md", "SPRINT.md", "BACKLOG.md", "ROADMAP.md"];
+/// The five convention file names, in board-column order — also the order
+/// `tasks_scan` reports them in. **Positional coupling (WO02 §7.11)**: TS's
+/// `TASK_FILE_NAMES` in `src/store/tasks.ts` must match this array
+/// element-wise, in order. `BUGS.md` was appended last (item #14); do not
+/// reorder either array.
+const CONVENTION_NAMES: [&str; 5] =
+    ["TASKS.md", "SPRINT.md", "BACKLOG.md", "ROADMAP.md", "BUGS.md"];
 
 /// Directories searched for a convention file, in priority order. `""`
 /// means the project root itself.
@@ -111,7 +123,7 @@ fn convention_candidates(name: &str) -> [String; 3] {
 }
 
 /// True when `rel_path` (after `\`->`/` normalization) is exactly one of
-/// the 12 recognized convention locations.
+/// the 15 recognized convention locations (5 names × 3 directories).
 fn is_convention_relpath(rel_path: &str) -> bool {
     let normalized = rel_path.replace('\\', "/");
     CONVENTION_NAMES
@@ -155,6 +167,23 @@ fn bucket_for_status_input(raw: &str) -> &'static str {
         "testing" | "in testing" | "review" => "in-testing",
         "done" | "closed" => "done",
         _ => "new",
+    }
+}
+
+/// Canonical priority buckets (WO02 §2.4). `None` = no priority /
+/// unrecognized — tolerant, never invents a bucket for text it doesn't
+/// recognize. Normalization: trim, ASCII-lowercase, `-`/`_` -> space,
+/// collapse whitespace, so `"P0"`, `"p-0"`, `"blocker"` and `"critical"`
+/// all land on the same bucket.
+fn bucket_for_priority_input(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(['-', '_'], " ");
+    let normalized: String = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    match normalized.as_str() {
+        "low" | "l" | "p3" => Some("low"),
+        "medium" | "med" | "normal" | "m" | "p2" => Some("medium"),
+        "high" | "h" | "p1" => Some("high"),
+        "critical" | "crit" | "blocker" | "urgent" | "p0" => Some("critical"),
+        _ => None,
     }
 }
 
@@ -416,6 +445,10 @@ fn build_table_task(
     let name = cell_at(cells, map.name)?;
     let tags = cell_at(cells, map.tags).map(|s| split_tags(&s)).unwrap_or_default();
     let bucket = bucket_for_status_input(cell_at(cells, map.status).as_deref().unwrap_or(""));
+    // WO02 §2.4: bucket when the cell text normalizes, otherwise the raw
+    // trimmed cell text — tolerant, never drops an unrecognized value.
+    let priority = cell_at(cells, map.priority)
+        .map(|p| bucket_for_priority_input(&p).map(str::to_string).unwrap_or(p));
     Some(TaskItem {
         id: format!("{rel_path}#{line_no}"),
         rel_path: rel_path.to_string(),
@@ -424,7 +457,7 @@ fn build_table_task(
         name,
         description: cell_at(cells, map.description),
         tags,
-        priority: cell_at(cells, map.priority),
+        priority,
         phase: cell_at(cells, map.phase),
         agent: cell_at(cells, map.agent),
         done: bucket == "done",
@@ -471,8 +504,12 @@ fn split_name_desc(text: &str) -> (String, Option<String>) {
 }
 
 /// Scans whitespace-separated words for `#tag` (repeatable), `@agent`
-/// (first wins), and a `P0`..`P3` priority token, optionally parenthesized
-/// (first wins). Punctuation immediately around a token is stripped.
+/// (first wins), and a priority token (first wins): a `!low`/`!medium`/
+/// `!high`/`!critical` token (WO02 §2.4, case-insensitive) or the legacy
+/// bare `P0`..`P3` token, optionally parenthesized — both are normalized
+/// through [`bucket_for_priority_input`], so the returned priority is
+/// always a canonical bucket or `None`. Punctuation immediately around a
+/// token is stripped.
 fn extract_tokens(text: &str) -> (Vec<String>, Option<String>, Option<String>) {
     let mut tags = Vec::new();
     let mut agent: Option<String> = None;
@@ -497,11 +534,17 @@ fn extract_tokens(text: &str) -> (Vec<String>, Option<String>, Option<String>) {
         }
         if priority.is_none() {
             let cleaned = raw_word.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | '.' | ';' | ':'));
-            if cleaned.len() == 2 {
+            if let Some(rest) = cleaned.strip_prefix('!') {
+                if let Some(bucket) = bucket_for_priority_input(rest) {
+                    priority = Some(bucket.to_string());
+                }
+            } else if cleaned.len() == 2 {
                 let bytes = cleaned.as_bytes();
                 let (p, d) = (bytes[0], bytes[1]);
                 if (p == b'P' || p == b'p') && (b'0'..=b'3').contains(&d) {
-                    priority = Some(format!("P{}", d as char));
+                    if let Some(bucket) = bucket_for_priority_input(cleaned) {
+                        priority = Some(bucket.to_string());
+                    }
                 }
             }
         }
@@ -694,7 +737,15 @@ fn regenerate_checklist_line(indent: &str, name: &str, patch: &TaskPatch) -> Str
     }
     if let Some(priority) = patch.priority.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         line.push(' ');
-        line.push_str(priority);
+        // WO02 §2.4: `!<bucket>` when it normalizes, else the raw trimmed
+        // value bare (today's shape) so nothing is lost.
+        match bucket_for_priority_input(priority) {
+            Some(bucket) => {
+                line.push('!');
+                line.push_str(bucket);
+            }
+            None => line.push_str(priority),
+        }
     }
     line
 }
@@ -785,10 +836,17 @@ fn regenerate_table_row(lines: &[String], row_idx: usize, name: &str, patch: &Ta
             .join(", ")
     });
 
+    // WO02 §2.4: bucket when the patch value normalizes, else the raw
+    // trimmed value.
+    let priority_value = patch.priority.as_deref().map(|p| {
+        let trimmed = p.trim();
+        bucket_for_priority_input(trimmed).map(str::to_string).unwrap_or_else(|| trimmed.to_string())
+    });
+
     set_cell(&mut cells, map.name, Some(name));
     set_cell(&mut cells, map.description, patch.description.as_deref());
     set_cell(&mut cells, map.tags, tags_joined.as_deref());
-    set_cell(&mut cells, map.priority, patch.priority.as_deref());
+    set_cell(&mut cells, map.priority, priority_value.as_deref());
     set_cell(&mut cells, map.phase, patch.phase.as_deref());
     set_cell(&mut cells, map.agent, patch.agent.as_deref());
     set_cell(&mut cells, map.status, Some(bucket));
@@ -805,13 +863,292 @@ fn regenerate_table_row(lines: &[String], row_idx: usize, name: &str, patch: &Ta
 }
 
 // ---------------------------------------------------------------------
+// Target-form-aware append/move (WO02 §2.3)
+// ---------------------------------------------------------------------
+
+/// Pads `value` (or empty text) with a single leading/trailing space —
+/// `" value "`, or `"  "` (two spaces) when `value` is `None`/empty. Used
+/// only for building a brand-new row from scratch ([`canonical_table_row`]);
+/// unlike [`set_cell`] (which collapses an empty field to a single space
+/// when *editing* an existing cell), a fresh row's empty cells always carry
+/// both padding spaces, matching WO02 §2.3's literal canonical-table
+/// example byte-for-byte.
+fn pad_cell(value: Option<&str>) -> String {
+    format!(" {} ", value.unwrap_or("").trim())
+}
+
+/// Builds one canonical-table data row (WO02 §2.3/§7.8 column order: Name,
+/// Status, Priority, Tags, Agent, Description). Status is always `"new"` —
+/// there is still no append-with-status primitive.
+fn canonical_table_row(
+    name: &str,
+    description: Option<&str>,
+    priority: Option<&str>,
+    tags: &[String],
+    agent: Option<&str>,
+) -> String {
+    let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
+    format!(
+        "|{}|{}|{}|{}|{}|{}|",
+        pad_cell(Some(name)),
+        pad_cell(Some("new")),
+        pad_cell(priority),
+        pad_cell(tags_joined.as_deref()),
+        pad_cell(agent),
+        pad_cell(description),
+    )
+}
+
+/// Creates the canonical table block (WO02 §2.3 case 3): a brand-new `#
+/// <STEM>` file when `existing` is empty, or the same header+separator+row
+/// block appended after a blank line when `existing` has content but no
+/// tasks. Returns the new full content and the 1-based line the new row
+/// landed on.
+fn create_canonical_table(
+    existing: &str,
+    rel_path_for_header: &str,
+    name: &str,
+    description: Option<&str>,
+    priority: Option<&str>,
+    tags: &[String],
+    agent: Option<&str>,
+) -> (String, usize) {
+    const HEADER: &str = "| Name | Status | Priority | Tags | Agent | Description |";
+    const SEP: &str = "|---|---|---|---|---|---|";
+    let row = canonical_table_row(name, description, priority, tags, agent);
+
+    let mut content = existing.to_string();
+    if content.is_empty() {
+        let stem = convention_stem(rel_path_for_header);
+        content = format!("# {stem}\n\n");
+    } else {
+        // Normalize to exactly one blank line before the table, regardless
+        // of how many (if any) blank lines the file already trails with.
+        let trimmed = content.trim_end_matches('\n');
+        content = format!("{trimmed}\n\n");
+    }
+    let row_line_no = content.matches('\n').count() + 3; // header, sep, then the row
+    content.push_str(HEADER);
+    content.push('\n');
+    content.push_str(SEP);
+    content.push('\n');
+    content.push_str(&row);
+    content.push('\n');
+    (content, row_line_no)
+}
+
+/// Locates the **last** pipe table in `lines` whose header maps a `name`
+/// column (mirrors the table detection in [`parse_tasks`]/[`table_at`]).
+/// Returns `(column map, 0-based index to insert a new row after, leading
+/// pipe, trailing pipe, cell count)` — the pipe style and cell count are
+/// sampled from the table's last data row, or from the header row when the
+/// table has none yet (so the very first inserted row still matches the
+/// table's own shape).
+fn last_named_table(lines: &[&str]) -> Option<(ColumnMap, usize, bool, bool, usize)> {
+    let mut i = 0;
+    let mut found = None;
+    while i < lines.len() {
+        if let Some(header_cells) = pipe_cells(lines[i]) {
+            if i + 1 < lines.len() && is_separator_row(lines[i + 1]) {
+                let map = map_columns(&header_cells);
+                if map.name.is_some() {
+                    let mut j = i + 2;
+                    let mut last_data_idx: Option<usize> = None;
+                    while j < lines.len() {
+                        if pipe_cells(lines[j]).is_none() || is_separator_row(lines[j]) {
+                            break;
+                        }
+                        last_data_idx = Some(j);
+                        j += 1;
+                    }
+                    let anchor = last_data_idx.unwrap_or(i + 1);
+                    let shape_line = last_data_idx.map_or(lines[i], |idx| lines[idx]);
+                    if let Some((leading, trailing, cells)) = table_row_cells_raw(shape_line) {
+                        found = Some((map, anchor, leading, trailing, cells.len()));
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Builds a new data row to insert into an existing table (WO02 §2.3 case
+/// 1): mapped columns are filled from the parsed fields, every other cell
+/// (unmapped, or a mapped field with no value) is a single space — mirrors
+/// [`set_cell`]'s existing "cleared field" convention.
+#[allow(clippy::too_many_arguments)]
+fn build_table_append_row(
+    map: &ColumnMap,
+    leading: bool,
+    trailing: bool,
+    cell_count: usize,
+    name: &str,
+    description: Option<&str>,
+    tags: &[String],
+    agent: Option<&str>,
+    priority: Option<&str>,
+) -> String {
+    let mut cells = vec![" ".to_string(); cell_count];
+    let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
+    set_cell(&mut cells, map.name, Some(name));
+    set_cell(&mut cells, map.description, description);
+    set_cell(&mut cells, map.tags, tags_joined.as_deref());
+    set_cell(&mut cells, map.agent, agent);
+    set_cell(&mut cells, map.priority, priority);
+    set_cell(&mut cells, map.status, Some("new"));
+
+    let mut out = String::new();
+    if leading {
+        out.push('|');
+    }
+    out.push_str(&cells.join("|"));
+    if trailing {
+        out.push('|');
+    }
+    out
+}
+
+/// Core of [`task_append`]'s target-form-aware write (WO02 §2.3). `text` is
+/// parsed with the existing checklist extractors ([`split_name_desc`] +
+/// [`extract_tokens`]); the three-way rule then decides the destination
+/// shape:
+///
+/// 1. The last name-mapped pipe table in `existing` (if any) gets a new row
+///    inserted right after its last data row.
+/// 2. Else, if `existing` has at least one checklist task, `- [ ] <text>`
+///    is appended at EOF (today's behaviour, unchanged).
+/// 3. Else, a fresh canonical table is created ([`create_canonical_table`]).
+///
+/// Returns the new full content and the 1-based line the item landed on.
+fn write_task_text(existing: &str, rel_path_for_header: &str, text: &str) -> (String, usize) {
+    let (name, description) = split_name_desc(text);
+    let (tags, agent, priority) = extract_tokens(text);
+
+    let lines: Vec<&str> = existing.split('\n').collect();
+    if let Some((map, anchor, leading, trailing, cell_count)) = last_named_table(&lines) {
+        let row = build_table_append_row(
+            &map,
+            leading,
+            trailing,
+            cell_count,
+            &name,
+            description.as_deref(),
+            &tags,
+            agent.as_deref(),
+            priority.as_deref(),
+        );
+        let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
+        let insert_at = anchor + 1;
+        new_lines.insert(insert_at, row);
+        return (new_lines.join("\n"), insert_at + 1);
+    }
+
+    let existing_tasks = parse_tasks(rel_path_for_header, existing);
+    if !existing_tasks.is_empty() {
+        let raw_line = format!("- [ ] {text}");
+        return append_raw_line(existing, rel_path_for_header, &raw_line);
+    }
+
+    create_canonical_table(
+        existing,
+        rel_path_for_header,
+        &name,
+        description.as_deref(),
+        priority.as_deref(),
+        &tags,
+        agent.as_deref(),
+    )
+}
+
+/// Composes `Name — description #tag… @agent !priority`/`Pn` from discrete
+/// fields — the checklist-target shape for [`write_task_fields`]'s case 2.
+/// Priority is emitted `!<bucket>` when it normalizes, else bare (mirrors
+/// [`regenerate_checklist_line`]'s write rule, WO02 §2.4).
+fn compose_checklist_text(
+    name: &str,
+    description: Option<&str>,
+    tags: &[String],
+    agent: Option<&str>,
+    priority: Option<&str>,
+) -> String {
+    let mut text = name.to_string();
+    if let Some(desc) = description.filter(|d| !d.is_empty()) {
+        text.push_str(" — ");
+        text.push_str(desc);
+    }
+    for tag in tags {
+        text.push_str(" #");
+        text.push_str(tag);
+    }
+    if let Some(agent) = agent.filter(|a| !a.is_empty()) {
+        text.push_str(" @");
+        text.push_str(agent);
+    }
+    if let Some(priority) = priority.filter(|p| !p.is_empty()) {
+        text.push(' ');
+        match bucket_for_priority_input(priority) {
+            Some(bucket) => {
+                text.push('!');
+                text.push_str(bucket);
+            }
+            None => text.push_str(priority),
+        }
+    }
+    text
+}
+
+/// Core of [`task_move`]'s target-form-aware write (WO02 §2.3): the same
+/// three-way branching as [`write_task_text`], but takes the source item's
+/// already-parsed fields directly instead of re-parsing free text — both
+/// checklist- and table-sourced items already have them (from [`parse_tasks`]),
+/// so tags/agent/priority survive a move regardless of the source's shape.
+/// The checklist-target case (2) composes a fresh line via
+/// [`compose_checklist_text`]; status is always `"new"` in every case —
+/// mirroring [`task_append`]'s "no append-with-status primitive".
+#[allow(clippy::too_many_arguments)]
+fn write_task_fields(
+    existing: &str,
+    rel_path_for_header: &str,
+    name: &str,
+    description: Option<&str>,
+    tags: &[String],
+    agent: Option<&str>,
+    priority: Option<&str>,
+) -> (String, usize) {
+    let lines: Vec<&str> = existing.split('\n').collect();
+    if let Some((map, anchor, leading, trailing, cell_count)) = last_named_table(&lines) {
+        let row = build_table_append_row(
+            &map, leading, trailing, cell_count, name, description, tags, agent, priority,
+        );
+        let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
+        let insert_at = anchor + 1;
+        new_lines.insert(insert_at, row);
+        return (new_lines.join("\n"), insert_at + 1);
+    }
+
+    let existing_tasks = parse_tasks(rel_path_for_header, existing);
+    if !existing_tasks.is_empty() {
+        let text = compose_checklist_text(name, description, tags, agent, priority);
+        let raw_line = format!("- [ ] {text}");
+        return append_raw_line(existing, rel_path_for_header, &raw_line);
+    }
+
+    create_canonical_table(existing, rel_path_for_header, name, description, priority, tags, agent)
+}
+
+// ---------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------
 
-/// Scans the four convention files (contract §3). Always reports exactly
-/// 4 entries in convention order; a missing file reports its default
-/// (root-level) location with `exists: false` and no tasks. Unreadable
-/// files are treated as empty — tolerant, never errors past a bad `root`.
+/// Scans the five convention files (contract §3; WO02 §2.3 adds
+/// `BUGS.md`). Always reports exactly 5 entries in convention order; a
+/// missing file reports its default (root-level) location with `exists:
+/// false` and no tasks. Unreadable files are treated as empty — tolerant,
+/// never errors past a bad `root`.
 #[tauri::command]
 pub fn tasks_scan(root: String) -> Result<TasksScan, String> {
     let root_path = checked_root(&root)?;
@@ -875,9 +1212,11 @@ pub fn task_toggle(root: String, rel_path: String, line: usize, done: bool) -> R
         .ok_or_else(|| "Task moved on disk — rescan".to_string())
 }
 
-/// Appends `- [ ] <text>` as the file's last line (contract §3), creating
-/// the file with a `# <Name>` header if it doesn't exist yet. Only the four
-/// convention paths are writable.
+/// Appends a task using the target-form-aware three-way rule (WO02 §2.3,
+/// [`write_task_text`]): a row into the file's last name-mapped pipe table,
+/// a `- [ ] <text>` checklist line when the file only has checklist tasks
+/// (today's behaviour, unchanged), or a fresh canonical table when the file
+/// is empty/missing/taskless. Only the five convention paths are writable.
 #[tauri::command]
 pub fn task_append(root: String, rel_path: String, text: String) -> Result<TaskItem, String> {
     ensure_convention_path(&rel_path)?;
@@ -885,21 +1224,25 @@ pub fn task_append(root: String, rel_path: String, text: String) -> Result<TaskI
     let path = resolve_within_root(&root_path, &rel_path)?;
 
     let existing = fs::read_to_string(&path).unwrap_or_default();
-    let raw_line = format!("- [ ] {text}");
-    let (content, line_no) = append_raw_line(&existing, &rel_path, &raw_line);
+    let (content, line_no) = write_task_text(&existing, &rel_path, &text);
     write_atomic(&path, &content)?;
 
-    let updated_lines: Vec<&str> = content.split('\n').collect();
-    let section = nearest_section(&updated_lines, line_no);
-    parse_checklist_line(&rel_path, line_no, &raw_line, section)
+    parse_tasks(&rel_path, &content)
+        .into_iter()
+        .find(|t| t.line == line_no)
         .ok_or_else(|| "Failed to parse appended task".to_string())
 }
 
-/// Moves the WHOLE line at `fromRelPath#line` to the end of `toRelPath`
-/// (contract §3). Checklist lines move verbatim; table rows are converted
-/// to a checklist line. Target is written first, then source; on a source
-/// write failure the target is rolled back to its pre-move content (or
-/// removed, if it didn't exist before) so nothing is half-moved.
+/// Moves the WHOLE item at `fromRelPath#line` into `toRelPath`, writing it
+/// using the same target-form-aware three-way rule as [`task_append`]
+/// ([`write_task_fields`]) — table row, checklist line, or fresh canonical
+/// table depending on what the target already has. The moved item's fields
+/// (name/description/tags/agent/priority) come from the source's already-
+/// parsed [`TaskItem`], so they survive regardless of whether the source
+/// was a table row or a checklist line. Target is written first, then
+/// source; on a source write failure the target is rolled back to its
+/// pre-move content (or removed, if it didn't exist before) so nothing is
+/// half-moved.
 #[tauri::command]
 pub fn task_move(
     root: String,
@@ -923,26 +1266,21 @@ pub fn task_move(
         .find(|t| t.line == line)
         .ok_or_else(|| "Task moved on disk — rescan".to_string())?;
 
-    let from_lines: Vec<&str> = from_content.split('\n').collect();
-    let moved_line_text = match item.source {
-        TaskSource::Checklist => from_lines.get(line - 1).copied().unwrap_or("").to_string(),
-        TaskSource::Table => format!(
-            "- [ ] {}{}",
-            item.name,
-            item.description
-                .as_deref()
-                .map(|d| format!(" — {d}"))
-                .unwrap_or_default()
-        ),
-    };
-
     let to_existed = to_path.is_file();
     let to_existing = if to_existed {
         fs::read_to_string(&to_path).map_err(|e| format!("{to_rel_path}: {e}"))?
     } else {
         String::new()
     };
-    let (to_content, new_line_no) = append_raw_line(&to_existing, &to_rel_path, &moved_line_text);
+    let (to_content, new_line_no) = write_task_fields(
+        &to_existing,
+        &to_rel_path,
+        &item.name,
+        item.description.as_deref(),
+        &item.tags,
+        item.agent.as_deref(),
+        item.priority.as_deref(),
+    );
 
     // Write target first.
     write_atomic(&to_path, &to_content)?;
@@ -964,9 +1302,9 @@ pub fn task_move(
         });
     }
 
-    let to_lines: Vec<&str> = to_content.split('\n').collect();
-    let section = nearest_section(&to_lines, new_line_no);
-    parse_checklist_line(&to_rel_path, new_line_no, &moved_line_text, section)
+    parse_tasks(&to_rel_path, &to_content)
+        .into_iter()
+        .find(|t| t.line == new_line_no)
         .ok_or_else(|| "Failed to parse moved task".to_string())
 }
 

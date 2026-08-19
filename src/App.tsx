@@ -82,7 +82,7 @@ function LoadingFallback() {
 const VIEW_TITLES: Record<View, string> = {
   canvas: "Edit the context graph",
   barn: "Watch the agent in the barn",
-  tasks: "Browse TASKS / BACKLOG / ROADMAP",
+  tasks: "Browse TASKS / BACKLOG / ROADMAP / BUGS",
 };
 
 function ViewToggle({

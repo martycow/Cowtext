@@ -31,7 +31,7 @@ import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
 import { activityEmphasis, brightnessFor, useLensTickStore, weightEmphasis } from "./lens";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
-import { seedFor, useAgentsStore } from "../store/agents";
+import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -59,6 +59,16 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const agentBacked = isAgentFile(node.filePath);
   const agentFileName = agentBacked ? (node.filePath.split("/").pop() ?? node.filePath) : "";
   const avatarSeed = useAgentsStore((s) => (agentBacked ? seedFor(s.meta, agentFileName) : ""));
+  // §7.2 (#5): display name + model chip come from the live agent doc;
+  // priority chip comes from the sidecar meta. Both fall back gracefully
+  // when the agent doc hasn't loaded yet (e.g. mid-scan).
+  const agentDoc = useAgentsStore((s) =>
+    agentBacked ? s.agents.find((a) => a.fileName === agentFileName) : undefined,
+  );
+  const agentMeta = useAgentsStore((s) => (agentBacked ? metaOrDefault(s.meta, agentFileName) : null));
+  const agentDisplayName =
+    agentDoc?.fields.name?.trim() || agentFileName.replace(/\.md$/i, "");
+  const agentModel = agentDoc?.fields.model ?? "inherit";
   const contextMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." The card has no room for a permanent
@@ -95,13 +105,17 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   // Hover-highlight echo from the Inspector's Relations grid: a softer
   // accent ring than real selection, so the two states stay tellable.
   const highlighted = useHighlightStore((s) => s.nodeIds.includes(node.id));
+  // §7.2 (#5d): at rest only, agent cards carry an extra 1px identity ring
+  // as the FIRST boxShadow layer — selection/highlight/flash keep priority
+  // exactly as today (they replace this branch entirely, not stack on it).
+  const restShadow = agentBacked ? "0 0 0 1px var(--role-agent), var(--elev-1)" : "var(--elev-1)";
   const ring = selected
     ? "0 0 0 2px var(--accent), 0 4px 14px rgba(0,0,0,.45)"
     : highlighted
       ? "0 0 0 2px var(--accent-border), var(--elev-1)"
       : flash
         ? "0 0 0 2px var(--success), var(--elev-1)"
-        : "var(--elev-1)";
+        : restShadow;
   const boxShadow = live ? `${ring}, var(--glow-live)` : ring;
 
   // Lens emphasis/brightness — styling only, never layout (contract §6.1).
@@ -301,15 +315,35 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         {/* 2/3 — glyph + role label · live square · pin (read-order badge
             moved to the top-right corner marker above) */}
         <div className="flex items-center gap-1.5">
-          <span style={{ color: role }}>
-            {agentBacked ? <AgentAvatar seed={avatarSeed} size={11} /> : <RoleGlyph role={node.role} />}
-          </span>
-          <span
-            className="font-mono text-micro uppercase"
-            style={{ color: role, letterSpacing: "0.09em" }}
-          >
-            {node.role}
-          </span>
+          {agentBacked ? (
+            <span className="flex-none rounded-sm border border-border-strong bg-surface-inset p-[2px]">
+              <AgentAvatar seed={avatarSeed} size={22} />
+            </span>
+          ) : (
+            <span style={{ color: role }}>
+              <RoleGlyph role={node.role} />
+            </span>
+          )}
+          {agentBacked ? (
+            <span className="truncate font-mono text-micro" style={{ color: role }}>
+              {agentDisplayName}
+            </span>
+          ) : (
+            <span
+              className="font-mono text-micro uppercase"
+              style={{ color: role, letterSpacing: "0.09em" }}
+            >
+              {node.role}
+            </span>
+          )}
+          {agentBacked && (
+            <span
+              className="flex-none rounded-sm border px-1 py-px font-mono text-micro uppercase"
+              style={{ color: "var(--role-agent)", borderColor: "var(--role-agent)", letterSpacing: "0.09em" }}
+            >
+              AGENT
+            </span>
+          )}
           <div className="flex-1" />
           {live && (
             <span
@@ -345,8 +379,20 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           {node.filePath}
         </div>
 
-        {/* 7 — footer: token count always; at most ONE status badge */}
+        {/* 7 — footer: token count always; at most ONE status badge.
+            §7.2 (#5c): agent cards also carry a model chip and a priority
+            chip, both before the token chip, both the existing chip class. */}
         <div className="flex items-center gap-1">
+          {agentBacked && (
+            <>
+              <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
+                {agentModel}
+              </span>
+              <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
+                {`P${agentMeta?.priority ?? 3}`}
+              </span>
+            </>
+          )}
           <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
             {file !== undefined ? formatTokens(file.sizeBytes) : "0 tok"}
           </span>

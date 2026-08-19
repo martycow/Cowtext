@@ -45,6 +45,19 @@ pub struct SkillDoc {
     pub extra_file_count: usize,
 }
 
+/// Per-agent memory folder (WO02 §2.1): `.claude/agent-memory/<stem>/`, with
+/// a never-clobbered `MEMORY.md` index seeded on first creation.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMemory {
+    /// ".claude/agent-memory/<stem>"  — forward slashes, relative to root.
+    pub dir_rel_path: String,
+    /// ".claude/agent-memory/<stem>/MEMORY.md"
+    pub index_rel_path: String,
+    /// true iff THIS call created the directory or the index file.
+    pub created: bool,
+}
+
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentsScan {
@@ -260,11 +273,25 @@ pub fn agents_scan(root: String) -> Result<AgentsScan, String> {
 }
 
 #[tauri::command]
-pub fn agent_create(root: String, name: String) -> Result<AgentDoc, String> {
+pub fn agent_create(
+    root: String,
+    name: String,
+    file_name: Option<String>,
+) -> Result<AgentDoc, String> {
     validate_component(&name)?;
     let root_path = checked_root(&root)?;
     let slug = crate::preset::slugify(&name)?;
-    let file_name = format!("{slug}.md");
+    let file_name = match file_name {
+        Some(f) => {
+            validate_md_component(&f)?;
+            // Trimmed, matching agent_memory_ensure's stem derivation — an
+            // untrimmed name would create a file whose stem (and therefore
+            // its memory folder) disagrees with what agent_memory_ensure(
+            // root, file_name) would later derive from the same string.
+            f.trim().to_string()
+        }
+        None => format!("{slug}.md"),
+    };
     let dir = agents_dir(&root_path);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = resolve_within_root(&root_path, &format!(".claude/agents/{file_name}"))?;
@@ -283,6 +310,46 @@ pub fn agent_create(root: String, name: String) -> Result<AgentDoc, String> {
 
     let content = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(doc_from_content(file_name, content))
+}
+
+/// Ensure `.claude/agent-memory/<stem>/` and its `MEMORY.md` index exist
+/// (WO02 §2.1). Idempotent: a pre-existing `MEMORY.md` is never rewritten.
+#[tauri::command]
+pub fn agent_memory_ensure(root: String, file_name: String) -> Result<AgentMemory, String> {
+    validate_md_component(&file_name)?;
+    let trimmed = file_name.trim();
+    let stem = &trimmed[..trimmed.len() - 3];
+    validate_component(stem)?;
+    let root_path = checked_root(&root)?;
+
+    let dir_rel = format!(".claude/agent-memory/{stem}");
+    let dir = resolve_within_root(&root_path, &dir_rel)?;
+    let dir_existed = dir.is_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+
+    let index = dir.join("MEMORY.md");
+    let index_rel_path = format!("{dir_rel}/MEMORY.md");
+    let mut created = !dir_existed;
+
+    match fs::File::create_new(&index) {
+        Ok(mut f) => {
+            use std::io::Write;
+            let seed = format!(
+                "# {stem} memory index\n\n<!-- One line per memory file: - [Title](file.md) — one-line hook -->\n"
+            );
+            f.write_all(seed.as_bytes())
+                .map_err(|e| format!("{}: {e}", index.display()))?;
+            created = true;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("{}: {e}", index.display())),
+    }
+
+    Ok(AgentMemory {
+        dir_rel_path: dir_rel,
+        index_rel_path,
+        created,
+    })
 }
 
 #[tauri::command]

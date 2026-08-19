@@ -23,12 +23,33 @@ export interface SavePatch {
   rawContent?: string | null;
 }
 
+/** Result of agent_memory_ensure (WO02 §2.1) — the calculated per-agent
+ *  memory directory under `.claude/agent-memory/<stem>/`. */
+export interface AgentMemory {
+  dirRelPath: string;
+  indexRelPath: string;
+  created: boolean;
+}
+
 export function agentsScan(root: string): Promise<AgentsScan> {
   return invoke<AgentsScan>("agents_scan", { root });
 }
 
-export function agentCreate(root: string, name: string): Promise<AgentDoc> {
-  return invoke<AgentDoc>("agent_create", { root, name });
+/** `fileName`: `undefined`/`null` => today's behaviour (`slugify(name)+".md"`);
+ *  a string => that exact file name is used (still validated + never-clobber
+ *  server-side). The frontmatter `name:` stays `slugify(name)` either way. */
+export function agentCreate(
+  root: string,
+  name: string,
+  fileName?: string | null,
+): Promise<AgentDoc> {
+  return invoke<AgentDoc>("agent_create", { root, name, fileName: fileName ?? null });
+}
+
+/** Idempotent: ensures `.claude/agent-memory/<stem>/MEMORY.md` exists,
+ *  never clobbering an existing index file. */
+export function agentMemoryEnsure(root: string, fileName: string): Promise<AgentMemory> {
+  return invoke<AgentMemory>("agent_memory_ensure", { root, fileName });
 }
 
 /** Convert a legacy context .md into a real .claude/agents/<slug>.md

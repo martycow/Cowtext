@@ -1,7 +1,7 @@
 // Frontend IPC wrapper for the task-board backend commands
 // (TASKBOARD_BATCH_CONTRACT.md §3). This is the ONLY file allowed to hold
-// these four invoke() calls; the store imports from here, nobody invokes
-// directly. Paths are confined server-side to the four convention files.
+// these invoke() calls; the store imports from here, nobody invokes
+// directly. Paths are confined server-side to the five convention files.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -13,7 +13,7 @@ export interface TaskItem {
   line: number; // 1-based
   source: TaskSource;
   name: string;
-  description: string;
+  description: string | null;
   tags: string[];
   priority: string | null;
   phase: string | null;
@@ -46,7 +46,7 @@ export interface TaskFileInfo {
 }
 
 export interface TasksScan {
-  files: TaskFileInfo[]; // always 4, convention order TASKS/SPRINT/BACKLOG/ROADMAP
+  files: TaskFileInfo[]; // always 5, convention order TASKS/SPRINT/BACKLOG/ROADMAP/BUGS
   tasks: TaskItem[];
 }
 

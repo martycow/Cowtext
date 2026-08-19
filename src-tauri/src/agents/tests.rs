@@ -89,10 +89,10 @@ fn scan_skips_skill_dir_without_skill_md() {
 fn agent_create_twice_second_is_err_first_unchanged() {
     let dir = temp_project("create-twice");
     let root = dir.to_string_lossy().into_owned();
-    let first = agent_create(root.clone(), "My Agent".to_string()).unwrap();
+    let first = agent_create(root.clone(), "My Agent".to_string(), None).unwrap();
     assert_eq!(first.file_name, "my-agent.md");
 
-    let err = agent_create(root, "My Agent".to_string()).unwrap_err();
+    let err = agent_create(root, "My Agent".to_string(), None).unwrap_err();
     assert!(err.contains("already exists"));
 
     let on_disk = fs::read_to_string(agents_dir(&dir).join("my-agent.md")).unwrap();
@@ -106,8 +106,8 @@ fn agent_create_twice_second_is_err_first_unchanged() {
 fn agent_rename_onto_existing_name_errs_both_files_present() {
     let dir = temp_project("rename-collide");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Alpha".to_string()).unwrap();
-    agent_create(root.clone(), "Beta".to_string()).unwrap();
+    agent_create(root.clone(), "Alpha".to_string(), None).unwrap();
+    agent_create(root.clone(), "Beta".to_string(), None).unwrap();
 
     let err = agent_rename(root, "alpha.md".to_string(), "Beta".to_string()).unwrap_err();
     assert!(err.contains("already exists"));
@@ -122,7 +122,7 @@ fn agent_rename_onto_existing_name_errs_both_files_present() {
 fn agent_rename_patches_name_line_of_moved_file() {
     let dir = temp_project("rename-patch");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Old Name".to_string()).unwrap();
+    agent_create(root.clone(), "Old Name".to_string(), None).unwrap();
 
     let new_name = agent_rename(root, "old-name.md".to_string(), "New Name".to_string()).unwrap();
     assert_eq!(new_name, "new-name.md");
@@ -155,7 +155,7 @@ fn agent_rename_skips_patch_silently_on_raw_doc() {
 fn agent_save_ambiguous_and_noop() {
     let dir = temp_project("save-ambiguous");
     let root = dir.to_string_lossy().into_owned();
-    let created = agent_create(root.clone(), "Save Me".to_string()).unwrap();
+    let created = agent_create(root.clone(), "Save Me".to_string(), None).unwrap();
 
     let err = agent_save(
         root.clone(),
@@ -269,7 +269,7 @@ fn skill_rename_patches_name_and_refuses_collision() {
 fn agent_save_fields_and_body_round_trip() {
     let dir = temp_project("save-fields");
     let root = dir.to_string_lossy().into_owned();
-    let created = agent_create(root.clone(), "Field Test".to_string()).unwrap();
+    let created = agent_create(root.clone(), "Field Test".to_string(), None).unwrap();
 
     let mut fields = created.fields.clone();
     fields.description = Some("A new description.".to_string());
@@ -293,7 +293,7 @@ fn agent_save_fields_and_body_round_trip() {
 fn agent_rename_to_identical_name_is_a_harmless_noop() {
     let dir = temp_project("rename-same-name");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Same".to_string()).unwrap();
+    agent_create(root.clone(), "Same".to_string(), None).unwrap();
 
     let new_name = agent_rename(root, "same.md".to_string(), "Same".to_string()).unwrap();
     assert_eq!(new_name, "same.md");
@@ -311,7 +311,7 @@ fn agent_rename_to_identical_name_is_a_harmless_noop() {
 fn agent_rename_case_only_fixes_casing_without_self_collision() {
     let dir = temp_project("rename-case-only");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Foo".to_string()).unwrap();
+    agent_create(root.clone(), "Foo".to_string(), None).unwrap();
     let agents = agents_dir(&dir);
     // Simulate an externally created mixed-case file (agent_create's own
     // slug is always lowercase, so we force the casing directly on disk).
@@ -405,7 +405,7 @@ fn agent_convert_with_frontmatter_preserves_other_keys() {
 fn agent_convert_refuses_destination_collision_source_untouched() {
     let dir = temp_project("convert-collide");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Existing".to_string()).unwrap();
+    agent_create(root.clone(), "Existing".to_string(), None).unwrap();
     fs::create_dir_all(dir.join("context")).unwrap();
     fs::write(dir.join("context/dup.md"), "dup body\n").unwrap();
 
@@ -424,7 +424,7 @@ fn agent_convert_refuses_destination_collision_source_untouched() {
 fn agent_convert_refuses_a_source_already_under_claude() {
     let dir = temp_project("convert-claude-source");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Already Agent".to_string()).unwrap();
+    agent_create(root.clone(), "Already Agent".to_string(), None).unwrap();
 
     let err = agent_convert(
         root,
@@ -454,7 +454,7 @@ fn agent_convert_rejects_non_markdown_and_missing_source() {
 fn agent_create_producer_is_still_allowed() {
     let dir = temp_project("producer-create");
     let root = dir.to_string_lossy().into_owned();
-    let doc = agent_create(root, "Producer".to_string()).unwrap();
+    let doc = agent_create(root, "Producer".to_string(), None).unwrap();
     assert_eq!(doc.file_name, "producer.md");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -463,7 +463,7 @@ fn agent_create_producer_is_still_allowed() {
 fn agent_rename_rejects_producer_as_source() {
     let dir = temp_project("producer-rename-src");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Producer".to_string()).unwrap();
+    agent_create(root.clone(), "Producer".to_string(), None).unwrap();
 
     let err = agent_rename(root, "producer.md".to_string(), "Renamed".to_string()).unwrap_err();
     assert_eq!(err, "Reserved agent: producer");
@@ -475,7 +475,7 @@ fn agent_rename_rejects_producer_as_source() {
 fn agent_rename_rejects_producer_as_destination() {
     let dir = temp_project("producer-rename-dest");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Some Other Agent".to_string()).unwrap();
+    agent_create(root.clone(), "Some Other Agent".to_string(), None).unwrap();
 
     let err = agent_rename(root, "some-other-agent.md".to_string(), "Producer".to_string())
         .unwrap_err();
@@ -488,7 +488,7 @@ fn agent_rename_rejects_producer_as_destination() {
 fn agent_delete_rejects_producer() {
     let dir = temp_project("producer-delete");
     let root = dir.to_string_lossy().into_owned();
-    agent_create(root.clone(), "Producer".to_string()).unwrap();
+    agent_create(root.clone(), "Producer".to_string(), None).unwrap();
 
     let err = agent_delete(root, "producer.md".to_string()).unwrap_err();
     assert_eq!(err, "Reserved agent: producer");
@@ -506,5 +506,176 @@ fn agent_convert_rejects_producer_destination() {
     assert_eq!(err, "Reserved agent: producer");
     assert!(dir.join("legacy.md").is_file());
     assert!(!agents_dir(&dir).join("producer.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_create with explicit file_name (WO02 §2.2) ----------------------
+
+#[test]
+fn agent_create_with_explicit_file_name_uses_it_verbatim() {
+    let dir = temp_project("create-explicit-name");
+    let root = dir.to_string_lossy().into_owned();
+
+    let doc = agent_create(
+        root,
+        "Display Name".to_string(),
+        Some("custom-file.md".to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(doc.file_name, "custom-file.md");
+    assert!(agents_dir(&dir).join("custom-file.md").is_file());
+    // Frontmatter `name:` is always slugify(name), independent of the file name.
+    assert_eq!(doc.fields.name.as_deref(), Some("display-name"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_create_none_file_name_is_byte_identical_to_today() {
+    let dir = temp_project("create-none-name");
+    let root = dir.to_string_lossy().into_owned();
+
+    let doc = agent_create(root, "Plain Agent".to_string(), None).unwrap();
+
+    assert_eq!(doc.file_name, "plain-agent.md");
+    assert_eq!(doc.fields.name.as_deref(), Some("plain-agent"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_create_rejects_invalid_explicit_file_name() {
+    let dir = temp_project("create-bad-explicit-name");
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = agent_create(root, "Bad".to_string(), Some("no-extension".to_string()))
+        .unwrap_err();
+    assert!(err.contains(".md"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_create_trims_explicit_file_name_to_match_memory_stem() {
+    // Regression: an untrimmed explicit fileName (valid per
+    // validate_md_component, which validates s.trim()) must not produce a
+    // file whose stem disagrees with what agent_memory_ensure would later
+    // derive from the same string.
+    let dir = temp_project("create-untrimmed-name");
+    let root = dir.to_string_lossy().into_owned();
+
+    let doc = agent_create(
+        root.clone(),
+        "Spacey".to_string(),
+        Some(" spacey.md ".to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(doc.file_name, "spacey.md");
+    assert!(agents_dir(&dir).join("spacey.md").is_file());
+    assert!(!agents_dir(&dir).join(" spacey.md ").exists());
+
+    let mem = agent_memory_ensure(root, doc.file_name.clone()).unwrap();
+    assert_eq!(mem.dir_rel_path, ".claude/agent-memory/spacey");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_create_explicit_producer_file_name_still_materializes_producer() {
+    let dir = temp_project("create-explicit-producer");
+    let root = dir.to_string_lossy().into_owned();
+
+    let doc = agent_create(root, "Producer".to_string(), Some("producer.md".to_string()))
+        .unwrap();
+    assert_eq!(doc.file_name, "producer.md");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_memory_ensure (WO02 §2.1) ---------------------------------------
+
+#[test]
+fn agent_memory_ensure_fresh_create_seeds_index() {
+    let dir = temp_project("memory-fresh");
+    let root = dir.to_string_lossy().into_owned();
+
+    let mem = agent_memory_ensure(root, "tech-lead.md".to_string()).unwrap();
+
+    assert_eq!(mem.dir_rel_path, ".claude/agent-memory/tech-lead");
+    assert_eq!(mem.index_rel_path, ".claude/agent-memory/tech-lead/MEMORY.md");
+    assert!(mem.created);
+
+    let index_path = dir
+        .join(".claude")
+        .join("agent-memory")
+        .join("tech-lead")
+        .join("MEMORY.md");
+    assert!(index_path.is_file());
+    let content = fs::read_to_string(&index_path).unwrap();
+    assert_eq!(
+        content,
+        "# tech-lead memory index\n\n<!-- One line per memory file: - [Title](file.md) — one-line hook -->\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_memory_ensure_idempotent_second_call_reports_created_false() {
+    let dir = temp_project("memory-idempotent");
+    let root = dir.to_string_lossy().into_owned();
+
+    let first = agent_memory_ensure(root.clone(), "tech-ui.md".to_string()).unwrap();
+    assert!(first.created);
+
+    let second = agent_memory_ensure(root, "tech-ui.md".to_string()).unwrap();
+    assert!(!second.created);
+    assert_eq!(second.dir_rel_path, first.dir_rel_path);
+    assert_eq!(second.index_rel_path, first.index_rel_path);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_memory_ensure_never_rewrites_existing_memory_md() {
+    let dir = temp_project("memory-never-clobber");
+    let root = dir.to_string_lossy().into_owned();
+
+    agent_memory_ensure(root.clone(), "tester.md".to_string()).unwrap();
+    let index_path = dir
+        .join(".claude")
+        .join("agent-memory")
+        .join("tester")
+        .join("MEMORY.md");
+    fs::write(&index_path, "custom content, hand-edited\n").unwrap();
+
+    let again = agent_memory_ensure(root, "tester.md".to_string()).unwrap();
+    assert!(!again.created);
+    let content = fs::read_to_string(&index_path).unwrap();
+    assert_eq!(content, "custom content, hand-edited\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_memory_ensure_rejects_path_traversal_file_name() {
+    let dir = temp_project("memory-traversal");
+    let root = dir.to_string_lossy().into_owned();
+
+    for bad in ["../evil.md", "..\\evil.md", "a/b.md"] {
+        let err = agent_memory_ensure(root.clone(), bad.to_string()).unwrap_err();
+        assert!(!err.is_empty(), "should have rejected {bad:?}");
+    }
+    assert!(!dir.join(".claude").join("agent-memory").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_memory_ensure_directory_only_pre_created_still_reports_created_true() {
+    // Directory exists (e.g. created by an out-of-band tool) but MEMORY.md
+    // does not yet — `created` must still be true because the index file
+    // itself is created by this call (contract §2.1 step 5, "or" clause).
+    let dir = temp_project("memory-dir-precreated");
+    let root = dir.to_string_lossy().into_owned();
+    let mem_dir = dir.join(".claude").join("agent-memory").join("producer");
+    fs::create_dir_all(&mem_dir).unwrap();
+
+    let mem = agent_memory_ensure(root, "producer.md".to_string()).unwrap();
+    assert!(mem.created);
+    assert!(mem_dir.join("MEMORY.md").is_file());
     let _ = fs::remove_dir_all(&dir);
 }

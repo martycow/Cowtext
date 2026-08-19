@@ -139,7 +139,7 @@ function RolePicker({ role, onChange }: { role: NodeRole; onChange: (r: NodeRole
               <RoleGlyph role={r} size={13} />
               <span className="font-mono text-2xs uppercase tracking-wider">{r}</span>
             </span>
-            <span className="truncate text-2xs leading-snug text-content-muted" title={ROLE_DESCRIPTIONS[r]}>
+            <span className="truncate text-2xs leading-snug text-content-secondary" title={ROLE_DESCRIPTIONS[r]}>
               {ROLE_DESCRIPTIONS[r]}
             </span>
           </button>
@@ -183,7 +183,10 @@ export function NodeWizard({
   onClose,
 }: {
   root: string;
-  initialPosition: { x: number; y: number };
+  // Contract §7.7 (#16): a thunk lets the centre entry point re-derive at
+  // Confirm rather than trusting the value captured at open, so panning
+  // while the wizard is open still lands the card in view.
+  initialPosition: { x: number; y: number } | (() => { x: number; y: number });
   onClose: () => void;
 }) {
   const createNodeFrom = useGraphStore((s) => s.createNodeFrom);
@@ -329,7 +332,7 @@ export function NodeWizard({
         brief: brief.trim(),
         pinned,
         content: previewText,
-        position: initialPosition,
+        position: typeof initialPosition === "function" ? initialPosition() : initialPosition,
       });
       if (newId !== null && runAssemble) {
         // Fire-and-forget, exactly like the Inspector's Assemble button —
@@ -412,7 +415,7 @@ export function NodeWizard({
               <div>
                 <FieldLabel>Role</FieldLabel>
                 <RolePicker role={role} onChange={setRole} />
-                <p className="mt-2 text-xs leading-snug text-content-muted">
+                <p className="mt-2 text-xs leading-snug text-content-secondary">
                   {ROLE_DESCRIPTIONS[role]}
                 </p>
               </div>
