@@ -6,28 +6,30 @@ Don't make changes here. Just read it and follow the rules.
 
 === Everything below considered as a prompt ===
 
-08/18/2026 10:36PM
+08/19/2026 08:00PM
+1. Connection lines are still too far away from the Input connectors.
+2. There might be multiple connections to one connector. I guess you should make connectors a big higher and look more like 16-bit video game cartridge's contacts
+3.  
 
-Thoughts:
+08/19/2026 2:10 PM
 
-1. For empty projects create mandatory context files depenting of project type
-2. New project creation wizard. User specifies all the settings about the project. Depenting on selected type (Video Game, Desktop Application, SaaS etc) file/folder hierarchy is created
-3. For each Agent create related file  `.claude/agents/<agent_name>.md` and agent memory files inside `.claude/agent-memory/<agent_name>/...`
-4. There should be default pre-defined skills. For example, the one which formats Tasks for proper displaying later. Or skill which starts ultracode fleet session. It's OPTIONAL in wizard
-5. Agent nodes on graph should look different than other nodes. It should look like it's real Agent
-6. Make Agent creation wizard more customizable. There should be calculated default paths in input fields
-7. Add FPS toggle in settings
-8. Check performance for Barn. Framerate drops on a default scene
-9. Every node is created through the wizard (even when double-clicked on graph)
-10. There must be some tool set for reorganizing existing project to Cowtext hierarhy and file formats
-11. Tasks format skill and TASKS, BACKLOG, BUGS, ROADMAP, CHANGELOG must be a formatted user-readable grid. There must be only brief info without verbose descriptions. ALL tasks MUST have the same format everywhere to be displayed and managed properly on Task Board. The must be ONLY grids without any else info
-12. Tags for tasks must be a dropdown menu with the ability to create a new tag there
-13. Priorities should be: Low, Medium, High, CRITICAL
-14. BACKLOG, ROADMAP and BUGS must be somewhere else. Right now they are constantly displayed on the right.
-15. I can't see Fable 5 in the model dropdown. What's "inherit"?
-16. New Nodes are created in the center of current viewport on graph
-17. Descriptions of roles are barely visible. Make the font a little brighter
-18. Think deeper about what roles must exist
-19. Each agent should have a defined Department. User can create it's own Department. The list of default departments is based on Project's type
-20. Think deeply about Edge's types. For example, "Agent Task Manager" should CONTROL TASKS.md.
-21. Research an ability to connect Codex, Cursor and others hooks as well as Claude Code
+Brainstorm Ideas:
+
+1. Connection lines must start and end ON connectors, not next to them.
+2. Connection lines should use basic path finding to prevent crossing with nodes and other lines. There might be a case where there's no path exist
+3. Make connection lines thicker
+4. Context File Deletion. "Delete From Graph" and "Delete File" are different operations
+5. Root Folder can't be collapsed (No arror next to Root folder in hierarchy)
+6. Add title to left panel "Hierarchy"
+7. Add "New Project" wizard on the title screen
+8. Add "Convert existing project" Wizard on the title screen. It reogranizes context files, agents, skills, tasks into Cowtext-friendly format
+9. Projects to work with MUST BE Cowtext-friendly. Meaning there must be a specific files organization, meta data and other required things
+10. Project has it's own properties. When creating/converting project, there must be a Wizard with fields depenging of Project Type:
+   * Name
+   * Brief description
+   * Requirements
+   * (Optional) Hard Rules
+   * (Optional) Target Audience
+   * (Optional) Architecture
+   * (Optional) Constraints
+11. I want Agent Orchestrator tab with extended settings for each agent

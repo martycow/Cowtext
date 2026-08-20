@@ -119,7 +119,18 @@ export interface SessionsState {
   busy: boolean; // a command is in flight
   opError: string | null; // last operation error, cleared on the next op
 
-  spawn(root: string, agentFileName: string | null, name: string, cwd: string): Promise<string | null>;
+  /** `tokenCeiling` is appended and defaulted: omitting it sends `null` and
+   *  behaves exactly as the 4-arg call always did (same precedent as
+   *  sessions/api.ts's own appended-optional args). The orchestrator passes
+   *  the agent's stored default so a fleet spawn is budgeted like a task
+   *  spawn is. */
+  spawn(
+    root: string,
+    agentFileName: string | null,
+    name: string,
+    cwd: string,
+    tokenCeiling?: number | null,
+  ): Promise<string | null>;
   /** WO06 §4.3 — spawns WITH a pre-compiled task context and an effective
    *  ceiling. Kept as a sibling of `spawn` (not an overload) so the pre-WO06
    *  4-arg call site above is untouched and its behaviour stays byte-for-byte
@@ -182,7 +193,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   busy: false,
   opError: null,
 
-  spawn: async (root, agentFileName, name, cwd) => {
+  spawn: async (root, agentFileName, name, cwd, tokenCeiling = null) => {
     const s = get();
     if (s.busy) return "Busy";
     if (s.sessions.filter((x) => x.alive).length >= MAX_SESSIONS) {
@@ -190,9 +201,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     }
     set({ busy: true, opError: null });
     try {
-      const info = await agentSessionSpawn(root, agentFileName, name, cwd);
+      const info = await agentSessionSpawn(root, agentFileName, name, cwd, null, null, tokenCeiling);
       set((st) => ({
-        sessions: [...st.sessions, { ...sessionFromInfo(info), status: "working" }],
+        sessions: [...st.sessions, { ...sessionFromInfo(info), status: "working", tokenCeiling }],
         selectedId: info.id,
       }));
       return null;

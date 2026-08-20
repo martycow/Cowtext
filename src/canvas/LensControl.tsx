@@ -40,23 +40,26 @@ export function LensControl() {
       <div
         role="radiogroup"
         aria-label="Canvas lens"
-        className="flex h-control items-center overflow-hidden rounded border border-border bg-surface-2 shadow-card"
+        className="flex h-control items-center overflow-hidden border-2 border-plate-edge bg-plate shadow-plate-sm"
       >
         {LENS_MODES.map((mode, i) => {
           const active = lens === mode;
           return (
             <div key={mode} className="flex h-full items-center">
-              {i > 0 && <div className="h-full w-px flex-none bg-border" aria-hidden />}
+              {i > 0 && <div className="h-full w-[2px] flex-none bg-plate-edge" aria-hidden />}
+              {/* Active segment is a filled amber block with knocked-out
+                  dark text — the same inversion the plate uses, so "on"
+                  reads at a glance instead of as a tint. */}
               <button
                 type="button"
                 role="radio"
                 aria-checked={active}
                 title={LENS_TITLES[mode]}
                 onClick={() => setLens(mode)}
-                className={`flex h-full items-center border px-2.5 font-mono text-micro uppercase transition-colors duration-fast ${
+                className={`flex h-full items-center px-2.5 font-pixel text-[8px] uppercase transition-colors duration-fast ${
                   active
-                    ? "border-accent-border bg-accent-surface text-accent-text"
-                    : "border-transparent text-content-muted hover:bg-surface-3"
+                    ? "bg-amber text-[color:var(--barn-canvas)]"
+                    : "text-content-muted hover:bg-plate-hi hover:text-content"
                 }`}
               >
                 {LENS_LABELS[mode]}
@@ -67,12 +70,15 @@ export function LensControl() {
       </div>
       {lens === "activity" && (
         <div className="flex items-center gap-1.5" aria-hidden>
-          <span className="text-micro text-content-muted">earlier</span>
-          <div
-            className="h-[6px] w-[96px] rounded-pill"
-            style={{ background: "linear-gradient(90deg, var(--surface-3), var(--amber))" }}
-          />
-          <span className="text-micro text-content-muted">latest</span>
+          <span className="font-pixel text-[8px] uppercase text-content-muted">earlier</span>
+          {/* Stepped ramp, not a gradient: five discrete swatches match the
+              five brightness buckets the Activity lens actually applies. */}
+          <div className="flex h-[8px] w-[100px] border-2 border-plate-edge">
+            {[0.18, 0.38, 0.58, 0.78, 1].map((a) => (
+              <div key={a} className="h-full flex-1" style={{ background: `rgba(232,163,61,${a})` }} />
+            ))}
+          </div>
+          <span className="font-pixel text-[8px] uppercase text-content-muted">latest</span>
         </div>
       )}
     </div>

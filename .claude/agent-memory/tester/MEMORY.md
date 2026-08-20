@@ -1,3 +1,4 @@
 - [WO02 acceptance state](wo02_state.md) — gates all green except pending P1 docs/tasks rewrite (gate 10); manual at docs/testing/WO02_TEST_MANUAL.md
 - [docs-guard hook blocks memory writes](feedback_docs_guard_hook.md) — use Bash, not Write/Edit, for .md files under .claude/agent-memory/
 - [WO06 re-verification](wo06_reverification.md) — post-fix-round pass at 6d81251: D9 (no global ceiling) still open, D2 narrowed (handoff_node_propose implemented but unreachable); invoke-count gates can't see reachability, diff command names both directions
+- [WO09 round 2 verification](wo09_round2_verification.md) — both round-1 rejections independently confirmed fixed via pixel math + node_modules source; 2 pre-existing MINOR doc defects found (not WO09-caused)

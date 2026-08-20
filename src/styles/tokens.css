@@ -83,18 +83,41 @@
   --role-snippet:      #8CA0B8;  /* ~6.0:1 — desaturated, sits near glossary */
   --role-style:        #D46FAE;  /* ~5.1:1 */
 
+  /* ── Barn plate — the graph canvas only (WO-C "16-bit" pass).
+        The canvas is the one surface that leaves the flat-panel ramp: hard
+        2px plate edges, an offset shadow with no blur, a lit top-left lip
+        and a shaded bottom-right one. Nothing outside src/canvas/ reads
+        these — panels, modals and the inspector stay on --surface-*. */
+  --plate-face:      #241D14;  /* node plate fill */
+  --plate-face-hi:   #2C2317;  /* hovered plate */
+  --plate-inset:     #100C08;  /* portrait window, port bay */
+  --plate-edge:      #5A4B36;  /* the 2px plate border */
+  --plate-edge-hi:   #7A6444;  /* ports, order tag, hovered edge */
+  --port-body:       var(--plate-edge);     /* connector shell / shoulder (WO09) */
+  --port-contact:    var(--plate-edge-hi);  /* cartridge contact fingers (WO09) */
+  --plate-lip:       rgba(255,240,220,.07);  /* inset highlight, top-left */
+  --plate-shade:     rgba(0,0,0,.35);        /* inset shade, bottom-right */
+  --plate-drop:      4px 4px 0 rgba(0,0,0,.55);  /* hard offset, never blurred */
+  --plate-drop-sm:   3px 3px 0 rgba(0,0,0,.50);  /* canvas chrome */
+  --barn-canvas:     #14100B;  /* behind the graph */
+  --barn-dot:        #3E3020;  /* 24px dot grid */
+  --barn-dither:     rgba(255,240,220,.020);  /* 6px checker, the only texture */
+  --barn-tag:        #3A2E1E;  /* read-order tag fill */
+
   /* ── Edges — neutral by rule. Kind is read from line style
         and marker, never from hue (hue belongs to roles). Solid stroke =
         STRUCTURAL (affects compile order — imports/sequence/overrides);
         dashed/dotted = advisory / lint-only (references/conditional/
-        supersedes/conflicts-with). */
-  --edge-imports:     #7A6D5F;  /* 1.75px solid, filled arrow */
-  --edge-references:  #574E44;  /* 1.5px dash 5 4, open circle */
-  --edge-conditional: #6E6155;  /* 1.5px dot 1.5 3.5, + condition chip */
-  --edge-sequence:    #8E8477;  /* 1.5px solid, chevron + step dot */
-  --edge-overrides:      #A0916F;  /* 2px solid, filled arrow + bar — structural, "wins" */
-  --edge-supersedes:     #4A4137;  /* 1.5px dash 8 3, hollow square — advisory */
-  --edge-conflicts-with:  #857A6C;  /* 1.5px dash 1.5 1.5, cross marker — advisory */
+        supersedes/conflicts-with). Warmed and brightened for the Barn
+        canvas: 2px hard lines need more value than 1.5px hairlines did,
+        and every value below is still a warm neutral — no kind owns a hue. */
+  --edge-imports:     #9C8757;  /* 2px solid, filled pixel arrow */
+  --edge-references:  #6A5B44;  /* 2px dash 4 4, open circle */
+  --edge-conditional: #7E6C4E;  /* 2px dash 2 4, + condition chip */
+  --edge-sequence:    #B49A70;  /* 2px solid, chevron + step tag */
+  --edge-overrides:      #C2A55E;  /* 2.5px solid, arrow + bar — structural, "wins" */
+  --edge-supersedes:     #574A38;  /* 2px dash 8 4, hollow square — advisory */
+  --edge-conflicts-with:  #A08A6A;  /* 2px dash 2 2, cross marker — advisory */
   --edge-selected:    var(--accent);
 
   /* ── Typography ───────────────────────────────────────── */
@@ -172,6 +195,11 @@
   --border-subtle:#24272C; --border-default:#333840; --border-strong:#464C57;
   --text-primary:#EDEFF2; --text-secondary:#B4BAC4; --text-muted:#838A96;
   --text-disabled:#565C67; --text-inverse:#0F1113;
+  /* The barn plate follows the ramp here too, or the canvas reads as a
+     warm window cut into a cold app. */
+  --plate-face:#1F232A; --plate-face-hi:#272C34; --plate-inset:#0B0D10;
+  --plate-edge:#414954; --plate-edge-hi:#5A6472; --barn-canvas:#0D0F12;
+  --barn-dot:#2C323B; --barn-tag:#2A2F37;
 }
 [data-warmth="brown"] {
   --surface-canvas:#120E08; --surface-0:#19130B; --surface-1:#221A10;
@@ -179,6 +207,9 @@
   --border-subtle:#332717; --border-default:#463723; --border-strong:#5E4B30;
   --text-primary:#F8F0E0; --text-secondary:#CBBA9C; --text-muted:#9A8B6C;
   --text-disabled:#6A5E47; --text-inverse:#171006;
+  --plate-face:#2C2215; --plate-face-hi:#372B1B; --plate-inset:#0F0B06;
+  --plate-edge:#665132; --plate-edge-hi:#8A6E42;
+  --barn-canvas:#120E08; --barn-dot:#463722; --barn-tag:#42341F;
 }
 
 @keyframes ct-pulse { 0%{transform:scale(1);opacity:.6} 70%,100%{transform:scale(1.06);opacity:0} }

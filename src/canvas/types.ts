@@ -15,6 +15,10 @@ export type CanvasEdgeData = {
   note?: string;
   /** For sequence edges: the target node's readOrder, shown in the step dot. */
   step?: number;
+  /** Contact slot on the target card's input block (canvas/portSlots.ts). */
+  inSlot?: number;
+  /** Contact slot on the source card's output block. */
+  outSlot?: number;
 };
 export type CanvasEdge = Edge<CanvasEdgeData, "memory">;
 

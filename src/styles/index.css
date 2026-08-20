@@ -48,20 +48,57 @@
       @layer: Tailwind tree-shakes layered rules whose classes never appear
       in markup, and these classes are rendered by the library. ─────────── */
 
+/* The graph canvas is the one Barn surface in the app: warm plate colours,
+   hard 2px edges, offset shadows with no blur, and the only texture we
+   allow anywhere — a 6px checker dither under the 24px dot grid. Panels,
+   modals and the inspector are unaffected and stay on --surface-*. */
 .react-flow {
-  background: var(--surface-canvas);
+  background-color: var(--barn-canvas);
+  background-image: conic-gradient(
+    var(--barn-dither) 25%,
+    transparent 0 50%,
+    var(--barn-dither) 0 75%,
+    transparent 0
+  );
+  background-size: 6px 6px;
 }
 .react-flow__pane {
   cursor: default;
 }
+/* Orthogonal wiring only — every segment is axis-aligned, so crisp
+   rendering costs nothing and buys a genuinely hard 2px line. */
+.react-flow__edge-path,
+.react-flow__connection-path {
+  shape-rendering: crispEdges;
+}
 
-/* Node ports — ONE funnel-shaped input on the left edge, ONE funnel-shaped
-   output on the right, ALWAYS visible (a port you cannot see is a port you
-   cannot aim at). The funnel mouth opens away from the card — the wide end
-   is where the wire lands — with sharp clipped edges per the pixel-charm
-   rule. Neutral at rest; accent (blue = user action) while hovered or a
-   connection drag is live. A transparent ::after keeps a generous
-   pointer/connection hit area without growing the visible mark. */
+/* ── CONNECTORS ───────────────────────────────────────────────────────
+   Ports read as hardware: cartridge edge connectors — a dark shell with a
+   run of five bright contact fingers. The input is a socket bay cut into
+   the plate's left edge, the output a pin block flush to the right edge,
+   so a card visibly plugs into the next one and you can tell the two ends
+   apart without following the wire. Both are ALWAYS visible (a port you
+   cannot see is a port you cannot aim at) and both stay neutral — hue
+   belongs to roles — turning amber on card hover, scarf blue on the port
+   itself or while a connection drag is live.
+
+   >>> This block is the whole connector treatment: swapping it for one of
+   the other drawn options is a change to this block and nothing else. <<<
+
+   Geometry is frozen in table §3 of docs/design/WO09_CONNECTOR_CONTRACT.md;
+   change these together with canvas/edgePath.ts and canvas/portSlots.ts.
+   The two hard invariants a reviewer checks in one glance:
+     the repeating-linear-gradient's period below IS SLOT_PITCH (8px);
+     its finger count (5 opaque runs across the content box) IS SLOT_COUNT.
+   If either drifts from portSlots.ts, wires land between contacts instead
+   of on them.
+
+   A transparent ::after keeps a 26 × 52 pointer/connection hit area (G19)
+   regardless of how small the visible mark is — pseudo-elements are
+   excluded from getBoundingClientRect, so this never moves the port
+   position React Flow reports (targetX/sourceX; see the header comment in
+   canvas/edgePath.ts for why that position is the handle's OUTER edge, not
+   its centre). */
 .react-flow__handle.ct-port {
   /* Explicit absolute + side-center placement: the input sits mid-height on
      the LEFT edge, the output mid-height on the RIGHT edge, regardless of
@@ -69,60 +106,120 @@
   position: absolute;
   top: 50%;
   transform: translate(0, -50%);
-  width: 10px;
-  height: 22px;
-  border: none;
+  /* border-box so the declared width IS the mark's footprint — edgePath.ts
+     offsets its endpoints against these numbers. */
+  box-sizing: border-box;
   border-radius: 0;
-  background: var(--border-strong);
   opacity: 1;
-  transition: background var(--dur-fast) var(--ease-out);
+  height: 44px; /* G1 CONN_H — connector block height, both sides (was 24) */
+  /* State recolours ONLY this custom property; both sides' gradients read
+     it, so a state change is one declaration, never duplicated gradients. */
+  --contact: var(--port-contact);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .react-flow__handle.ct-port::after {
   content: "";
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 24px;
-  height: 32px;
+  width: 26px;
+  height: 52px; /* G19 hit area */
   transform: translate(-50%, -50%);
   background: transparent;
 }
-/* Input: wide mouth facing out (left), throat narrowing into the card. */
+
+/* Input — a recessed bay straddling the plate's left edge. The open left
+   face is deliberate: it's a slot cut into the plate edge, and it lets the
+   fingers run out to the outer face so the wire meets a contact, not a
+   wall. Two background layers: the repeating contact-finger gradient on
+   the content box, the recessed bay fill on the border box. */
 .react-flow__handle.ct-port-in {
-  left: -11px;
-  clip-path: polygon(0 0, 100% 30%, 100% 70%, 0 100%);
+  left: -11px; /* G8 PORT_IN_OVERHANG — bay outer face = L−11; this IS targetX */
+  width: 20px; /* G7 PORT_IN_W */
+  padding: 2px 0; /* G6 block padding */
+  border: 2px solid var(--port-body);
+  border-left: none;
+  /* Content box 18 × 36 (G5): the gradient closes exactly on a finger
+     (4,4,4,4,4,4,4,4,4) — SLOT_PITCH period, SLOT_COUNT fingers. */
+  background-image:
+    repeating-linear-gradient(to bottom, var(--contact) 0 4px, transparent 4px 8px),
+    linear-gradient(var(--plate-inset), var(--plate-inset));
+  background-origin: content-box, border-box;
+  background-clip: content-box, border-box;
+  background-repeat: repeat, no-repeat;
 }
-/* Output: throat leaving the card, mouth widening outward (right). */
+
+/* Output — a shoulder shell flush to the right edge; ::before is the pin
+   block protruding from it, striped with the same contact-finger gradient
+   so fan-out (round 2) shows five distinct pins instead of one bundled
+   wire off a solid block. No border on the shell: it's solid hardware, not
+   a bay. */
 .react-flow__handle.ct-port-out {
-  right: -11px;
-  clip-path: polygon(0 30%, 100% 0, 100% 100%, 0 70%);
+  right: -4px; /* G10 PORT_OUT_OVERHANG — shoulder outer edge = R+4; this IS sourceX */
+  width: 8px; /* G9 PORT_OUT_W */
+  border: none;
+  background: var(--port-body);
 }
+.react-flow__handle.ct-port-out::before {
+  content: "";
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  width: 14px; /* G11 PIN_LEN — pins protrude to R+18 */
+  height: 36px; /* G5 contact run — matches the input's content box */
+  transform: translate(0, -50%);
+  /* Pins stick out into open canvas, so one layer only — no bay fill. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--contact) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+/* Card hover / node selected ⇒ contacts read amber (round-1 inheritance,
+   not re-litigated this round). */
 .ct-node:hover .ct-port,
 .react-flow__node.selected .ct-port {
-  background: var(--text-muted);
+  --contact: var(--amber-text);
 }
+/* Aiming at the port itself, or dragging a connection, is a user action —
+   scarf blue. The two accents are mutually exclusive states on this
+   control, never simultaneous. */
 .react-flow__handle.ct-port:hover,
 .react-flow__handle.ct-port.connectingfrom,
 .react-flow__handle.ct-port.connectingto {
-  background: var(--accent);
+  --contact: var(--accent);
+}
+.react-flow__handle.ct-port-in:hover,
+.react-flow__handle.ct-port-in.connectingfrom,
+.react-flow__handle.ct-port-in.connectingto {
+  background-image:
+    repeating-linear-gradient(to bottom, var(--contact) 0 4px, transparent 4px 8px),
+    linear-gradient(var(--accent-surface), var(--accent-surface));
 }
 
-/* Controls + minimap recoloured to the surface ramp. */
+/* Controls + minimap are canvas furniture, so they wear the plate too:
+   square corners, a 2px edge and the same hard offset shadow. */
 .react-flow__controls {
-  border: 1px solid var(--border-default);
-  border-radius: var(--r-md);
+  border: 2px solid var(--plate-edge);
+  border-radius: 0;
   overflow: hidden;
-  box-shadow: var(--elev-2);
+  box-shadow: var(--plate-drop-sm);
 }
 .react-flow__controls-button {
-  width: 24px;
-  height: 24px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-subtle);
+  width: 26px;
+  height: 26px;
+  background: var(--plate-face);
+  border-bottom: 2px solid var(--plate-edge);
   color: var(--text-secondary);
 }
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
 .react-flow__controls-button:hover {
-  background: var(--surface-3);
+  background: var(--plate-face-hi);
   color: var(--text-primary);
 }
 .react-flow__controls-button svg {
@@ -131,9 +228,10 @@
   max-height: 11px;
 }
 .react-flow__minimap {
-  border: 1px solid var(--border-default);
-  border-radius: var(--r-md);
+  border: 2px solid var(--plate-edge);
+  border-radius: 0;
   overflow: hidden;
+  box-shadow: var(--plate-drop-sm);
 }
 .react-flow__attribution {
   background: transparent;
@@ -142,16 +240,20 @@
   color: var(--text-disabled);
 }
 
-/* Box-select + connection line are user actions ⇒ scarf blue. */
+/* Box-select + connection line are user actions ⇒ scarf blue. Square
+   corners and a 2px marquee: on this canvas a selection is a stamped
+   rectangle, not a rounded highlight. */
 .react-flow__selection {
   background: var(--accent-surface);
-  border: 1px dashed var(--accent-border);
+  border: 2px dashed var(--accent-border);
+  border-radius: 0;
 }
 .react-flow__nodesselection-rect {
   background: transparent;
-  border: 1px dashed var(--accent-border);
+  border: 2px dashed var(--accent-border);
+  border-radius: 0;
 }
 .react-flow__connection-path {
   stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke-width: 2;
 }

@@ -39,9 +39,23 @@ export interface AgentMeta {
   priority: number;
   influence: number;
   avatarSeed: string;
+  /** Orchestrator: the working folder this agent spawns into by default.
+   *  "" => no default; the spawn path asks for one as it always has. */
+  defaultCwd: string;
+  /** Orchestrator: token ceiling for a session spawned from the fleet view.
+   *  null => inherit the global default; 0 => explicitly unbounded; >0 =>
+   *  that ceiling. Same 0-is-unbounded convention as the global setting. */
+  defaultTokenCeiling: number | null;
 }
 
-export const DEFAULT_META: AgentMeta = { nickname: "", priority: 3, influence: 50, avatarSeed: "" };
+export const DEFAULT_META: AgentMeta = {
+  nickname: "",
+  priority: 3,
+  influence: 50,
+  avatarSeed: "",
+  defaultCwd: "",
+  defaultTokenCeiling: null,
+};
 
 /** Reserved default agent (TASKBOARD_BATCH §4): always shown first in the
  *  rail (virtual until materialized via createAgent("Producer")); Rust
@@ -186,7 +200,21 @@ function clampNickname(v: unknown): string {
 }
 
 function defaultMetaFor(fileName: string): AgentMeta {
-  return { nickname: "", priority: 3, influence: 50, avatarSeed: fileName.replace(/\.md$/i, "") };
+  return {
+    nickname: "",
+    priority: 3,
+    influence: 50,
+    avatarSeed: fileName.replace(/\.md$/i, ""),
+    defaultCwd: "",
+    defaultTokenCeiling: null,
+  };
+}
+
+/** null => inherit the global default; a finite number >= 0 is taken as-is
+ *  (0 meaning unbounded). Anything else is treated as "not set". */
+function parseCeiling(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return null;
+  return Math.floor(raw);
 }
 
 function parseAgentMeta(raw: unknown, fileName: string): AgentMeta {
@@ -197,6 +225,8 @@ function parseAgentMeta(raw: unknown, fileName: string): AgentMeta {
     priority: clampInt(obj.priority, 3, 1, 5),
     influence: clampInt(obj.influence, 50, 0, 100),
     avatarSeed: typeof avatarSeedRaw === "string" ? avatarSeedRaw : fileName.replace(/\.md$/i, ""),
+    defaultCwd: typeof obj.defaultCwd === "string" ? obj.defaultCwd : "",
+    defaultTokenCeiling: parseCeiling(obj.defaultTokenCeiling),
   };
 }
 
@@ -257,11 +287,23 @@ function serializeMeta(meta: Record<string, AgentMeta>, orphan: Record<string, u
     // live entry must never be shadowed by a stale sidecar payload.
     if (k in meta) {
       const m = meta[k];
-      agentsOut[k] = { nickname: m.nickname, priority: m.priority, influence: m.influence, avatarSeed: m.avatarSeed };
+      agentsOut[k] = {
+        nickname: m.nickname,
+        priority: m.priority,
+        influence: m.influence,
+        avatarSeed: m.avatarSeed,
+        defaultCwd: m.defaultCwd,
+        defaultTokenCeiling: m.defaultTokenCeiling,
+      };
     } else {
       agentsOut[k] = orphan[k];
     }
   }
+  // Version stays 1 through the orchestrator's two added keys. The bump rule
+  // exists for BREAKING schema changes; these are additive with defaults, and
+  // parseMetaJson hard-rejects any version !== 1 — so bumping would make an
+  // older build discard every agent's meta instead of just ignoring two keys
+  // it does not know. Backward AND forward compatible is worth more here.
   const stable = { version: 1, agents: agentsOut };
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
@@ -718,6 +760,11 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         priority: patch.priority !== undefined ? clampInt(patch.priority, 3, 1, 5) : base.priority,
         influence: patch.influence !== undefined ? clampInt(patch.influence, 50, 0, 100) : base.influence,
         avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : base.avatarSeed,
+        defaultCwd: patch.defaultCwd !== undefined ? patch.defaultCwd : base.defaultCwd,
+        defaultTokenCeiling:
+          patch.defaultTokenCeiling !== undefined
+            ? parseCeiling(patch.defaultTokenCeiling)
+            : base.defaultTokenCeiling,
       };
       return { meta: { ...st.meta, [fileName]: merged } };
     });

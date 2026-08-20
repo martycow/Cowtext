@@ -5,13 +5,13 @@
 // lint-only (never changes what gets compiled) — contract WO03 §"F —
 // frontend". That split predates v3 (imports/sequence were already solid,
 // references/conditional already dashed) — v3 just extends both families.
-//   imports          1.75px solid, filled arrow                    STRUCTURAL
-//   sequence         1.5px  solid, open chevron + numbered step dot STRUCTURAL
-//   overrides        2px    solid, filled arrow + trailing bar      STRUCTURAL
-//   references       1.5px  dash 5 4, open circle                   advisory
-//   conditional      1.5px  dot 1.5 3.5, filled arrow + condition chip advisory
-//   supersedes       1.5px  dash 8 3, hollow square                 advisory
-//   conflicts-with   1.5px  dash 1.5 1.5, cross marker               advisory
+//   imports          3px   solid, pixel arrow                      STRUCTURAL
+//   sequence         3px   solid, pixel chevron + numbered step tag STRUCTURAL
+//   overrides        5px   solid, pixel arrow + trailing bar        STRUCTURAL
+//   references       3px   dash 5 5, open circle                    advisory
+//   conditional      3px   dash 3 5, pixel arrow + condition chip    advisory
+//   supersedes       3px   dash 9 5, hollow square                  advisory
+//   conflicts-with   3px   dash 3 3, cross marker                   advisory
 
 import { memo } from "react";
 import { BaseEdge, EdgeLabelRenderer, type EdgeProps } from "@xyflow/react";
@@ -22,16 +22,22 @@ import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import { isStructuralEdgeKind } from "./edgeKind";
 import { routeEdge } from "./edgePath";
+import { CENTER_SLOT } from "./portSlots";
 import { useHighlightStore, type CanvasEdge } from "./types";
 
+// Barn canvas: wires are hard lines on an orthogonal route. 3px is the
+// standard gauge — heavy enough to read as cabling against 2px plate edges
+// and to look plugged into a 24px-tall socket. `overrides` stays the loud
+// one at 5px. Dash patterns are whole pixels so the rhythm survives
+// shape-rendering: crispEdges at any zoom.
 const STROKE: Record<EdgeKind, { width: number; dash?: string }> = {
-  imports: { width: 1.75 },
-  references: { width: 1.5, dash: "5 4" },
-  conditional: { width: 1.5, dash: "1.5 3.5" },
-  sequence: { width: 1.5 },
-  overrides: { width: 2 },
-  supersedes: { width: 1.5, dash: "8 3" },
-  "conflicts-with": { width: 1.5, dash: "1.5 1.5" },
+  imports: { width: 3 },
+  references: { width: 3, dash: "5 5" },
+  conditional: { width: 3, dash: "3 5" },
+  sequence: { width: 3 },
+  overrides: { width: 5 },
+  supersedes: { width: 3, dash: "9 5" },
+  "conflicts-with": { width: 3, dash: "3 3" },
 };
 
 function markerId(kind: EdgeKind, selected: boolean): string {
@@ -51,24 +57,33 @@ function markerId(kind: EdgeKind, selected: boolean): string {
 
 /** Marker defs, rendered once inside the canvas. Explicit per-kind colours —
  *  markers cannot inherit the edge stroke without context-stroke.
- *  markerUnits="userSpaceOnUse" (contract §7.11.4) fixes the arrow to an
- *  absolute size regardless of each kind's stroke width (1.5 vs 1.75), and
- *  refX is tuned to the BACK of each shape (not the tip) so the line's
- *  round linecap terminates under the marker instead of poking past it. */
+ *  markerUnits="userSpaceOnUse" (contract §7.11.4) fixes each marker to an
+ *  absolute size regardless of its kind's stroke width, and refX is tuned to
+ *  the FORWARD edge of each shape so the marker lands exactly ON the path's
+ *  endpoint. WO09 round 2 (docs/design/WO09_CONNECTOR_CONTRACT.md §2-3):
+ *  the marker tip now lands 3px INSIDE the socket face by design — edges
+ *  render below nodes, so canvas/edgePath.ts deliberately ends the path
+ *  SOCKET_BITE (3px) past the bay's outer face, and the hardware swallows
+ *  the tip with zero daylight instead of the arrow floating short of it.
+ *  refX itself is unchanged; only where the path ends moved. */
 export function EdgeMarkerDefs() {
+  // Stepped 5-cell pixel triangle instead of a smooth one: at 8px on screen
+  // a vector arrowhead antialiases into a grey smudge, while the steps stay
+  // hard and read as deliberate at every zoom.
+  const PIXEL_ARROW = "M0 0h2v10h-2z M2 1h2v8h-2z M4 2h2v6h-2z M6 3h2v4h-2z M8 4h2v2h-2z";
   const arrow = (id: string, colour: string) => (
     <marker
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="1"
+      refX="10"
       refY="5"
-      markerWidth="8"
-      markerHeight="8"
+      markerWidth="11"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
       orient="auto-start-reverse"
     >
-      <path d="M0 0 L10 5 L0 10 z" fill={colour} />
+      <path d={PIXEL_ARROW} fill={colour} />
     </marker>
   );
   const circle = (id: string, colour: string) => (
@@ -76,28 +91,32 @@ export function EdgeMarkerDefs() {
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="7"
+      refX="9.25"
       refY="5"
-      markerWidth="9"
-      markerHeight="9"
+      markerWidth="11"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
     >
-      <circle cx="5" cy="5" r="3.25" fill="var(--surface-canvas)" stroke={colour} strokeWidth="1.5" />
+      <circle cx="5" cy="5" r="3.25" fill="var(--barn-canvas)" stroke={colour} strokeWidth="2" />
     </marker>
   );
+  // Pixel chevron — same staircase logic as the arrow, drawn open.
   const chevron = (id: string, colour: string) => (
     <marker
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="2"
+      refX="6"
       refY="5"
-      markerWidth="9"
-      markerHeight="9"
+      markerWidth="11"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
       orient="auto-start-reverse"
     >
-      <path d="M3 1 L8 5 L3 9" fill="none" stroke={colour} strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M0 0h2v2h-2z M2 2h2v2h-2z M4 4h2v2h-2z M2 6h2v2h-2z M0 8h2v2h-2z"
+        fill={colour}
+      />
     </marker>
   );
   // v3 (WO03) — filled arrow + trailing bar: "overrides", the structural
@@ -107,15 +126,15 @@ export function EdgeMarkerDefs() {
       key={id}
       id={id}
       viewBox="0 0 12 10"
-      refX="1"
+      refX="12"
       refY="5"
-      markerWidth="10"
-      markerHeight="8"
+      markerWidth="13"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
       orient="auto-start-reverse"
     >
-      <path d="M0 0 L10 5 L0 10 z" fill={colour} />
-      <rect x="9.5" y="1.5" width="1.75" height="7" fill={colour} />
+      <path d={PIXEL_ARROW} fill={colour} />
+      <rect x="10" y="1" width="2" height="8" fill={colour} />
     </marker>
   );
   // Hollow square — "supersedes": the old node has been swapped out.
@@ -124,20 +143,20 @@ export function EdgeMarkerDefs() {
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="7"
+      refX="9"
       refY="5"
-      markerWidth="9"
-      markerHeight="9"
+      markerWidth="11"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
     >
       <rect
-        x="2.25"
-        y="2.25"
-        width="5.5"
-        height="5.5"
-        fill="var(--surface-canvas)"
+        x="2"
+        y="2"
+        width="6"
+        height="6"
+        fill="var(--barn-canvas)"
         stroke={colour}
-        strokeWidth="1.5"
+        strokeWidth="2"
       />
     </marker>
   );
@@ -147,17 +166,23 @@ export function EdgeMarkerDefs() {
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="5"
+      refX="9"
       refY="5"
-      markerWidth="9"
-      markerHeight="9"
+      markerWidth="11"
+      markerHeight="11"
       markerUnits="userSpaceOnUse"
     >
-      <path d="M2 2 L8 8 M8 2 L2 8" stroke={colour} strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M2 2 L8 8 M8 2 L2 8" stroke={colour} strokeWidth="2" strokeLinecap="butt" />
     </marker>
   );
   return (
-    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+    <svg
+      width="0"
+      height="0"
+      style={{ position: "absolute" }}
+      shapeRendering="crispEdges"
+      aria-hidden="true"
+    >
       <defs>
         {arrow("ct-arrow-imports", "var(--edge-imports)")}
         {arrow("ct-arrow-conditional", "var(--edge-conditional)")}
@@ -183,7 +208,14 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const setSelection = useGraphStore((s) => s.setSelection);
   const contextMenu = useContextMenu();
-  const { path, labelX, labelY } = routeEdge(sourceX, sourceY, targetX, targetY);
+  const { path, labelX, labelY } = routeEdge({
+    sourceX,
+    sourceY,
+    sourceSlot: props.data?.outSlot ?? CENTER_SLOT,
+    targetX,
+    targetY,
+    targetSlot: props.data?.inSlot ?? CENTER_SLOT,
+  });
   // Hover-highlight echo from the Relations grid renders like selection.
   const highlighted = useHighlightStore((s) => s.edgeIds.includes(id));
   const isSelected = selected === true || highlighted;
@@ -237,9 +269,14 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
             stroke: colour,
             strokeWidth: stroke.width,
             strokeDasharray: stroke.dash,
-            strokeLinecap: "round",
+            // Butt caps + miter joins: a round cap on a 2px orthogonal wire
+            // rounds off the corners the square routing exists to produce.
+            strokeLinecap: "butt",
+            strokeLinejoin: "miter",
           }}
-          interactionWidth={16}
+          // G20: was 16 (round 1); at FINGER_PITCH 8 (portSlots.ts SLOT_PITCH)
+          // a 16px hit band straddles the neighbouring contact's wire.
+          interactionWidth={12}
         />
       </g>
       {contextMenu.menu !== null && (
@@ -258,9 +295,9 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
           >
             {kind === "conditional" && (
               <span
-                className="rounded-sm border bg-surface-2 px-1 py-px font-mono text-micro"
+                className="border-2 bg-plate px-1 py-px font-mono text-micro leading-none"
                 style={{
-                  borderColor: isSelected ? "var(--accent-border)" : "var(--border-default)",
+                  borderColor: isSelected ? "var(--accent)" : "var(--plate-edge)",
                   color: isSelected ? "var(--accent-text)" : "var(--text-secondary)",
                 }}
               >
@@ -271,17 +308,17 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
             )}
             {kind === "sequence" && (
               <span
-                className="grid h-4 w-4 place-items-center rounded-pill border bg-surface-2 font-mono text-micro"
+                className="grid h-5 w-5 place-items-center border-2 bg-plate font-pixel text-[10px] leading-none"
                 style={{
-                  borderColor: isSelected ? "var(--accent-border)" : "var(--border-strong)",
-                  color: isSelected ? "var(--accent-text)" : "var(--text-secondary)",
+                  borderColor: isSelected ? "var(--accent)" : "var(--plate-edge-hi)",
+                  color: isSelected ? "var(--accent-text)" : "var(--text-primary)",
                 }}
               >
                 {props.data?.step ?? "·"}
               </span>
             )}
             {props.data?.note !== undefined && props.data.note !== "" && (
-              <span className="rounded-sm bg-surface-2 px-1 py-px text-micro text-content-muted">
+              <span className="border-2 border-plate-edge bg-plate px-1 py-px text-micro leading-none text-content-muted">
                 {props.data.note}
               </span>
             )}

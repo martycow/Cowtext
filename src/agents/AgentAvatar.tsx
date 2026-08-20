@@ -17,8 +17,11 @@ function toPath(rows: readonly string[]): string {
 }
 
 /** 8×8 crisp-edge identicon. `seed` drives both shape and hue — same seed
- *  always renders the same mark (frozen algorithm, §7.1). Decorative only. */
-export function AgentAvatar({ seed, size = 11 }: { seed: string; size?: 11 | 22 | 44 }) {
+ *  always renders the same mark (frozen algorithm, §7.1). Decorative only.
+ *  `size` is CSS px; prefer a multiple of 8 so every cell lands on a whole
+ *  pixel (11 / 22 / 44 are the long-standing three, 30 is the canvas
+ *  portrait window). */
+export function AgentAvatar({ seed, size = 11 }: { seed: string; size?: number }) {
   const { rows, accentIdx } = avatarParams(seed);
   return (
     <svg

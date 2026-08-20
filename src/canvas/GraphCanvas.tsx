@@ -6,6 +6,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
+  ConnectionLineType,
   Controls,
   MiniMap,
   Panel,
@@ -22,6 +23,7 @@ import { revealPath } from "../fs/api";
 import { MemoryNodeCard } from "./MemoryNodeCard";
 import { LensControl } from "./LensControl";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
+import { assignPortSlots } from "./portSlots";
 import { KindPicker } from "./KindPicker";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
@@ -87,9 +89,13 @@ function CanvasInner() {
   // Store → RF edges. Sequence edges carry the target's readOrder as the
   // numbered step dot (DESIGN_SPEC.md edge rules). Each card has exactly one
   // input (left) and one output (right) port, so edges carry no handle ids;
-  // routing around cards is the edge path's job (canvas/edgePath.ts).
+  // data.inSlot/data.outSlot instead carry the contact-finger assignment
+  // (canvas/portSlots.ts), computed once per edges-array change right here —
+  // routing around cards using those slots is the edge path's job
+  // (canvas/edgePath.ts).
   useEffect(() => {
     const orderById = new Map(domainNodes.map((n) => [n.id, n.readOrder] as const));
+    const { inSlot, outSlot } = assignPortSlots(domainEdges);
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e] as const));
       return domainEdges.map((e): CanvasEdge => {
@@ -104,6 +110,8 @@ function CanvasInner() {
             condition: e.condition,
             note: e.note,
             step: e.kind === "sequence" ? orderById.get(e.target) : undefined,
+            inSlot: inSlot.get(e.id),
+            outSlot: outSlot.get(e.id),
           },
         };
       });
@@ -197,7 +205,10 @@ function CanvasInner() {
           )
         }
         onConnect={(c) => beginConnection({ source: c.source, target: c.target })}
-        connectionLineStyle={{ stroke: "var(--accent)", strokeWidth: 1.5 }}
+        // Step, not bezier: the drag preview has to look like the wire it
+        // will become, and the finished wire is orthogonal (canvas/edgePath).
+        connectionLineType={ConnectionLineType.Step}
+        connectionLineStyle={{ stroke: "var(--accent)", strokeWidth: 3 }}
         connectionRadius={44}
         deleteKeyCode={["Delete", "Backspace"]}
         selectionKeyCode="Shift"
@@ -209,21 +220,22 @@ function CanvasInner() {
         fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
         proOptions={{ hideAttribution: false }}
       >
-        {/* Dot-grid canvas background — the only textured surface in the app. */}
+        {/* Dot grid over the 6px dither in styles/index.css — the two
+            together are the only textured surface in the app. No bgColor:
+            an opaque background rect here would paint over the dither. */}
         <Background
           variant={BackgroundVariant.Dots}
-          gap={22}
-          size={1.2}
-          color="var(--border-default)"
-          bgColor="var(--surface-canvas)"
+          gap={24}
+          size={1.4}
+          color="var(--barn-dot)"
         />
         <Controls showInteractive={false} position="bottom-left" />
         <MiniMap
           position="bottom-right"
           pannable
           zoomable
-          bgColor="var(--surface-1)"
-          maskColor="rgba(9,7,6,.55)"
+          bgColor="var(--plate-inset)"
+          maskColor="rgba(9,7,6,.62)"
           nodeStrokeWidth={0}
           nodeColor={(n) => `var(--role-${(n as CanvasNode).data.memory.role})`}
         />
@@ -234,7 +246,7 @@ function CanvasInner() {
             <button
               onClick={wizardAtCenter}
               title="New memory node (or double-click the canvas)"
-              className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content shadow-card transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+              className="flex h-control items-center gap-1.5 border-2 border-plate-edge bg-plate px-3 text-sm text-content shadow-plate-sm transition-colors duration-fast hover:border-plate-edge-hi hover:bg-plate-hi"
             >
               <Plus size={14} strokeWidth={1.5} />
               New node
@@ -244,7 +256,7 @@ function CanvasInner() {
         </Panel>
         {revealError !== null && (
           <Panel position="top-center">
-            <div className="flex max-w-[420px] items-center gap-2 rounded border border-danger bg-danger-surface px-2.5 py-1.5 shadow-card">
+            <div className="flex max-w-[420px] items-center gap-2 border-2 border-danger bg-danger-surface px-2.5 py-1.5 shadow-plate-sm">
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-danger-text">
                 {revealError}
               </span>

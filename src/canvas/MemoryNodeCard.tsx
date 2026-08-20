@@ -1,12 +1,23 @@
-// Memory node card — anatomy per DESIGN_SPEC.md (244 × 97, role stripe,
-// glyph + label, pin, read-order badge, title, rtl path, footer badges).
-// The whole card is the hit target; handles sit 4px outside.
+// Memory node plate — the Barn canvas card (direction C, Marty 2026-08-19).
+// 244px wide, hard 2px edge, offset shadow with no blur, square corners.
+// Two shapes, one information order:
+//   memory plate — solid role glyph chip in the top-left corner, read-order
+//     tag in the top-right, role label / title / rtl path / tags.
+//   agent plate  — notched top-left corner, framed portrait window and
+//     model nameplate, whole 3px frame in the identity colour. Silhouette
+//     is the identification, so it survives zoom-out and greyscale; the old
+//     1px ring + AGENT chip did not (see the agent-nodes sheet).
+// The whole plate is the hit target; ports straddle the edges.
 // Phase 3/4 states: live-read pulse (amber ring + stripe while the agent
 // touches the file), assembling bar, assembled success flash, error stripe.
-// Contract §7.11: three target handles on the input (left) half, three
-// source handles on the output (right) half — ids are frozen and never
-// persisted (src/canvas/handles.ts#pickHandles derives the pair at render
-// time). Contract §7.9: right-click opens the node's dynamic context menu.
+// Connector hardware (WO09 round 2, docs/design/WO09_CONNECTOR_CONTRACT.md
+// §6): ONE target handle on the input (left) edge, ONE source handle on the
+// output (right) edge — no handle ids, frozen. Each side's block shows five
+// contact fingers, but which finger a given wire lands on is decided by
+// canvas/portSlots.ts and applied by canvas/edgePath.ts, not by the handle
+// itself; see the port comment further down, just above the two <Handle>
+// elements. Contract §7.9: right-click opens the node's dynamic context
+// menu.
 
 import { memo, useEffect, useMemo, useReducer, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
@@ -99,24 +110,35 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   }, [assembleStatus]);
 
   const assembling = assembleStatus === "queued" || assembleStatus === "running";
-  const stripe =
-    live ? "var(--amber)" : assembleStatus === "error" ? "var(--danger)" : role;
+  // The plate's 2px edge carries state. Role colour no longer appears as an
+  // edge at all — it moved to the corner glyph chip — so the edge is free to
+  // mean "something is happening to this node".
+  const plateEdge = live
+    ? "var(--amber)"
+    : assembleStatus === "error"
+      ? "var(--danger)"
+      : "var(--plate-edge)";
+  // Agent plates take their ENTIRE frame from the identity colour, which is
+  // what makes them a different object at any zoom (the notch does the rest).
+  const agentFrame = live
+    ? "var(--amber)"
+    : assembleStatus === "error"
+      ? "var(--danger)"
+      : "var(--role-agent)";
 
   // Hover-highlight echo from the Inspector's Relations grid: a softer
-  // accent ring than real selection, so the two states stay tellable.
+  // accent than real selection, so the two states stay tellable.
   const highlighted = useHighlightStore((s) => s.nodeIds.includes(node.id));
-  // §7.2 (#5d): at rest only, agent cards carry an extra 1px identity ring
-  // as the FIRST boxShadow layer — selection/highlight/flash keep priority
-  // exactly as today (they replace this branch entirely, not stack on it).
-  const restShadow = agentBacked ? "0 0 0 1px var(--role-agent), var(--elev-1)" : "var(--elev-1)";
-  const ring = selected
-    ? "0 0 0 2px var(--accent), 0 4px 14px rgba(0,0,0,.45)"
+  // Selection is a stamped marquee around the plate rather than a ring on it:
+  // the agent plate is clip-path'd, so a box-shadow ring would be clipped
+  // into the notch. One rule, both plate shapes, priority as before.
+  const marquee = selected
+    ? "var(--accent)"
     : highlighted
-      ? "0 0 0 2px var(--accent-border), var(--elev-1)"
+      ? "var(--accent-border)"
       : flash
-        ? "0 0 0 2px var(--success), var(--elev-1)"
-        : restShadow;
-  const boxShadow = live ? `${ring}, var(--glow-live)` : ring;
+        ? "var(--success)"
+        : null;
 
   // Lens emphasis/brightness — styling only, never layout (contract §6.1).
   // `tick` is subscribed unconditionally (rules-of-hooks); it only ever
@@ -141,8 +163,6 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           : 1;
   const lensBrightness = lens === "none" ? 1 : brightnessFor(lensEmphasis);
   const lensStyle: React.CSSProperties & { [customProp: `--${string}`]: string | number } = {
-    minHeight: 80,
-    boxShadow,
     "--lens-brightness": lensBrightness,
     "--lens-emphasis": lens === "none" ? 1 : lensEmphasis,
     filter: "brightness(var(--lens-brightness, 1))",
@@ -282,148 +302,205 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
     contextMenu.openAt(e, items);
   };
 
-  return (
-    <div
-      onContextMenu={openMenu}
-      className={`ct-node group relative w-node rounded border bg-surface-2 transition-colors duration-fast ${
-        selected ? "border-transparent" : "border-border hover:border-border-strong"
-      }`}
-      style={lensStyle}
+  // ── Shared plate parts. Both plate shapes carry the same information in
+  // the same order; only the frame and the identity mark differ.
+  const TAG = "border border-plate-edge px-1 py-px font-mono text-micro leading-none text-content-muted";
+
+  // Read-order — a stamped corner tag butted into the top-right edge, so it
+  // never collides with the selection marquee and never inflates the plate.
+  const orderTag = (
+    <span
+      className="absolute right-0 top-0 z-10 flex h-6 min-w-[26px] items-center justify-center border-b-2 border-l-2 px-1 font-pixel text-[10px] leading-none text-content"
+      style={{ background: "var(--barn-tag)", borderColor: "var(--plate-edge-hi)" }}
+      title={`Read order ${node.readOrder}`}
     >
-      {/* Live-read pulse ring — 2px amber, inset −4px, scale+fade loop */}
+      {node.readOrder}
+    </span>
+  );
+
+  const liveAndPin = (
+    <>
+      {live && (
+        <span
+          className="h-[6px] w-[6px] flex-none animate-hard-blink bg-amber"
+          title="Agent is reading this file"
+        />
+      )}
+      {node.pinned && <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />}
+    </>
+  );
+
+  // Title · assembling bar · rtl path — identical on both plates.
+  const titleBlock = (
+    <>
+      <div className="truncate text-base font-semibold text-content">{node.title}</div>
+      {assembling && (
+        <div className="h-[4px] w-full overflow-hidden bg-plate-inset">
+          <div
+            className={`h-full bg-accent ${
+              assembleStatus === "running" ? "w-2/3 animate-hard-blink" : "w-1/4 opacity-50"
+            }`}
+          />
+        </div>
+      )}
+      <div
+        className="truncate font-mono text-2xs text-content-muted [direction:rtl] [text-align:left]"
+        title={node.filePath}
+      >
+        {node.filePath}
+      </div>
+    </>
+  );
+
+  // Footer: token count always; at most ONE status badge. Agent plates add
+  // a priority tag (the model lives on the portrait nameplate instead).
+  const tagRow = (
+    <div className="flex items-center gap-1">
+      {agentBacked && <span className={TAG}>{`P${agentMeta?.priority ?? 3}`}</span>}
+      <span className={TAG}>
+        {file !== undefined ? formatTokens(file.sizeBytes) : "0 tok"}
+      </span>
+      {file === undefined ? (
+        <span className="bg-danger-surface px-1 py-px font-mono text-micro leading-none text-danger-text">
+          missing file
+        </span>
+      ) : assembleStatus === "error" ? (
+        <span className="bg-danger-surface px-1 py-px font-mono text-micro leading-none text-danger-text">
+          assemble failed
+        </span>
+      ) : assembleStatus === "running" ? (
+        <span className="bg-accent-surface px-1 py-px font-mono text-micro leading-none text-accent-text">
+          assembling
+        </span>
+      ) : assembleStatus === "queued" ? (
+        <span className="bg-barn-tag px-1 py-px font-mono text-micro leading-none text-content-secondary">
+          queued
+        </span>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div onContextMenu={openMenu} className="ct-node group relative w-node" style={lensStyle}>
+      {/* Live-read marquee — a hard 2px amber rectangle that blinks in one
+          step. No scale, no fade: on this canvas things flash, they don't
+          breathe. Under reduced motion the animation stops and the
+          rectangle simply stays put, which is still the whole signal. */}
       {live && (
         <div
-          className="pointer-events-none absolute -inset-1 animate-live-ring rounded-lg border-2 border-amber"
+          className="pointer-events-none absolute -inset-[5px] animate-hard-blink border-2 border-amber"
+          aria-hidden
+        />
+      )}
+      {/* Selection · relations-hover · assembled-flash, in that priority. */}
+      {marquee !== null && (
+        <div
+          className="pointer-events-none absolute -inset-[5px] border-2"
+          style={{ borderColor: marquee }}
           aria-hidden
         />
       )}
 
-      {/* 1 — role stripe: amber while live, danger on assemble error */}
-      <div
-        className="absolute bottom-0 left-0 top-0 w-[3px] rounded-l"
-        style={{ background: stripe }}
-      />
-
-      {/* Read-order badge — a corner marker overhanging the top-right edge
-          so it is CLEARLY visible at any zoom without inflating the card:
-          30px, bold xl numerals, strong border; grows for 2-3 digits. */}
-      <span className="absolute -right-2 -top-2 z-10 flex h-[30px] min-w-[30px] items-center justify-center rounded-sm border border-border-strong bg-surface-3 px-1.5 font-mono text-xl font-bold tabular-nums text-content shadow-card">
-        {node.readOrder}
-      </span>
-
-      <div className="flex flex-col gap-1 py-1.5 pl-3 pr-2">
-        {/* 2/3 — glyph + role label · live square · pin (read-order badge
-            moved to the top-right corner marker above) */}
-        <div className="flex items-center gap-1.5">
-          {agentBacked ? (
-            <span className="flex-none rounded-sm border border-border-strong bg-surface-inset p-[2px]">
-              <AgentAvatar seed={avatarSeed} size={22} />
-            </span>
-          ) : (
-            <span style={{ color: role }}>
-              <RoleGlyph role={node.role} />
-            </span>
-          )}
-          {agentBacked ? (
-            <span className="truncate font-mono text-micro" style={{ color: role }}>
-              {agentDisplayName}
-            </span>
-          ) : (
-            <span
-              className="font-mono text-micro uppercase"
-              style={{ color: role, letterSpacing: "0.09em" }}
-            >
-              {node.role}
-            </span>
-          )}
-          {agentBacked && (
-            <span
-              className="flex-none rounded-sm border px-1 py-px font-mono text-micro uppercase"
-              style={{ color: "var(--role-agent)", borderColor: "var(--role-agent)", letterSpacing: "0.09em" }}
-            >
-              AGENT
-            </span>
-          )}
-          <div className="flex-1" />
-          {live && (
-            <span
-              className="h-[5px] w-[5px] flex-none animate-blink bg-amber"
-              style={{ animationTimingFunction: "steps(2)", animationDuration: "1s" }}
-              title="Agent is reading this file"
-            />
-          )}
-          {node.pinned && (
-            <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />
-          )}
-        </div>
-
-        {/* 5 — title: single line, never wraps */}
-        <div className="truncate text-base font-semibold text-content">{node.title}</div>
-
-        {/* Assembling — accent indeterminate bar under the title */}
-        {assembling && (
-          <div className="h-[3px] w-full overflow-hidden rounded-pill bg-surface-3">
-            <div
-              className={`h-full rounded-pill bg-accent ${
-                assembleStatus === "running" ? "w-2/3 animate-blink" : "w-1/4 opacity-50"
-              }`}
-            />
-          </div>
-        )}
-
-        {/* 6 — path: rtl so the filename survives truncation */}
+      {agentBacked ? (
+        // ── Agent stall plate. The notched top-left corner and the framed
+        // portrait window are the identification: both are silhouette, so
+        // they survive zoom-out and greyscale where a ring and a chip did
+        // not. The whole 3px frame is the identity colour.
         <div
-          className="truncate font-mono text-2xs text-content-muted [direction:rtl] [text-align:left]"
-          title={node.filePath}
+          className="relative"
+          style={{
+            background: agentFrame,
+            padding: 3,
+            clipPath: "polygon(18px 0, 100% 0, 100% 100%, 0 100%, 0 18px)",
+            // clip-path clips box-shadow, so the hard offset has to come
+            // from a filter — same 4px 4px 0, follows the notch.
+            filter: "drop-shadow(var(--plate-drop))",
+          }}
         >
-          {node.filePath}
-        </div>
-
-        {/* 7 — footer: token count always; at most ONE status badge.
-            §7.2 (#5c): agent cards also carry a model chip and a priority
-            chip, both before the token chip, both the existing chip class. */}
-        <div className="flex items-center gap-1">
-          {agentBacked && (
-            <>
-              <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
+          <div
+            className="relative flex bg-plate transition-colors duration-fast group-hover:bg-plate-hi"
+            style={{
+              clipPath: "polygon(16px 0, 100% 0, 100% 100%, 0 100%, 0 16px)",
+              boxShadow: "inset 1px 1px 0 var(--plate-lip)",
+            }}
+          >
+            {orderTag}
+            {/* Portrait window + nameplate */}
+            <div className="flex w-[66px] flex-none flex-col items-start gap-[5px] pb-2 pl-[10px] pt-[10px]">
+              <span
+                className="grid h-[46px] w-[46px] flex-none place-items-center border-2 bg-plate-inset"
+                style={{ borderColor: agentFrame }}
+              >
+                <AgentAvatar seed={avatarSeed} size={30} />
+              </span>
+              <span
+                className="w-[46px] truncate px-[2px] py-[3px] text-center font-pixel text-[8px] leading-none"
+                style={{ background: agentFrame, color: "var(--barn-canvas)" }}
+                title={`Model: ${agentModel}`}
+              >
                 {agentModel}
               </span>
-              <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
-                {`P${agentMeta?.priority ?? 3}`}
-              </span>
-            </>
-          )}
-          <span className="rounded-sm border border-border px-1 py-px font-mono text-micro text-content-muted">
-            {file !== undefined ? formatTokens(file.sizeBytes) : "0 tok"}
-          </span>
-          {file === undefined ? (
-            <span className="rounded-sm bg-danger-surface px-1 py-px font-mono text-micro text-danger-text">
-              missing file
-            </span>
-          ) : assembleStatus === "error" ? (
-            <span className="rounded-sm bg-danger-surface px-1 py-px font-mono text-micro text-danger-text">
-              assemble failed
-            </span>
-          ) : assembleStatus === "running" ? (
-            <span className="rounded-sm bg-accent-surface px-1 py-px font-mono text-micro text-accent-text">
-              assembling
-            </span>
-          ) : assembleStatus === "queued" ? (
-            <span className="rounded-sm bg-surface-3 px-1 py-px font-mono text-micro text-content-secondary">
-              queued
-            </span>
-          ) : null}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5 pb-2 pl-1.5 pr-2.5 pt-[9px]">
+              <div className="flex items-center gap-1.5 pr-[22px]">
+                <span
+                  className="truncate font-pixel text-[8px] leading-none"
+                  style={{ color: agentFrame }}
+                  title={agentDisplayName}
+                >
+                  {`agent · ${agentDisplayName}`}
+                </span>
+                <div className="flex-1" />
+                {liveAndPin}
+              </div>
+              {titleBlock}
+              {tagRow}
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        // ── Memory plate. Role colour is a solid corner chip with the 8×8
+        // glyph knocked out of it — louder than the old 3px stripe, and it
+        // frees the plate edge to carry state instead.
+        <div
+          className="relative border-2 bg-plate shadow-plate transition-colors duration-fast group-hover:bg-plate-hi"
+          style={{ borderColor: plateEdge }}
+        >
+          <span
+            className="absolute left-0 top-0 grid h-6 w-6 place-items-center"
+            style={{ background: role, color: "var(--barn-canvas)" }}
+          >
+            <RoleGlyph role={node.role} size={14} />
+          </span>
+          {orderTag}
+          <div className="flex flex-col gap-1.5 pb-2 pl-8 pr-2.5 pt-[5px]">
+            <div className="flex h-[14px] items-center gap-1.5 pr-[22px]">
+              <span
+                className="truncate font-pixel text-[8px] uppercase leading-none"
+                style={{ color: role }}
+              >
+                {node.role}
+              </span>
+              <div className="flex-1" />
+              {liveAndPin}
+            </div>
+            {titleBlock}
+            {tagRow}
+          </div>
+        </div>
+      )}
 
-      {/* 8 — ports: ONE input funnel (left) and ONE output funnel (right),
-          always visible — a port you cannot see is a port you cannot aim
-          at. Edges carry no handle ids; routing is canvas/edgePath.ts. */}
+      {/* Ports: ONE socket bay (left) and ONE pin block (right), always
+          visible — a port you cannot see is a port you cannot aim at. Each
+          side is a run of five cartridge contact fingers (styles/index.css
+          connector block); still no handle ids — which finger a given wire
+          lands on is decided by canvas/portSlots.ts and applied by
+          canvas/edgePath.ts, not by the handle itself. */}
       <Handle type="target" position={Position.Left} className="ct-port ct-port-in" />
       <Handle type="source" position={Position.Right} className="ct-port ct-port-out" />
 
       {revealError !== null && (
-        <div className="absolute left-0 right-0 top-full z-tooltip mt-1 flex items-center gap-1.5 rounded border border-danger bg-danger-surface px-2 py-1 shadow-card">
+        <div className="absolute left-0 right-0 top-full z-tooltip mt-2 flex items-center gap-1.5 border-2 border-danger bg-danger-surface px-2 py-1 shadow-plate-sm">
           <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
             {revealError}
           </span>

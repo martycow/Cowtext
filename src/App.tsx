@@ -46,6 +46,9 @@ const SettingsModal = lazy(() => import("./settings/SettingsModal").then(m => ({
 const PresetsModal = lazy(() => import("./preset/PresetsModal").then(m => ({ default: m.PresetsModal })));
 const HandoffModal = lazy(() => import("./handoff/HandoffModal").then(m => ({ default: m.HandoffModal })));
 const TasksBoard = lazy(() => import("./tasks/TasksBoard").then(m => ({ default: m.TasksBoard })));
+const OrchestratorView = lazy(() =>
+  import("./orchestrator/OrchestratorView").then((m) => ({ default: m.OrchestratorView })),
+);
 const ReviewModal = lazy(() => import("./review/ReviewModal").then(m => ({ default: m.ReviewModal })));
 const ImportReviewModal = lazy(() =>
   import("./import/ImportReviewModal").then((m) => ({ default: m.ImportReviewModal })),
@@ -63,7 +66,7 @@ import type { MenuItem } from "./ui/menuTypes";
 
 /** The three faces of an open project: the graph editor, the barn monitor,
  *  and the tasks board. */
-type View = "canvas" | "barn" | "tasks";
+type View = "canvas" | "barn" | "tasks" | "orchestrator";
 
 /** Minimal loading fallback for lazy-loaded components (dark-themed, pixel-based). */
 function LoadingFallback() {
@@ -90,6 +93,7 @@ const VIEW_TITLES: Record<View, string> = {
   canvas: "Edit the context graph",
   barn: "Watch the agent in the barn",
   tasks: "Browse TASKS / BACKLOG / ROADMAP / BUGS",
+  orchestrator: "The fleet — per-agent workspace, budget and live sessions",
 };
 
 function ViewToggle({
@@ -121,6 +125,7 @@ function ViewToggle({
       {seg("canvas", "Canvas")}
       {!managerMode && seg("barn", "Barn")}
       {seg("tasks", "Tasks")}
+      {seg("orchestrator", "Agents")}
     </div>
   );
 }
@@ -906,9 +911,6 @@ function FileRail({ root }: { root: string }) {
   const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
   const tree = useMemo(() => buildFileTree(contextFiles), [contextFiles]);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
-  // Rev 2 R11: the tree is rooted at the project itself — default expanded,
-  // one collapsible row wrapping everything below (files, Agents, Skills).
-  const [rootExpanded, setRootExpanded] = useState(true);
   const toggleDir = (path: string) => {
     setCollapsedDirs((prev) => {
       const next = new Set(prev);
@@ -975,8 +977,11 @@ function FileRail({ root }: { root: string }) {
         onContextMenu={openHeaderMenu}
         className="flex h-[31px] flex-none items-center gap-1.5 border-b border-border-subtle px-3"
       >
-        <span className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-wider text-content-muted">
-          {contextFiles.length} markdown {contextFiles.length === 1 ? "file" : "files"}
+        <span className="flex-none font-mono text-2xs uppercase tracking-wider text-content">
+          Hierarchy
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-content-muted">
+          {contextFiles.length} {contextFiles.length === 1 ? "file" : "files"}
         </span>
         <button
           onClick={() => void rescan()}
@@ -1019,23 +1024,21 @@ function FileRail({ root }: { root: string }) {
       <div className="relative min-h-0 flex-1 overflow-y-auto">
         <ScanOverlay caption="rescanning" />
         <div className="flex flex-col">
+          {/* The project root is the panel's anchor, not a tree node: it has
+              no chevron and never collapses. Collapsing it hid the entire
+              hierarchy behind one click and left the panel showing nothing
+              but its own title — use "Collapse panel" for that instead.
+              Indent still aligns with the child rows' chevron column. */}
           <div
-            onClick={() => setRootExpanded((v) => !v)}
             title={root}
-            className="flex h-row flex-none cursor-default items-center gap-1.5 px-3 hover:bg-[var(--surface-hover)]"
+            className="flex h-row flex-none cursor-default items-center gap-1.5 px-3"
           >
-            {rootExpanded ? (
-              <ChevronDown size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
-            ) : (
-              <ChevronRight size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
-            )}
-            <Folder size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+            <Folder size={12} strokeWidth={1.5} className="ml-[17px] flex-none text-content-muted" />
             <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-content">
               {projectName(root)}
             </span>
           </div>
-          {rootExpanded && (
-            <div style={{ paddingLeft: 12 }}>
+          <div style={{ paddingLeft: 12 }}>
               {contextFiles.length === 0 ? (
                 <div className="flex items-center justify-center px-3 py-6">
                   <span className="text-center text-sm text-content-muted">No markdown files here.</span>
@@ -1053,8 +1056,7 @@ function FileRail({ root }: { root: string }) {
               )}
               <AgentsRailSection root={root} />
               <SkillsRailSection root={root} />
-            </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -1218,6 +1220,13 @@ function Workspace({ root, view }: { root: string; view: View }) {
               <Suspense fallback={<LoadingFallback />}>
                 <div className="flex h-full flex-col">
                   <TasksBoard root={root} />
+                </div>
+              </Suspense>
+            )}
+            {view === "orchestrator" && (
+              <Suspense fallback={<LoadingFallback />}>
+                <div className="flex h-full flex-col">
+                  <OrchestratorView root={root} />
                 </div>
               </Suspense>
             )}

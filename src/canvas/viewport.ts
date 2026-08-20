@@ -1,10 +1,12 @@
 // Pure viewport-geometry helpers for node placement (contract §7.7, items
 // #9/#16). No React, no store — GraphCanvas and NodeWizard both call these.
 
-/** Card footprint used when centring a freshly created node. Mirrors the
- *  rendered MemoryNodeCard's default box (244 × 96, DESIGN_SPEC `w-node`). */
+/** Plate footprint used when centring a freshly created node. Mirrors the
+ *  rendered MemoryNodeCard's default box — `w-node` wide, and the memory
+ *  plate's own height (the agent plate runs ~10px taller, but the wizard
+ *  only ever creates a memory plate at this point). */
 export const NODE_CARD_W = 244;
-export const NODE_CARD_H = 96;
+export const NODE_CARD_H = 93;
 
 /** Flow-space top-left for a card centred in the current viewport.
  *  Uses the RF viewport transform + the pane's own size — never client

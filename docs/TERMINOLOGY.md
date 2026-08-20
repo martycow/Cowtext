@@ -22,7 +22,7 @@
 | `src-tauri/src/preset.rs` | Preset save/list/read/export/apply (never-clobber) |
 | `src-tauri/src/handoff.rs` | `HANDOFF.md` generation via ClaudeRunner, GENERATED header |
 | `src/store/` | Zustand stores: `useProjectStore`, `useGraphStore` (graph.ts), `useEventsStore` (events.ts), `useSettingsStore` (settings.ts) |
-| `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs` |
+| `src/canvas/` | React Flow view, port slot assignment: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, `portSlots` (assignPortSlots) |
 | `src/inspector/` | Inspector panel, `EventLog`, `HooksModal`, AssembleSection |
 | `src/compile/` | CompileModal, invoke wrappers, hand-rolled LCS diff (`diff.ts`) |
 | `src-tauri/src/frontmatter.rs` | Frontmatter parser/emitter: read-patch-write round-trip with byte-identity invariant, line-level EOL tracking, no regex/YAML crate |

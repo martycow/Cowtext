@@ -61,6 +61,20 @@ export default {
           snippet:      'var(--role-snippet)',
           style:        'var(--role-style)',
         },
+        // Barn plate — graph canvas only (src/canvas/**). Panels, modals and
+        // the inspector stay on the surface ramp above.
+        plate: {
+          DEFAULT: 'var(--plate-face)',
+          hi:      'var(--plate-face-hi)',
+          inset:   'var(--plate-inset)',
+          edge:    'var(--plate-edge)',
+          'edge-hi': 'var(--plate-edge-hi)',
+        },
+        barn: {
+          canvas: 'var(--barn-canvas)',
+          dot:    'var(--barn-dot)',
+          tag:    'var(--barn-tag)',
+        },
         edge: {
           imports:        'var(--edge-imports)',
           references:     'var(--edge-references)',
@@ -106,6 +120,9 @@ export default {
         modal:   '0 24px 64px rgba(0,0,0,.60)',
         live:    '0 0 18px rgba(232,163,61,.16)',
         focus:   '0 0 0 2px var(--surface-1), 0 0 0 4px var(--accent)',
+        // Hard offset, never blurred — the barn plate's only depth cue.
+        plate:    '4px 4px 0 rgba(0,0,0,.55), inset 1px 1px 0 var(--plate-lip), inset -1px -1px 0 var(--plate-shade)',
+        'plate-sm': '3px 3px 0 rgba(0,0,0,.50)',
       },
       transitionDuration: {
         instant: '80ms', fast: '140ms', base: '180ms', slow: '220ms',
@@ -122,10 +139,14 @@ export default {
       keyframes: {
         'ct-pulse': { '0%': { transform: 'scale(1)', opacity: '.6' }, '70%,100%': { transform: 'scale(1.06)', opacity: '0' } },
         'ct-blink': { '0%,100%': { opacity: '1' }, '50%': { opacity: '.3' } },
+        // Hard two-frame blink for the barn canvas — no easing, no scale.
+        // A 16-bit marquee flashes; it does not breathe.
+        'ct-hard': { '0%,100%': { opacity: '1' }, '50%': { opacity: '0' } },
       },
       animation: {
         'live-ring': 'ct-pulse 1600ms cubic-bezier(.2,0,0,1) infinite',
         blink: 'ct-blink 1.2s ease-in-out infinite',
+        'hard-blink': 'ct-hard 1s steps(1, end) infinite',
       },
     },
   },

@@ -52,6 +52,14 @@ override, not a rebuild.
 6. Sound or animation tied to routine UI events. Tool-layer motion = state changed; barn
    motion = the cow moved.
 
+> **Carve-out — the graph canvas (Marty, 2026-08-19).** `src/canvas/**` runs the "Barn"
+> direction and deliberately overrides bans 1, 2 and 5 *inside the canvas viewport only*:
+> Silkscreen is permitted on plate labels, order tags, nameplates and the lens control; a
+> 6px checker dither sits under the dot grid; plates and canvas chrome use hard 2px edges
+> and an unblurred offset shadow. This is a bounded exception, not a repeal — panels,
+> modals, the inspector, the top bar and every form stay on the surface ramp and the rules
+> above. See "Barn canvas" below.
+
 ## Warmth variants
 
 Set `data-warmth` on `<html>`. Surface/border/text ramps only; accents shared.
@@ -72,13 +80,24 @@ Set `data-warmth` on `<html>`. Surface/border/text ramps only; accents shared.
 - Borders are the primary elevation tool; see Elevation below.
 - **Node roles: colour is redundant coding.** The 8×8 glyph is the primary identifier;
   lightness is staggered so the set survives deuteranopia and greyscale. Roles own hue.
-- **Edges are neutral by rule** — kind is read from line style + marker, never hue:
-  - `imports` — 1.75px solid, filled arrow. Content inlined into target on compile.
-  - `references` — 1.5px dash 5 4, open circle marker. Mentioned by path, never inlined.
-  - `conditional` — 1.5px dot 1.5 3.5, filled arrow, **mono condition chip pinned at
-    midpoint** (the chip is the cue, not the colour).
-  - `sequence` — 1.5px solid, open chevron, numbered step dot at midpoint. Ordering only.
+- **Edges are neutral by rule** — kind is read from line style + marker, never hue.
+  Widths and dashes below are the Barn-canvas values (all even, so a 2px line lands on
+  whole pixels under `shape-rendering: crispEdges`); the seven kinds and their marker
+  shapes are unchanged from v3:
+  - `imports` — 2px solid, filled pixel arrow. Content inlined into target on compile.
+  - `references` — 2px dash 4 4, open circle marker. Mentioned by path, never inlined.
+  - `conditional` — 2px dash 2 4, pixel arrow, **mono condition chip pinned on the
+    source-side run** (the chip is the cue, not the colour).
+  - `sequence` — 2px solid, pixel chevron, numbered step tag. Ordering only.
+  - `overrides` — 4px solid, pixel arrow + trailing bar. Structural, "wins".
+  - `supersedes` — 2px dash 8 4, hollow square. Advisory.
+  - `conflicts-with` — 2px dash 2 2, cross. Advisory.
   - Selected edge → `--accent`.
+  - Routing is orthogonal with square corners (`src/canvas/edgePath.ts`). The riser turns
+    one stub short of the target rather than at the midpoint: fan-in is the common shape
+    and a midpoint riser makes every incoming edge share the whole second half of the run,
+    so a dashed advisory edge paints over a solid structural one. Fan-OUT still overlaps on
+    the source side — that needs a global router, which this is not.
 
 ## Node roles
 
@@ -96,50 +115,78 @@ The seven 8×8 glyphs are hand-authored SVG `<symbol>`s (`#s-persona` … `#s-gl
 committed to the repo — no icon dependency. Full SVG source is in `Cowtext Spec.dc.html`
 in the design project.
 
-## Node states
+## Barn canvas — node plates (direction C, 2026-08-19)
+
+Values live in `tokens.css` under "Barn plate" (`--plate-*`, `--barn-*`); Tailwind exposes
+them as `bg-plate`, `border-plate-edge`, `shadow-plate`, `bg-barn-tag`. Nothing outside
+`src/canvas/**` reads them.
+
+Common to both plate shapes: 244px fixed width (`--w-node`), square corners, a hard 2px
+edge, `--plate-drop` (`4px 4px 0`, never blurred), a 1px lit lip top-left and a 1px shade
+bottom-right. The whole plate is the hit target.
+
+**Memory plate** (~95px tall)
+
+1. **Role glyph chip** — 24px solid square butted into the top-left corner, filled
+   `--role-*` with the 8×8 glyph knocked out at 14px in `--barn-canvas`. Replaces the old
+   3px stripe: louder at zoom, and it frees the plate edge to carry state instead.
+2. **Read-order tag** — Silkscreen 10px on `--barn-tag`, stamped into the top-right corner
+   with a 2px left/bottom edge. Grows leftward for 2–3 digits.
+3. **Role label** — Silkscreen 8px uppercase, tinted to role.
+4. **Live square / pin** — 6px amber square (hard one-step blink) and the 11px pin icon,
+   right-aligned on the label row.
+5. **Title** — 13px/600, single line, ellipsis.
+6. **File path** — mono 10.5px `--text-muted`, `direction: rtl`.
+7. **Tags** — token count always; then at most **one** status badge. Square, 1px
+   `--plate-edge`. Two badges means the node needs splitting.
+
+**Agent plate** — same width and information order, different *silhouette*, which is the
+point: a ring and a chip both vanish below ~50% zoom and in greyscale, so identification
+moved to shape.
+
+- **Notched corner** — the top-left is chamfered 18px (`clip-path`), so the outline alone
+  says "agent" at any zoom. `clip-path` also clips `box-shadow`, so the offset shadow is a
+  `filter: drop-shadow` here.
+- **Frame** — the entire 3px frame is the identity colour (`--role-agent`, `--amber` while
+  live, `--danger` on error).
+- **Portrait window** — 46px square, 2px frame in the identity colour, `--plate-inset`
+  fill, holding the 30px identicon.
+- **Nameplate** — model name in Silkscreen 8px, knocked out of an identity-colour block
+  under the portrait.
+- Priority moves to a tag; the old AGENT chip is gone (the whole plate says it).
+
+### Plate states
 
 | State | Spec |
 |---|---|
-| Rest | 1px `--border-default` · `--elev-1` · 3px role stripe left |
-| Hover | border → `--border-strong`; handles fade in 140ms |
-| Selected | 2px ring in `--accent` · `--elev-2` · inspector follows |
-| Live (reading) | amber stripe replaces role stripe + pulsing 2px amber ring + `--glow-live` |
-| Assembling | accent indeterminate progress bar under the title |
-| Assembled | 2px `--success` border, 600ms then fades to rest |
-| Stale / error | amber or red badge in footer; border unchanged (error adds 3px red left stripe) |
+| Rest | 2px `--plate-edge` (memory) or 3px identity frame (agent) · `--plate-drop` |
+| Hover | fill → `--plate-face-hi`; both ports step up to `--amber-text` |
+| Selected | 2px `--accent` marquee, inset −5px · inspector follows |
+| Relations-hover | same marquee in `--accent-border` |
+| Live (reading) | edge/frame → `--amber` + 2px amber marquee, hard blink + 6px amber square |
+| Assembling | 4px accent bar under the title |
+| Assembled | 2px `--success` marquee, 900ms then back to rest |
+| Missing file / error | edge → `--danger` + one red tag in the footer |
 
-### Live-read pulse spec
+Selection is a **marquee** (a separate inset rectangle), not a ring on the plate: a
+box-shadow ring would be clipped into the notch on agent plates. One rule, both shapes.
 
-```
-ring: 2px solid var(--amber), border-radius 6px, inset −4px around the card
-scale 1 → 1.06, opacity .6 → 0, 1600ms cubic-bezier(.2,0,0,1) infinite
-+ static amber left stripe (replaces role stripe)
-+ 5px amber square blinking at 1s steps(2)
-```
+**prefers-reduced-motion:** the global rule in `tokens.css` freezes the blink; the amber
+edge, marquee and square all remain, so the state is still fully readable — it just stops
+flashing.
 
-**prefers-reduced-motion:** ring and blink dropped entirely; amber stripe + solid amber
-square remain (state still visible, just static). All panel/modal transitions → 0ms;
-toasts appear without translate.
+### Connectors
 
-## Memory node card — anatomy (244 × 97)
+Ports read as hardware and are always visible. Input: a 20 × 24 socket bay straddling the
+left edge, `--plate-inset` on a 2px `--plate-edge-hi` frame. Output: an 8 × 24 shoulder
+flush to the right edge with a 14 × 8 pin protruding (`::before`). Asymmetry is deliberate
+— you can tell input from output without following the wire. Neutral at rest (hue belongs
+to roles), `--amber-text` on plate hover, `--accent` when aimed at or while a connection
+drag is live. A transparent `::after` holds a 26 × 34 hit area regardless of the mark.
 
-React Flow custom node; the card is the whole hit target; handles extend 4px outside.
-
-1. **Role stripe** — 3px, full height, left edge. `--role-*` at rest; `--amber` while
-   reading. The only place role colour appears as a fill.
-2. **Role glyph + label** — 8×8 glyph at 11px, crispEdges; mono 9.5px uppercase,
-   letter-spacing .09em, tinted to role.
-3. **Pin indicator** — 11px stroke icon in `--amber-text`. Present only when pinned
-   (pinning is an agent-facing guarantee ⇒ amber, not blue).
-4. **Read-order badge** — mono 9.5px on `--surface-3`, 16px square, `--r-sm`. Matches
-   compiled order.
-5. **Title** — 13px/600, single line, ellipsis. Never wraps; card width fixed.
-6. **File path** — mono 10.5px `--text-muted`, `direction: rtl` so the *filename* survives
-   truncation, not the folder.
-7. **Footer badges** — token count always; then at most **one** status badge
-   (stale / never read / assembling). Two badges means the node needs splitting.
-8. **Handles** — 7px squares, `--surface-3` on `--border-strong`, offset −4px, sharp
-   corners — the one place the pixel grid shows in a control.
+The whole treatment is one block in `styles/index.css`; `PIN_TIP` / `SOCKET_GAP` in
+`canvas/edgePath.ts` mirror its geometry so wires start at the pin tip and stop at the
+socket face instead of disappearing under the plate. Change them together.
 
 ## Typography
 
