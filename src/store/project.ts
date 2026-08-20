@@ -2,7 +2,13 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { hooksStatus } from "../fs/api";
-import { useSettingsStore } from "./settings";
+import { flushSettings, useSettingsStore } from "./settings";
+import { useGraphStore } from "./graph";
+import { flushAgentSave, flushMetaSave, useAgentsStore } from "./agents";
+import { useTasksStore } from "./tasks";
+import { useEventsStore } from "./events";
+import { useReviewStore } from "./review";
+import { useProjectSelectionStore } from "./projectSelection";
 
 export interface MdFile {
   relPath: string;
@@ -45,6 +51,16 @@ interface ProjectState {
   refreshHooksStatus: () => Promise<void>;
   /** Applies one `fs://change` event in place — never rescans (§5.2). */
   applyFsChange: (c: FsChange) => void;
+  /** WO11 G1 — the Home button's action. Flushes every debounced write
+   *  FIRST (order is frozen, contract §5.9: losing an edit on the way out
+   *  is the failure mode this exists to prevent), then clears this store
+   *  and every other panel-owning selection so the title screen never shows
+   *  a stale card. Does NOT touch `useSessionsStore` — live agent sessions
+   *  are never killed by Home (Marty's ratified ASK #3); they simply stop
+   *  being rendered once `root` is null (RosterBar's own mount guard). The
+   *  caller (App.tsx) still owns resetting its own local view/modal state
+   *  (§5.9 step 4) since that's component state, not a store. */
+  closeProject: () => Promise<void>;
 }
 
 async function scan(root: string): Promise<ProjectScan> {
@@ -143,5 +159,32 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (pos === -1) pos = next.length;
     next.splice(pos, 0, inserted);
     set({ files: next });
+  },
+
+  closeProject: async () => {
+    // Step 1-2 (frozen order, §5.9): flush every debounced writer before
+    // anything is cleared.
+    await useGraphStore.getState().flushSave();
+    flushAgentSave();
+    flushMetaSave();
+    flushSettings();
+
+    // Step 3: clear this store...
+    set({ root: null, files: [], error: null, hooksInstalled: null, hooksReadable: true });
+    // ...and every other panel-owning selection. `useGraphStore` has no
+    // public `reset()` — graph.ts is outside this lane's WO11 file zone
+    // (lane UI-C) and the contract doesn't list one as a frozen cross-lane
+    // seam. `setSelection([], [])` is the closest existing public surface;
+    // it already clears the agents/tasks selections too (see its own doc
+    // comment in store/graph.ts). Nothing here is load-bearing for
+    // correctness either way: `loadGraph`/`loadAgents` both do a full reset
+    // of their own store on the NEXT project open regardless of what was
+    // left behind — this step is title-screen hygiene, not a data hazard.
+    useGraphStore.getState().setSelection([], []);
+    useAgentsStore.getState().select(null);
+    useTasksStore.getState().select(null);
+    useEventsStore.getState().clear();
+    useReviewStore.getState().dismissAll();
+    useProjectSelectionStore.getState().select(false);
   },
 }));

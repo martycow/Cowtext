@@ -6,30 +6,42 @@ Don't make changes here. Just read it and follow the rules.
 
 === Everything below considered as a prompt ===
 
-08/19/2026 08:00PM
-1. Connection lines are still too far away from the Input connectors.
-2. There might be multiple connections to one connector. I guess you should make connectors a big higher and look more like 16-bit video game cartridge's contacts
-3.  
+## What I noticed
 
-08/19/2026 2:10 PM
+1. New Project Wizard
+   * No "Video Game" type
+   * Brief description should be limited to some adequate amount of symbols (like 1000)
+   * I can't type spaces and new line in Requirements, Hard Rules and Constraints fields
+   * Optional fields MUST be collapsed by default. They only appear if User needs to fill them
 
-Brainstorm Ideas:
+2. Hierarchy
+   * Hierarchy should look like VSCode's hierarchy: Arrows and files are on the same line
+   * When I select Agent it breaks the app's UI
 
-1. Connection lines must start and end ON connectors, not next to them.
-2. Connection lines should use basic path finding to prevent crossing with nodes and other lines. There might be a case where there's no path exist
-3. Make connection lines thicker
-4. Context File Deletion. "Delete From Graph" and "Delete File" are different operations
-5. Root Folder can't be collapsed (No arror next to Root folder in hierarchy)
-6. Add title to left panel "Hierarchy"
-7. Add "New Project" wizard on the title screen
-8. Add "Convert existing project" Wizard on the title screen. It reogranizes context files, agents, skills, tasks into Cowtext-friendly format
-9. Projects to work with MUST BE Cowtext-friendly. Meaning there must be a specific files organization, meta data and other required things
-10. Project has it's own properties. When creating/converting project, there must be a Wizard with fields depenging of Project Type:
-   * Name
-   * Brief description
-   * Requirements
-   * (Optional) Hard Rules
-   * (Optional) Target Audience
-   * (Optional) Architecture
-   * (Optional) Constraints
-11. I want Agent Orchestrator tab with extended settings for each agent
+3. Inspector
+   * "Adapt to graph" button breaks the app's UI
+   * Transform component is always on top
+   * I can't scroll items in Tools dropdown
+
+4. Agent's Properties In Inspector
+   * Agent's properties must be a component as well as others
+   * "Create it" button doesn't do nothing and is displayed to matter that memory file exists. There should be "Reveil in Explorer" button or "Fix" if memory file is corrupted or doesn't exist
+   * Duplicates of models: Opus and Opus-5, Sonnet and Sonnet-5, Haiku and Haiky-... 
+   * There MUST NOT be Save button. Every change is saved immideately
+   * Remove "Delete Agent" button. Agent's management must be in Agents tab or in Hierarchy
+
+5. General
+   * Duplicated button "Add agent" on the bottom
+  
+6. New Node Wizard
+   * I checked "Assembly after close" and after I pressed finish it crashed app's UI
+
+## New Features
+
+1. Home button which returns on title screen
+2. Git Wizard. At least it must init git repository in the project and let User set .gitignore convinient way
+3. User can select project in hierarchy and be able to see it's component properties in Inspector. Only SOME of them must be editable
+4. Reveil in Explorer for Project in hierarchy
+5. Add the details about agents must be in Agents tab
+6. Change or upload avatars for agents
+7. 

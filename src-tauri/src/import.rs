@@ -1187,6 +1187,7 @@ fn apply_inner(root: String, changeset: ImportApproved) -> Result<ImportApplyRes
             condition: e.condition.clone(),
             note: None,
             color: None,
+            waypoints: Vec::new(),
         });
         edges_added += 1;
     }

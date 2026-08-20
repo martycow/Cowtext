@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useAgentsStore, type Selection } from "../store/agents";
 import { FieldLabel, ModelPicker, Stepper } from "../agents/AgentEditor";
+import { ALL_TOOLS } from "../agents/toolCatalog";
 import { normalizeFileName, slugForFile } from "../wizard/paths";
 
 const ICON_BTN =
@@ -42,18 +43,10 @@ function AmberToggle({ checked, onChange }: { checked: boolean; onChange: (v: bo
   );
 }
 
-const TOOL_OPTIONS = [
-  "Read",
-  "Grep",
-  "Glob",
-  "Edit",
-  "Write",
-  "Bash",
-  "WebFetch",
-  "WebSearch",
-  "Agent",
-  "NotebookEdit",
-] as const;
+// WO10 item 11 — this list used to be declared here, and disagreed with the
+// free-text Tools field the editor offered afterwards. Both now read the one
+// catalog in agents/toolCatalog.ts.
+const TOOL_OPTIONS = ALL_TOOLS;
 
 export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const createAgent = useAgentsStore((s) => s.createAgent);

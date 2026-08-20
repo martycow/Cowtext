@@ -287,12 +287,13 @@ mod graph_v3 {
     // (same semantics — an agent-role node may be backed by a real
     // `.claude/agents/*.md` file). v3 (WO03) widens the node role and edge
     // kind vocabularies and adds `tags` / `owner` / `meta` to nodes, `color`
-    // to edges, and two new compile targets (`copilot`, `gemini`).
+    // to edges, and two new compile targets (`copilot`, `gemini`). v4 (WO10)
+    // adds `waypoints` to edges — the hand-edited orthogonal route.
 
     /// Current `graph.json` schema version. Bumping this needs a migration
     /// step in [`migrate_graph`] and the matching entry in `src/store/graph.ts`'s
     /// `migrateGraph`.
-    pub const GRAPH_VERSION: u32 = 3;
+    pub const GRAPH_VERSION: u32 = 4;
 
     /// Node role — 13 values (WO03_CONTRACT.md §"Graph v3 schema": 7
     /// existing + 6 new; ratified at 13 in `docs/design/WO03_AUDIT.md`
@@ -522,6 +523,13 @@ mod graph_v3 {
         /// v3: edge colour override (backlog "edge colour persistence" row).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub color: Option<String>,
+        /// v4 (WO10): hand-edited route — flow-space points the router must
+        /// pass through, in order, between source and target. Empty ⇒ the
+        /// automatic orthogonal route (`src/canvas/edgePath.ts`). Omitted
+        /// from output at default, per the "new fields must be OMITTED when
+        /// at default value" contract rule.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub waypoints: Vec<Position>,
     }
 
     /// `graph.json` shape (v3). Mirrors `BarnGraph` in `src/store/graph.ts`.
@@ -556,13 +564,19 @@ mod graph_v3 {
     const KNOWN_COMPILE_TARGET_STRS: [&str; 5] = ["claude", "agents", "cursor", "copilot", "gemini"];
 
     /// Migration harness (mirrors `migrateGraph` in `src/store/graph.ts`).
-    /// Accepts v1, v2, or v3 `graph.json` bytes and returns the current (v3)
-    /// shape in one read — a v1 graph migrates v1→v2→v3 without an
+    /// Accepts v1..v4 `graph.json` bytes and returns the current (v4)
+    /// shape in one read — a v1 graph migrates v1→v2→v3→v4 without an
     /// intermediate write. v1→v2: `persona` role renamed to `agent` (same
     /// semantics). v2→v3: pure default-filling (new node/edge fields absent
     /// ⇒ their v3 defaults; v2's 7 roles and 4 edge kinds are already valid
-    /// v3 values, so nothing else changes there). Idempotent: migrating an
-    /// already-v3 graph only re-normalizes to the typed shape (e.g. a stale
+    /// v3 values, so nothing else changes there). v3→v4: pure
+    /// default-filling again — the only new field is the edge's
+    /// `waypoints`, absent ⇒ empty ⇒ the automatic route. Both
+    /// default-filling steps need no code here: `#[serde(default)]` on
+    /// every new field does the work, which is why this function's body
+    /// only ever grows a step when a rename or a reshape lands.
+    /// Idempotent: migrating an
+    /// already-current graph only re-normalizes to the typed shape (e.g. a stale
     /// non-current `version` value is corrected). `Err` for unparseable JSON,
     /// an out-of-range version, or a missing/non-array `nodes`/`edges` —
     /// mirrors the TS function's strictness there (no silent default to `[]`).
@@ -703,11 +717,31 @@ pub fn read_md_file(root: String, rel_path: String) -> Result<String, String> {
 
 /// Write a text file under the project root, atomically, creating parent
 /// directories as needed (e.g. `context/` for a brand-new node).
+///
+/// One writer per file (WO11_CONTRACT.md §12.3 item 4, §12.8 doctrine): an
+/// agent file's only sanctioned writer is `agent_save`'s save queue, which
+/// re-reads and hands back the fresh `AgentDoc` on every write — a second,
+/// uncoordinated writer through this command is a stale-read/lost-update
+/// across human time (the Markdown tab can hold a buffer open for minutes),
+/// not a race a lock could fix. Enforced here, at the one chokepoint every
+/// path must go through, as a runtime rejection rather than a documented-only
+/// rule: this codebase has twice shipped a documented-only invariant that
+/// then failed in practice (WO10's `sameRelPath`, and this).
 #[tauri::command]
 pub fn write_md_file(root: String, rel_path: String, content: String) -> Result<(), String> {
     // hooks_write is the only sanctioned path into the trust boundary.
     if rel_path.replace('\\', "/").eq_ignore_ascii_case(".claude/settings.json") {
         return Err("Use Install hooks to edit .claude/settings.json".to_string());
+    }
+    // agent_save is the only sanctioned path into `.claude/agents/*.md`.
+    // Same normalization idiom used throughout `agents.rs` (e.g.
+    // `agent_convert`'s `.claude/` guard) and by `is_rename_protected`
+    // below: forward-slash, lowercase, then a prefix/suffix check — never a
+    // bare `==`/`split("/")` comparison (this codebase's standing rule,
+    // after seven prior defects of exactly that shape).
+    let normalized = rel_path.replace('\\', "/").to_ascii_lowercase();
+    if normalized.starts_with(".claude/agents/") && normalized.ends_with(".md") {
+        return Err("Use agent_save to write an agent file".to_string());
     }
     let path = resolve_within_root(&checked_root(&root)?, &rel_path)?;
     write_atomic(&path, &content)

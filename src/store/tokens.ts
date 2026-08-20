@@ -3,7 +3,7 @@
 // tokens-left / per-agent spend needs the Claude runtime telemetry
 // (--output-format stream-json, Work Order 01 Block F) and does not exist yet.
 
-import type { MemoryEdge, MemoryNode } from "./graph";
+import { canonPath, type MemoryEdge, type MemoryNode } from "./graph";
 import type { MdFile } from "./project";
 import type { AgentDoc } from "../agents/types";
 
@@ -56,10 +56,16 @@ export function pinnedContextTokens(
   nodes: readonly MemoryNode[],
   files: readonly MdFile[],
 ): number {
-  const sizeByPath = new Map(files.map((f) => [f.relPath, f.sizeBytes] as const));
+  // WO11 tester sweep (MEDIUM #3): keyed lookups over a path-keyed Map are
+  // an exact-key-match, same failure class as a bare `===`/`.split("/")` on
+  // a `.md` path (canonPath/sameRelPath standing rule) — a node stored with
+  // backslashes (or different case) silently misses its file's size here
+  // and is undercounted, with no error. Build AND query the Map through
+  // canonPath so both sides agree regardless of separator/case.
+  const sizeByPath = new Map(files.map((f) => [canonPath(f.relPath), f.sizeBytes] as const));
   let bytes = 0;
   for (const n of nodes) {
-    if (n.pinned) bytes += sizeByPath.get(n.filePath) ?? 0;
+    if (n.pinned) bytes += sizeByPath.get(canonPath(n.filePath)) ?? 0;
   }
   return tokensForBytes(bytes);
 }
@@ -74,9 +80,14 @@ export function agentContextTokens(
 ): number {
   let bytes = doc.body.length;
   const agentPath = `.claude/agents/${doc.fileName}`;
-  const agentNode = nodes.find((n) => n.filePath === agentPath);
+  // Same fix as `pinnedContextTokens` above — canonPath on both sides of the
+  // comparison, not a bare `===`. Reachable through WO11's G5 context
+  // estimate: without this, an agent-backed node stored with backslashes
+  // silently reported ONLY its own duties-body size, skipping every
+  // imported/referenced node's contribution below.
+  const agentNode = nodes.find((n) => canonPath(n.filePath) === canonPath(agentPath));
   if (agentNode !== undefined) {
-    const sizeByPath = new Map(files.map((f) => [f.relPath, f.sizeBytes] as const));
+    const sizeByPath = new Map(files.map((f) => [canonPath(f.relPath), f.sizeBytes] as const));
     const nodeById = new Map(nodes.map((n) => [n.id, n] as const));
     const seen = new Set<string>();
     for (const e of edges) {
@@ -85,7 +96,7 @@ export function agentContextTokens(
       const target = nodeById.get(e.target);
       if (target === undefined || seen.has(target.id)) continue;
       seen.add(target.id);
-      bytes += sizeByPath.get(target.filePath) ?? 0;
+      bytes += sizeByPath.get(canonPath(target.filePath)) ?? 0;
     }
   }
   return tokensForBytes(bytes);

@@ -29,7 +29,7 @@ function slugify(s: string): string {
  *  `spawnForTask` instead of `spawn`, so the session boots with the
  *  pre-compiled subgraph body and the effective ceiling already resolved by
  *  the caller. All four are optional and default to the pre-WO06 shape, so
- *  every existing call site (RosterBar's plain "Add agent") is unaffected. */
+ *  every existing call site (RosterBar's plain "Spawn agent") is unaffected. */
 export function AddAgentDialog({
   root,
   onClose,
@@ -203,12 +203,12 @@ export function AddAgentDialog({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Add agent"
+        aria-label="Spawn agent"
         tabIndex={-1}
         className="flex max-h-[80vh] w-[480px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
-          <span className="text-[15px] font-semibold">{forTask ? "Launch for task" : "Add agent"}</span>
+          <span className="text-[15px] font-semibold">{forTask ? "Launch for task" : "Spawn agent"}</span>
           <div className="min-w-0 flex-1" />
           <button
             onClick={onClose}

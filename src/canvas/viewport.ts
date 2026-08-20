@@ -23,3 +23,31 @@ export function viewportCenterPosition(
     y: Math.round(flowCenterY - NODE_CARD_H / 2),
   };
 }
+
+// ── Where a fresh node lands (WO10 item 7) ────────────────────────────
+// The canvas toolbar could already place a node at the viewport centre,
+// because it runs INSIDE <ReactFlowProvider> and can call useReactFlow().
+// Adopting from the Hierarchy could not: that panel lives outside the
+// provider, and the graph store — which is where `adoptFile` runs — is not a
+// React component at all. So it fell back to a fixed 4-column cascade from
+// (80, 80) and could drop a node kilometres off-screen.
+//
+// A module-scope probe, registered by GraphCanvas on mount, is the smallest
+// thing that fixes it without either dragging React Flow's context into the
+// store or duplicating the transform maths in a second place. It is
+// deliberately a nullable function: with no canvas mounted (headless tests,
+// the Barn view) there is no viewport to centre on, and callers fall back.
+
+let probe: (() => { x: number; y: number }) | null = null;
+
+/** Called by GraphCanvas. Pass `null` on unmount so a stale closure over a
+ *  dead React Flow instance can never be consulted. */
+export function registerViewportCenter(fn: (() => { x: number; y: number }) | null): void {
+  probe = fn;
+}
+
+/** Flow-space top-left for a card centred in the live viewport, or `null`
+ *  when no canvas is mounted. */
+export function viewportCenter(): { x: number; y: number } | null {
+  return probe === null ? null : probe();
+}

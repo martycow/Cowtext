@@ -71,6 +71,11 @@ export interface AppSettings {
    *  (`settings::global_token_ceiling` + `sessions.rs::resolve_ceiling`) —
    *  no frontend spawn call site needs to change. */
   sessionTokenCeiling: number;
+  /** WO10 item 16: Inspector section keys the user has COLLAPSED. Stored as
+   *  the exceptions rather than the full state, so a section added in a
+   *  later release starts open without a migration, and a settings.json
+   *  written by an older build simply has fewer exceptions in it. */
+  collapsedSections: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -91,6 +96,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   managerMode: false,
   showFps: false,
   sessionTokenCeiling: DEFAULT_SESSION_TOKEN_CEILING,
+  collapsedSections: [],
 };
 
 export interface SettingsState extends AppSettings {
@@ -119,6 +125,8 @@ export interface SettingsState extends AppSettings {
   setManagerMode: (b: boolean) => void;
   setShowFps: (b: boolean) => void;
   setSessionTokenCeiling: (n: number) => void;
+  /** Collapse/expand one Inspector section by key. */
+  setSectionCollapsed: (key: string, collapsed: boolean) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -196,6 +204,9 @@ function mergeSettings(raw: unknown): AppSettings {
   ) {
     out.sessionTokenCeiling = Math.round(r.sessionTokenCeiling);
   }
+  if (Array.isArray(r.collapsedSections)) {
+    out.collapsedSections = r.collapsedSections.filter((k): k is string => typeof k === "string");
+  }
   return out;
 }
 
@@ -224,6 +235,7 @@ function persistNow(): void {
     managerMode: s.managerMode,
     showFps: s.showFps,
     sessionTokenCeiling: s.sessionTokenCeiling,
+    collapsedSections: s.collapsedSections,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -258,7 +270,7 @@ export function flushSettings(): void {
 // Idempotent load guard (same idiom as events.ts initEventListener).
 let loading: Promise<void> | null = null;
 
-export const useSettingsStore = create<SettingsState>((set) => ({
+export const useSettingsStore = create<SettingsState>((set, get) => ({
   ...DEFAULT_SETTINGS,
   loaded: false,
   prefersReducedMotion: false,
@@ -359,6 +371,17 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
   setSessionTokenCeiling: (n) => {
     set({ sessionTokenCeiling: Math.max(0, Math.round(n)) });
+    schedulePersist();
+  },
+
+  setSectionCollapsed: (key, collapsed) => {
+    const cur = get().collapsedSections;
+    const has = cur.includes(key);
+    if (has === collapsed) return;
+    // Sorted so the persisted file doesn't churn on toggle order.
+    set({
+      collapsedSections: collapsed ? [...cur, key].sort() : cur.filter((k) => k !== key),
+    });
     schedulePersist();
   },
 }));

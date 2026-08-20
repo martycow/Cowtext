@@ -7,8 +7,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { renameNodeFile as fsRenameNodeFile } from "../fs/api";
 import { useProjectStore } from "./project";
 import { useSettingsStore } from "./settings";
-import { agentRenameListeners, useAgentsStore } from "./agents";
+import { agentDeleteListeners, agentRenameListeners, useAgentsStore } from "./agents";
 import { useReviewStore } from "./review";
+import { useTasksStore } from "./tasks";
+import { useProjectSelectionStore } from "./projectSelection";
+// Pure geometry helper + a module-scope probe the canvas registers; no React
+// Flow context and no component tree reach in here.
+import { viewportCenter } from "../canvas/viewport";
+
+/** Drop the task-board selection. Split out only so `setSelection` reads as
+ *  a list of things it clears rather than a wall of store plumbing. */
+function clearTaskSelection(): void {
+  if (useTasksStore.getState().selected !== null) useTasksStore.getState().select(null);
+}
 
 // ── Data model (plan §4) ──────────────────────────────────────────────
 
@@ -47,9 +58,33 @@ export const NODE_ROLES: readonly NodeRole[] = [
   "style",
 ];
 
+/**
+ * Canonical form of a project-relative path, for COMPARISON only — never
+ * for storage or display (the stored path keeps whatever shape the scan
+ * produced, and the Inspector shows it verbatim).
+ *
+ * WO10 item 10: this exists because the app had two different notions of
+ * path equality. `isAgentFile` normalized separators and case; every other
+ * comparison — the agents rail's `nodeFor`, `adoptFile`'s duplicate guard,
+ * the file rail's node lookup — used a bare `===`. A node stored as
+ * `.claude\agents\x.md` therefore rendered as an agent plate on the canvas
+ * (normalized test) while simultaneously reporting "off the graph" in the
+ * rail (exact test), and clicking Adopt sailed past the duplicate guard and
+ * minted a SECOND node for the same file. Windows makes that shape easy to
+ * produce, so one helper, used by every comparison, is the fix.
+ */
+export function canonPath(relPath: string): string {
+  return relPath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+/** Do these two project-relative paths name the same file? */
+export function sameRelPath(a: string, b: string): boolean {
+  return canonPath(a) === canonPath(b);
+}
+
 /** Is this node backed by a real Claude Code agent definition file? */
 export function isAgentFile(relPath: string): boolean {
-  return relPath.replace(/\\/g, "/").toLowerCase().startsWith(".claude/agents/");
+  return canonPath(relPath).startsWith(".claude/agents/");
 }
 
 export interface MemoryNode {
@@ -119,6 +154,11 @@ export interface MemoryEdge {
   note?: string;
   /** v3 (WO03): edge colour override (backlog "edge colour persistence"). */
   color?: string;
+  /** v4 (WO10): hand-edited route. Flow-space points the router must pass
+   *  through, in order, between source and target. Empty/absent ⇒ the
+   *  automatic orthogonal route (canvas/edgePath.ts). Rounded to whole
+   *  pixels on write so the file stays diff-stable. */
+  waypoints?: { x: number; y: number }[];
 }
 
 // v3 (WO03): "copilot" (.github/copilot-instructions.md) and "gemini"
@@ -126,7 +166,7 @@ export interface MemoryEdge {
 // `compileTargets` below, unchanged at `["claude"]`.
 export type CompileTarget = "claude" | "agents" | "cursor" | "copilot" | "gemini";
 
-export const GRAPH_VERSION = 3;
+export const GRAPH_VERSION = 4;
 
 export interface BarnGraph {
   version: typeof GRAPH_VERSION;
@@ -175,6 +215,9 @@ function stableEdge(e: MemoryEdge): MemoryEdge {
     ...(e.condition !== undefined && e.condition !== "" ? { condition: e.condition } : {}),
     ...(e.note !== undefined && e.note !== "" ? { note: e.note } : {}),
     ...(e.color !== undefined && e.color !== "" ? { color: e.color } : {}),
+    ...(e.waypoints !== undefined && e.waypoints.length > 0
+      ? { waypoints: e.waypoints.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })) }
+      : {}),
   };
 }
 
@@ -207,15 +250,17 @@ export function serializeGraph(g: BarnGraph): string {
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
 
-/** Migration harness (backlog 9.2; v3 bump WO03 §"Graph v3 schema"):
- *  version 3 is current. v1 → v2: the "persona" role was renamed to
+/** Migration harness (backlog 9.2; v3 bump WO03 §"Graph v3 schema"; v4 bump
+ *  WO10 §"Lane 1"): version 4 is current. v1 → v2: the "persona" role was renamed to
  *  "agent" (same semantics, now unified with Claude Code agent files).
  *  v2 → v3: pure default-filling — the new node fields (`tags`/`owner`/
  *  `meta`), new edge field (`color`), widened role/edge-kind vocabularies,
  *  and two new compile targets are all optional on the TS types above, so
  *  a v2 graph is already a structurally valid v3 graph; nothing here needs
- *  to touch node/edge contents. A v1 graph migrates v1→v2→v3 in one call
- *  (the persona→agent rewrite below, then the version stamp at the
+ *  to touch node/edge contents. v3 → v4: pure default-filling again — the
+ *  only new field is the edge's optional `waypoints`, absent ⇒ the
+ *  automatic route. A v1 graph migrates v1→v2→v3→v4 in one call (the
+ *  persona→agent rewrite below, then the version stamp at the
  *  bottom). Anything else must come through here with an explicit
  *  migration step. Mirrors `migrate_graph` in `src-tauri/src/project.rs`. */
 export function migrateGraph(data: unknown): BarnGraph {
@@ -622,11 +667,22 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   adoptFile: (relPath, title) => {
     const s = get();
-    if (s.nodes.some((n) => n.filePath === relPath)) return;
+    if (s.nodes.some((n) => sameRelPath(n.filePath, relPath))) return;
     pushHistory("adopt");
     const fileName = relPath.split("/").pop() ?? relPath;
     const derived = fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
     const i = s.nodes.length;
+    // WO10 item 7: land where the user is looking. `viewportCenter()` is null
+    // only when no canvas is mounted, in which case the old fixed cascade
+    // from (80, 80) is still the best available answer. Either way the
+    // cascade offset stays, so adopting six files in a row fans them out
+    // instead of stacking six cards on one pixel.
+    const centre = viewportCenter();
+    const spread = { x: (i % 4) * 28, y: Math.floor(i / 4) * 24 };
+    const position =
+      centre !== null
+        ? { x: centre.x + spread.x, y: centre.y + spread.y }
+        : { x: 80 + (i % 4) * 280, y: 80 + Math.floor(i / 4) * 140 };
     const node: MemoryNode = {
       id: makeId(),
       title: title !== undefined && title !== "" ? title : derived,
@@ -636,15 +692,20 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       filePath: relPath,
       readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
       pinned: false,
-      // Cascade fresh nodes so adopt-many doesn't stack them.
-      position: { x: 80 + (i % 4) * 280, y: 80 + Math.floor(i / 4) * 140 },
+      position,
     };
     set((st) => ({
       nodes: [...st.nodes, node],
-      selectedNodeIds: [node.id],
-      selectedEdgeIds: [],
     }));
     scheduleSave();
+    // WO11 C1 fix: this used to set selectedNodeIds directly, bypassing
+    // setSelection's clear-other-selections logic — the agents-store
+    // selection (whatever adopted this file in the first place, via the
+    // rail) was left stale. Harmless today only because the Inspector's
+    // branch ladder checks node !== undefined before agentsSel !== null;
+    // routing through setSelection here makes "exactly one thing selected"
+    // true structurally instead of by branch-order accident.
+    get().setSelection([node.id], []);
     // Existing file, unknown content — read it for the review baseline
     // (Block C §T4). Best-effort: initSnapshots tolerates a missing file.
     if (s.root !== null) void useReviewStore.getState().initSnapshots(s.root, [relPath]);
@@ -736,10 +797,44 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     scheduleSave();
   },
 
+  // WO10 item 10 — this is now the ARBITER of what the Inspector shows, not
+  // just the holder of the graph selection.
+  //
+  // Four stores carry a "selection" (graph, agents, tasks, sessions) and the
+  // Inspector picks a panel with a branch ladder over all four. Nothing ever
+  // cleared the agents one — `select(null)` existed nowhere in the codebase —
+  // so it survived every subsequent selection change and the ladder fell
+  // through to it whenever the graph selection went empty. Concretely: click
+  // an ADOPTED agent in the rail, then click empty canvas, and the Inspector
+  // offered "Off the graph — adopt it to wire context edges" for a node that
+  // was plainly sitting on the graph.
+  //
+  // Changing the graph selection now clears the other three panel-owning
+  // selections (agents, tasks, project — WO11 adds the third). Callers that
+  // want both — the agents rail picking a row — set the graph selection
+  // FIRST and their own second; see RailSections.pick.
+  //
+  // WO11 G3 fix: the unchanged-selection early return used to run BEFORE
+  // these clears, so it doubled as an accidental guard against them too.
+  // Concretely: select a task (graph selection stays [],[] — tasks are a
+  // separate store), then click an off-graph agent in the rail. The rail
+  // calls setSelection([], []) first (per the convention above) — same as
+  // the current (already-empty) graph selection — so the old early return
+  // fired and clearTaskSelection() never ran; the Inspector kept showing
+  // the task instead of the agent. The clears must run unconditionally;
+  // only the actual `set` of nodeIds/edgeIds is worth skipping when nothing
+  // changed.
   setSelection: (nodeIds, edgeIds) => {
     const s = get();
     const same = (a: string[], b: string[]): boolean =>
       a.length === b.length && a.every((v, i) => v === b[i]);
+    if (useProjectSelectionStore.getState().selected) {
+      useProjectSelectionStore.getState().select(false);
+    }
+    if (useAgentsStore.getState().selection !== null) {
+      useAgentsStore.getState().select(null);
+    }
+    clearTaskSelection();
     if (same(s.selectedNodeIds, nodeIds) && same(s.selectedEdgeIds, edgeIds)) return;
     set({ selectedNodeIds: nodeIds, selectedEdgeIds: edgeIds });
   },
@@ -800,7 +895,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     if (isAgentFile(node.filePath)) {
       // Agent-backed node: route through the agents layer (rename_node_file
       // refuses .claude/*). The new name is the requested basename sans .md.
-      const fileName = node.filePath.split("/").pop() ?? node.filePath;
+      // WO11 tech-lead finding, same pattern as Inspector.tsx's AgentNodePanel:
+      // a bare "/" split leaves the whole path as `fileName` on a node stored
+      // with backslashes (easy on Windows), matching no agent's fileName.
+      const fileName = node.filePath.replace(/\\/g, "/").split("/").pop() ?? node.filePath;
       const base = (nextRelPath.split("/").pop() ?? nextRelPath).replace(/\.md$/i, "");
       const nextFileName = await useAgentsStore.getState().renameAgentByFile(fileName, base);
       returned = `.claude/agents/${nextFileName}`;
@@ -840,17 +938,40 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 // Agent renamed through the agents layer (rail / agent editor) → keep every
 // graph node backed by that file pointing at the new path, and mirror the
 // new agent name into the node title (they are one identity, Marty 2026-08-18).
+//
+// WO11 §10.3/§10.5 standing rule: no bare `===`/`.split("/")` on a `.md`
+// path in src/ — this listener was itself one of the four defects that rule
+// was written against (a node stored as `.claude\agents\x.md` compared
+// false against the forward-slash `oldPath` here, so it silently never
+// followed a rename). `sameRelPath` is the only sanctioned comparison.
 agentRenameListeners.push((oldFileName, newFileName, newName) => {
   const oldPath = `.claude/agents/${oldFileName}`;
   const newPath = `.claude/agents/${newFileName}`;
   const s = useGraphStore.getState();
-  if (!s.nodes.some((n) => n.filePath === oldPath)) return;
+  if (!s.nodes.some((n) => sameRelPath(n.filePath, oldPath))) return;
   useGraphStore.setState((st) => ({
     nodes: st.nodes.map((n) =>
-      n.filePath === oldPath
+      sameRelPath(n.filePath, oldPath)
         ? { ...n, filePath: newPath, title: newName !== "" ? newName : n.title }
         : n,
     ),
   }));
   scheduleSave();
+});
+
+// Agent FILE deleted through the agents layer (rail context menu only, per
+// WO11_CONTRACT.md §10.1/§10.3) → prune every graph node backed by that
+// file. Fired only after `agent_delete` has succeeded and the agents store
+// has already applied its own update (agents.ts's notifyAgentDeleted call
+// site). Routes through `deleteNodes`, never a raw `setState`, because that
+// is the one action that also prunes incident edges, clears the selection
+// and assemble state, and pushes an undo entry (below) — a node whose file
+// is gone still gets a real undo entry back to "node present, file missing",
+// which is the honest state; the file deletion itself is never undoable
+// (pre-existing, deliberate asymmetry).
+agentDeleteListeners.push((fileName) => {
+  const path = `.claude/agents/${fileName}`;
+  const ids = useGraphStore.getState().nodes.filter((n) => sameRelPath(n.filePath, path)).map((n) => n.id);
+  if (ids.length === 0) return;
+  useGraphStore.getState().deleteNodes(ids);
 });

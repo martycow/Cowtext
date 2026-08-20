@@ -12,6 +12,7 @@ mod assemble;
 // subcommand should not need a second lib.rs visibility pass to unlock it.
 pub mod compile;
 mod frontmatter;
+mod git;
 mod handoff;
 mod hooks;
 mod hooks_server;
@@ -19,6 +20,7 @@ pub mod import;
 pub mod lint;
 mod preset;
 pub mod project;
+mod project_meta;
 mod sessions;
 mod settings;
 mod taskctx;
@@ -69,6 +71,13 @@ pub fn run() {
             agents::skill_rename,
             agents::skill_delete,
             agents::agents_meta_write,
+            agents::agent_avatar_set,
+            agents::agent_avatar_read,
+            agents::agent_avatar_clear,
+            agents::agent_memory_status,
+            git::git_status,
+            git::git_init,
+            git::gitignore_write,
             compile::compile_preview,
             compile::compile_write,
             assemble::assemble_node,
@@ -111,7 +120,10 @@ pub fn run() {
             tasklinks::tasklink_delete,
             taskctx::task_context_preview,
             taskctx::task_context_write,
-            handoff::handoff_node_propose
+            handoff::handoff_node_propose,
+            project_meta::project_meta_read,
+            project_meta::project_meta_write,
+            project_meta::project_init
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

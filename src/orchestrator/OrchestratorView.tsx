@@ -16,14 +16,17 @@
 // radius scale. The Barn plate language is scoped to src/canvas/** by the
 // carve-out in DESIGN_SPEC.md and deliberately does not leak here.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Play, RotateCw, Square, X } from "lucide-react";
+import { ExternalLink, FolderOpen, Play, RotateCw, Square, X } from "lucide-react";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { agentMemoryStatus, type AgentMemoryStatus } from "../agents/api";
 import { metaOrDefault, seedFor, useAgentsStore, PRODUCER_FILE } from "../store/agents";
 import { useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
 import { budgetPct } from "../sessions/budget";
-import { ctxPercent } from "../store/tokens";
+import { agentContextTokens, ctxPercent } from "../store/tokens";
+import { useGraphStore } from "../store/graph";
+import { useProjectStore } from "../store/project";
 import type { AgentDoc } from "../agents/types";
 
 const STATUS_DOT: Record<SessionStatus, string> = {
@@ -61,6 +64,11 @@ function FleetRow({
 }) {
   const meta = useAgentsStore((s) => metaOrDefault(s.meta, doc.fileName));
   const seed = useAgentsStore((s) => seedFor(s.meta, doc.fileName));
+  const avatarSrc = useAgentsStore((s) => s.avatars[doc.fileName] ?? null);
+  const loadAvatar = useAgentsStore((s) => s.loadAvatar);
+  useEffect(() => {
+    void loadAvatar(doc.fileName);
+  }, [doc.fileName, loadAvatar]);
   const live = sessions.filter((s) => s.alive);
   const busiest = live.find((s) => s.status === "working") ?? live[0];
   return (
@@ -73,7 +81,7 @@ function FleetRow({
           : "border-l-transparent hover:bg-[var(--surface-hover)]"
       }`}
     >
-      <AgentAvatar seed={seed} size={22} />
+      <AgentAvatar seed={seed} size={22} src={avatarSrc} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm text-content">{agentLabel(doc, meta.nickname)}</span>
         <span className="truncate font-mono text-micro text-content-muted">
@@ -161,13 +169,34 @@ function SessionRow({ session }: { session: Session }) {
 function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions: Session[] }) {
   const meta = useAgentsStore((s) => metaOrDefault(s.meta, doc.fileName));
   const seed = useAgentsStore((s) => seedFor(s.meta, doc.fileName));
+  const avatarSrc = useAgentsStore((s) => s.avatars[doc.fileName] ?? null);
+  const loadAvatar = useAgentsStore((s) => s.loadAvatar);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
+  const selectAgent = useAgentsStore((s) => s.select);
   const spawn = useSessionsStore((s) => s.spawn);
   const busy = useSessionsStore((s) => s.busy);
   const [spawnError, setSpawnError] = useState<string | null>(null);
+  const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
+  const files = useProjectStore((s) => s.files);
+  const contextTokens = agentContextTokens(doc, nodes, edges, files);
+  const [memStatus, setMemStatus] = useState<AgentMemoryStatus | null>(null);
 
   const label = agentLabel(doc, meta.nickname);
   const cwd = meta.defaultCwd === "" ? root : meta.defaultCwd;
+
+  useEffect(() => {
+    void loadAvatar(doc.fileName);
+  }, [doc.fileName, loadAvatar]);
+
+  // WO11 G5 — read-only detail column: the memory-health probe, same source
+  // of truth as AgentEditor's Reveal/Fix control (never the project scan).
+  useEffect(() => {
+    setMemStatus(null);
+    void agentMemoryStatus(root, doc.fileName)
+      .then(setMemStatus)
+      .catch(() => setMemStatus(null));
+  }, [root, doc.fileName]);
 
   const pickFolder = () => {
     void open({ directory: true, title: `Default folder for ${label}` }).then((picked) => {
@@ -182,10 +211,17 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
     });
   };
 
+  // WO11 G5 — "one writer per field" (§5.12): this view never edits a
+  // definition field itself. Selecting the agent in the agents store is as
+  // far as this lane's zone reaches — the rail/Inspector (a different view)
+  // is where the edit actually happens; switching to that view is a
+  // top-level App.tsx concern outside src/orchestrator/**.
+  const editInInspector = () => selectAgent({ kind: "agent", key: doc.fileName });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="flex flex-none items-center gap-2.5 border-b border-border-subtle px-4 py-3">
-        <AgentAvatar seed={seed} size={44} />
+        <AgentAvatar seed={seed} size={44} src={avatarSrc} />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-lg font-semibold text-content">{label}</span>
           <span className="truncate font-mono text-2xs text-content-muted">{doc.fileName}</span>
@@ -303,11 +339,40 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
               {doc.fields.description ?? "—"}
             </dd>
           </div>
+          <div className="flex gap-2">
+            <dt className="w-[72px] flex-none font-mono text-2xs text-content-muted">memory</dt>
+            <dd
+              className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary"
+              title={memStatus?.dirRelPath}
+            >
+              {memStatus === null ? "…" : memStatus.healthy ? "healthy" : "needs attention"}
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-[72px] flex-none font-mono text-2xs text-content-muted">context</dt>
+            <dd
+              className="min-w-0 flex-1 font-mono text-xs text-content-secondary"
+              title="estimate, chars/4 · window ~200k"
+            >
+              ≈{contextTokens.toLocaleString()} tok
+            </dd>
+          </div>
         </dl>
-        <p className="mt-2 text-xs text-content-muted">
-          Edited in the Hierarchy panel under Agents — one writer per field, so this view and the editor can
-          never disagree.
-        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <p className="min-w-0 flex-1 text-xs text-content-muted">
+            Edited in the Hierarchy panel under Agents — one writer per field, so this view and the editor can
+            never disagree.
+          </p>
+          <button
+            type="button"
+            onClick={editInInspector}
+            title="Selects this agent — open it from the Canvas or Tasks view to edit"
+            className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-2 text-2xs text-content-secondary transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+          >
+            <ExternalLink size={11} strokeWidth={1.5} />
+            Edit in Inspector
+          </button>
+        </div>
       </Section>
 
       <Section title={`Sessions (${sessions.length})`}>

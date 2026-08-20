@@ -244,6 +244,24 @@ fn write_md_file_rejects_settings_json_variants() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// WO11 §12.3 item 4 (Amendment 3): agent_save's save queue is the only
+// sanctioned writer for `.claude/agents/*.md` — `write_md_file` (the
+// Markdown tab's old, uncoordinated path) must reject it, from the agents
+// module's own vantage point too (the settings-json variant test above has
+// covered `write_md_file` from here since WO02; this is its WO11 sibling).
+#[test]
+fn write_md_file_rejects_agent_paths_variants() {
+    let dir = temp_project("agent-path-guard");
+    let root = dir.to_string_lossy().into_owned();
+    for bad in [".claude/agents/x.md", ".claude\\agents\\x.md", ".CLAUDE/AGENTS/X.MD"] {
+        let err =
+            crate::project::write_md_file(root.clone(), bad.to_string(), "# hi".to_string())
+                .unwrap_err();
+        assert_eq!(err, "Use agent_save to write an agent file");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ---- Additional coverage ----------------------------------------------------
 
 #[test]
@@ -678,4 +696,655 @@ fn agent_memory_ensure_directory_only_pre_created_still_reports_created_true() {
     assert!(mem.created);
     assert!(mem_dir.join("MEMORY.md").is_file());
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// WO11 R2 — agent_memory_status, avatars, agent_save -> AgentDoc
+// ═══════════════════════════════════════════════════════════════════════
+
+fn png_bytes(total_len: usize) -> Vec<u8> {
+    let mut v = vec![0x89, 0x50, 0x4E, 0x47];
+    v.resize(total_len.max(v.len()), 0);
+    v
+}
+
+fn jpeg_bytes(total_len: usize) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8, 0xFF];
+    v.resize(total_len.max(v.len()), 0);
+    v
+}
+
+fn webp_bytes() -> Vec<u8> {
+    let mut v = b"RIFF".to_vec();
+    v.extend_from_slice(&[0, 0, 0, 0]); // size field, unchecked by detect_image_ext
+    v.extend_from_slice(b"WEBP");
+    v
+}
+
+fn gif_bytes() -> Vec<u8> {
+    b"GIF89a".to_vec()
+}
+
+fn temp_source_file(tag: &str, bytes: &[u8]) -> PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("cowtext-avatar-src-{tag}-{}.bin", std::process::id()));
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+// ---- agent_memory_status ---------------------------------------------------
+
+#[test]
+fn memory_status_missing_dir_is_unhealthy() {
+    let dir = temp_project("mstatus-missing-dir");
+    let root = dir.to_string_lossy().into_owned();
+    let status = agent_memory_status(root, "tech-ui.md".to_string()).unwrap();
+    assert_eq!(status.dir_rel_path, ".claude/agent-memory/tech-ui");
+    assert_eq!(status.index_rel_path, ".claude/agent-memory/tech-ui/MEMORY.md");
+    assert!(!status.dir_exists);
+    assert!(!status.index_exists);
+    assert_eq!(status.index_bytes, 0);
+    assert!(!status.healthy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn memory_status_dir_without_index_is_unhealthy() {
+    let dir = temp_project("mstatus-no-index");
+    let root = dir.to_string_lossy().into_owned();
+    fs::create_dir_all(dir.join(".claude/agent-memory/tech-ui")).unwrap();
+
+    let status = agent_memory_status(root, "tech-ui.md".to_string()).unwrap();
+    assert!(status.dir_exists);
+    assert!(!status.index_exists);
+    assert!(!status.healthy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn memory_status_zero_byte_index_is_unhealthy() {
+    let dir = temp_project("mstatus-zero-byte");
+    let root = dir.to_string_lossy().into_owned();
+    let mem_dir = dir.join(".claude/agent-memory/tech-ui");
+    fs::create_dir_all(&mem_dir).unwrap();
+    fs::write(mem_dir.join("MEMORY.md"), "").unwrap();
+
+    let status = agent_memory_status(root, "tech-ui.md".to_string()).unwrap();
+    assert!(status.dir_exists);
+    assert!(status.index_exists);
+    assert_eq!(status.index_bytes, 0);
+    assert!(!status.healthy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn memory_status_non_utf8_index_is_unhealthy() {
+    let dir = temp_project("mstatus-non-utf8");
+    let root = dir.to_string_lossy().into_owned();
+    let mem_dir = dir.join(".claude/agent-memory/tech-ui");
+    fs::create_dir_all(&mem_dir).unwrap();
+    fs::write(mem_dir.join("MEMORY.md"), [0xFF, 0xFE, 0x00, 0xFF]).unwrap();
+
+    let status = agent_memory_status(root, "tech-ui.md".to_string()).unwrap();
+    assert!(status.index_exists);
+    assert!(status.index_bytes > 0);
+    assert!(!status.healthy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn memory_status_real_index_is_healthy() {
+    let dir = temp_project("mstatus-healthy");
+    let root = dir.to_string_lossy().into_owned();
+    agent_memory_ensure(root.clone(), "tech-ui.md".to_string()).unwrap();
+
+    let status = agent_memory_status(root, "tech-ui.md".to_string()).unwrap();
+    assert!(status.dir_exists);
+    assert!(status.index_exists);
+    assert!(status.index_bytes > 0);
+    assert!(status.healthy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn memory_status_rejects_path_traversal_file_name() {
+    let dir = temp_project("mstatus-traversal");
+    let root = dir.to_string_lossy().into_owned();
+    for bad in ["../evil.md", "..\\evil.md", "a/b.md"] {
+        let err = agent_memory_status(root.clone(), bad.to_string()).unwrap_err();
+        assert!(!err.is_empty(), "should have rejected {bad:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_avatar_set: format + size validation ----------------------------
+
+#[test]
+fn avatar_set_accepts_minimal_4_byte_png_header() {
+    let dir = temp_project("avatar-png-minimal");
+    let root = dir.to_string_lossy().into_owned();
+    let src = temp_source_file("png-4b", &[0x89, 0x50, 0x4E, 0x47]);
+
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let avatar =
+        agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+            .unwrap();
+
+    assert_eq!(avatar.rel_path, ".cowtext/avatars/tech-ui.png");
+    assert_eq!(avatar.bytes, 4);
+    assert!(avatar.data_url.starts_with("data:image/png;base64,"));
+    assert!(dir.join(".cowtext/avatars/tech-ui.png").is_file());
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_rejects_txt_content_renamed_to_png_extension() {
+    let dir = temp_project("avatar-bad-magic");
+    let root = dir.to_string_lossy().into_owned();
+    // The SOURCE file's own name ends in .png but its bytes are plain text —
+    // detect_image_ext must go by magic bytes, never by extension.
+    let src_path =
+        std::env::temp_dir().join(format!("cowtext-avatar-src-badmagic-{}.png", std::process::id()));
+    fs::write(&src_path, b"just some text, not an image").unwrap();
+
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let err = agent_avatar_set(root, created.file_name, src_path.to_string_lossy().into_owned())
+        .unwrap_err();
+    assert!(err.contains("unsupported image format"), "got: {err}");
+    assert!(!dir.join(".cowtext/avatars").exists());
+
+    let _ = fs::remove_file(&src_path);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_rejects_oversize_image() {
+    let dir = temp_project("avatar-oversize");
+    let root = dir.to_string_lossy().into_owned();
+    let bytes = png_bytes(600 * 1024); // 600 KB, valid magic bytes
+    let src = temp_source_file("oversize", &bytes);
+
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let err = agent_avatar_set(root, created.file_name, src.to_string_lossy().into_owned())
+        .unwrap_err();
+    assert_eq!(err, "image too large (max 512 KB)");
+    assert!(!dir.join(".cowtext/avatars").exists());
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_rejects_oversize_image_via_stat_before_reading_bytes() {
+    // A sparse file: logical length far over the cap, but only a few real
+    // bytes actually written. If `agent_avatar_set` read the whole file
+    // before checking the cap (tester audit #4), this would try to
+    // allocate ~2 GB; stat-first rejects it near-instantly regardless of
+    // how large the file claims to be.
+    use std::io::{Seek, SeekFrom, Write};
+    let dir = temp_project("avatar-oversize-sparse");
+    let root = dir.to_string_lossy().into_owned();
+    let src = std::env::temp_dir()
+        .join(format!("cowtext-avatar-src-sparse-{}.bin", std::process::id()));
+    {
+        let mut f = fs::File::create(&src).unwrap();
+        f.write_all(&[0x89, 0x50, 0x4E, 0x47]).unwrap(); // valid PNG magic at start
+        f.seek(SeekFrom::Start(2 * 1024 * 1024 * 1024)).unwrap(); // 2 GB
+        f.write_all(&[0]).unwrap();
+    }
+
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let started = std::time::Instant::now();
+    let err = agent_avatar_set(root, created.file_name, src.to_string_lossy().into_owned())
+        .unwrap_err();
+    assert_eq!(err, "image too large (max 512 KB)");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "stat-first rejection should be near-instant, never reading the whole file"
+    );
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_accepts_jpeg_webp_gif() {
+    let dir = temp_project("avatar-formats");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Multi".to_string(), None).unwrap();
+
+    let jpeg_src = temp_source_file("jpeg", &jpeg_bytes(16));
+    let avatar = agent_avatar_set(
+        root.clone(),
+        created.file_name.clone(),
+        jpeg_src.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    assert_eq!(avatar.rel_path, ".cowtext/avatars/multi.jpg");
+    let _ = fs::remove_file(&jpeg_src);
+
+    agent_avatar_clear(root.clone(), created.file_name.clone()).unwrap();
+
+    let webp_src = temp_source_file("webp", &webp_bytes());
+    let avatar = agent_avatar_set(
+        root.clone(),
+        created.file_name.clone(),
+        webp_src.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    assert_eq!(avatar.rel_path, ".cowtext/avatars/multi.webp");
+    let _ = fs::remove_file(&webp_src);
+
+    agent_avatar_clear(root.clone(), created.file_name.clone()).unwrap();
+
+    let gif_src = temp_source_file("gif", &gif_bytes());
+    let avatar =
+        agent_avatar_set(root.clone(), created.file_name, gif_src.to_string_lossy().into_owned())
+            .unwrap();
+    assert_eq!(avatar.rel_path, ".cowtext/avatars/multi.gif");
+    let _ = fs::remove_file(&gif_src);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_missing_source_path_errs() {
+    let dir = temp_project("avatar-missing-source");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let missing = std::env::temp_dir().join("cowtext-avatar-does-not-exist.png");
+
+    let err = agent_avatar_set(root, created.file_name, missing.to_string_lossy().into_owned())
+        .unwrap_err();
+    assert!(!err.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_set_rejects_path_traversal_file_name() {
+    let dir = temp_project("avatar-traversal");
+    let root = dir.to_string_lossy().into_owned();
+    let src = temp_source_file("traversal", &png_bytes(8));
+
+    for bad in ["../evil.md", "..\\evil.md", "a/b.md"] {
+        let err =
+            agent_avatar_set(root.clone(), bad.to_string(), src.to_string_lossy().into_owned())
+                .unwrap_err();
+        assert!(!err.is_empty(), "should have rejected {bad:?}");
+    }
+    assert!(!dir.join(".cowtext").exists());
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- setting a new format over an existing one replaces, never doubles ----
+
+#[test]
+fn avatar_set_jpeg_over_existing_png_leaves_exactly_one_file() {
+    let dir = temp_project("avatar-replace");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+
+    let png_src = temp_source_file("replace-png", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), png_src.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(dir.join(".cowtext/avatars/tech-ui.png").is_file());
+
+    let jpeg_src = temp_source_file("replace-jpeg", &jpeg_bytes(8));
+    agent_avatar_set(root, created.file_name, jpeg_src.to_string_lossy().into_owned()).unwrap();
+
+    assert!(!dir.join(".cowtext/avatars/tech-ui.png").exists());
+    assert!(dir.join(".cowtext/avatars/tech-ui.jpg").is_file());
+    let entries: Vec<_> = fs::read_dir(dir.join(".cowtext/avatars")).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "exactly one avatar file must remain");
+
+    let _ = fs::remove_file(&png_src);
+    let _ = fs::remove_file(&jpeg_src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_avatar_read ------------------------------------------------------
+
+#[test]
+fn avatar_read_returns_none_when_absent() {
+    let dir = temp_project("avatar-read-none");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+
+    let result = agent_avatar_read(root, created.file_name).unwrap();
+    assert!(result.is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_read_returns_data_url_after_set() {
+    let dir = temp_project("avatar-read-some");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let src = temp_source_file("read-some", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+
+    let result = agent_avatar_read(root, created.file_name).unwrap();
+    assert!(result.unwrap().starts_with("data:image/png;base64,"));
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_read_returns_none_for_broken_directory_entry_never_errs() {
+    // A directory sitting where an avatar file would be (e.g. from external
+    // tampering) must never surface as an Err — the rail must still render.
+    let dir = temp_project("avatar-read-broken");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    fs::create_dir_all(dir.join(".cowtext/avatars/tech-ui.png")).unwrap();
+
+    let result = agent_avatar_read(root, created.file_name).unwrap();
+    assert!(result.is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_read_rejects_path_traversal_file_name() {
+    let dir = temp_project("avatar-read-traversal");
+    let root = dir.to_string_lossy().into_owned();
+    for bad in ["../evil.md", "..\\evil.md", "a/b.md"] {
+        let err = agent_avatar_read(root.clone(), bad.to_string()).unwrap_err();
+        assert!(!err.is_empty(), "should have rejected {bad:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_avatar_clear -----------------------------------------------------
+
+#[test]
+fn avatar_clear_removes_file_and_is_idempotent() {
+    let dir = temp_project("avatar-clear");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let src = temp_source_file("clear", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(dir.join(".cowtext/avatars/tech-ui.png").is_file());
+
+    agent_avatar_clear(root.clone(), created.file_name.clone()).unwrap();
+    assert!(!dir.join(".cowtext/avatars/tech-ui.png").exists());
+
+    // Clearing again (nothing left to clear) is still Ok.
+    agent_avatar_clear(root, created.file_name).unwrap();
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn avatar_clear_on_agent_with_no_avatar_is_ok() {
+    let dir = temp_project("avatar-clear-noop");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    agent_avatar_clear(root, created.file_name).unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- avatar follows agent_rename / agent_delete ----------------------------
+
+#[test]
+fn agent_rename_moves_avatar_to_new_stem() {
+    let dir = temp_project("avatar-rename");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Old Name".to_string(), None).unwrap();
+    let src = temp_source_file("rename", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(dir.join(".cowtext/avatars/old-name.png").is_file());
+
+    let new_file_name =
+        agent_rename(root.clone(), created.file_name, "New Name".to_string()).unwrap();
+    assert_eq!(new_file_name, "new-name.md");
+
+    assert!(!dir.join(".cowtext/avatars/old-name.png").exists());
+    assert!(dir.join(".cowtext/avatars/new-name.png").is_file());
+
+    let moved = agent_avatar_read(root, new_file_name).unwrap();
+    assert!(moved.unwrap().starts_with("data:image/png;base64,"));
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_rename_with_no_avatar_still_succeeds() {
+    let dir = temp_project("avatar-rename-none");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Old Name".to_string(), None).unwrap();
+
+    let new_file_name = agent_rename(root, created.file_name, "New Name".to_string()).unwrap();
+    assert_eq!(new_file_name, "new-name.md");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_rename_to_same_stem_case_change_keeps_avatar_intact() {
+    let dir = temp_project("avatar-rename-case");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Same".to_string(), None).unwrap();
+    let src = temp_source_file("rename-case", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+
+    // Renaming to the exact same slug is a documented harmless no-op
+    // (agent_rename_to_identical_name_is_a_harmless_noop) — the avatar must
+    // survive it untouched, not get deleted by its own sibling-clear step.
+    agent_rename(root.clone(), created.file_name.clone(), "Same".to_string()).unwrap();
+    assert!(dir.join(".cowtext/avatars/same.png").is_file());
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_delete_removes_avatar() {
+    let dir = temp_project("avatar-delete");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    let src = temp_source_file("delete", &png_bytes(8));
+    agent_avatar_set(root.clone(), created.file_name.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(dir.join(".cowtext/avatars/tech-ui.png").is_file());
+
+    agent_delete(root, created.file_name).unwrap();
+    assert!(!dir.join(".cowtext/avatars/tech-ui.png").exists());
+
+    let _ = fs::remove_file(&src);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_delete_with_no_avatar_still_succeeds() {
+    let dir = temp_project("avatar-delete-none");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Tech Ui".to_string(), None).unwrap();
+    agent_delete(root, created.file_name).unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- agent_save -> AgentDoc --------------------------------------------------
+
+#[test]
+fn agent_save_returns_doc_matching_bytes_on_disk() {
+    let dir = temp_project("save-returns-doc");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Save Returns".to_string(), None).unwrap();
+
+    let mut fields = created.fields.clone();
+    fields.description = Some("Returned doc test.".to_string());
+    let returned = agent_save(
+        root.clone(),
+        created.file_name.clone(),
+        Some(fields),
+        Some("# Save Returns\n\nBody after save.\n".to_string()),
+        None,
+    )
+    .unwrap();
+
+    let on_disk = fs::read_to_string(agents_dir(&dir).join(&created.file_name)).unwrap();
+    assert_eq!(returned.content, on_disk, "returned AgentDoc.content must equal the bytes on disk");
+    assert_eq!(returned.fields.description.as_deref(), Some("Returned doc test."));
+    assert_eq!(returned.body, "# Save Returns\n\nBody after save.\n");
+    assert_eq!(returned.file_name, created.file_name);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn agent_save_raw_content_returns_doc_matching_disk() {
+    let dir = temp_project("save-raw-returns-doc");
+    let root = dir.to_string_lossy().into_owned();
+    let created = agent_create(root.clone(), "Raw Save".to_string(), None).unwrap();
+
+    let raw = "not frontmatter at all, just text\n".to_string();
+    let returned =
+        agent_save(root, created.file_name, None, None, Some(raw.clone())).unwrap();
+
+    // `raw_content` is a whole-file overwrite regardless of what it contains
+    // — round-trip byte-identity is the contract here, not `raw`'s value
+    // (frontmatter.rs only sets `raw: true` on an *attempted-but-broken*
+    // fence; plain unfenced text parses as a normal, non-raw doc).
+    assert_eq!(returned.content, raw);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- save/rename race: AGENT_FS lock (WO11_CONTRACT.md §11, Amendment 2) ---
+
+#[test]
+fn agent_rename_during_save_never_resurrects_the_old_file() {
+    // Inverts the pre-fix repro (previously
+    // `agent_rename_landing_mid_save_can_resurrect_the_old_file_as_an_orphan`)
+    // into proof of the fix. Real concurrent threads calling `agent_save`
+    // and `agent_rename` on the same agent can no longer interleave at
+    // all: both take `AGENT_FS` for their entire body, so whichever call
+    // wins the race runs to completion before the other's critical section
+    // even starts. That makes exactly two orderings possible, and both are
+    // safe:
+    //   - save wins: it patches the file in place, THEN rename moves the
+    //     patched file to the new name — the edit survives under the new
+    //     filename.
+    //   - rename wins: the file is gone by the time save's own
+    //     `path.is_file()` check runs, so save fails cleanly with
+    //     "No such agent" — exactly the job that check was always meant to
+    //     do, now that the lock actually defends its result.
+    // Neither ordering ever resurrects the old filename as an orphan. Runs
+    // many trials since real thread scheduling picks the winner
+    // nondeterministically — the invariant must hold on every interleaving,
+    // not just a lucky one.
+    for trial in 0..25 {
+        let dir = temp_project(&format!("save-rename-fixed-{trial}"));
+        let root = dir.to_string_lossy().into_owned();
+        let created = agent_create(root.clone(), "Old Name".to_string(), None).unwrap();
+        let old_file_name = created.file_name.clone();
+        let old_path = agents_dir(&dir).join(&old_file_name);
+
+        let root_save = root.clone();
+        let root_rename = root.clone();
+        let save_file_name = old_file_name.clone();
+        let rename_file_name = old_file_name.clone();
+
+        let save_thread = std::thread::spawn(move || {
+            let fields = FmFields {
+                description: Some("Edit racing a rename.".to_string()),
+                ..Default::default()
+            };
+            agent_save(root_save, save_file_name, Some(fields), None, None)
+        });
+        let rename_thread = std::thread::spawn(move || {
+            agent_rename(root_rename, rename_file_name, "New Name".to_string())
+        });
+
+        let save_result = save_thread.join().unwrap();
+        let rename_result = rename_thread.join().unwrap();
+
+        // Renaming an agent must always succeed — a racing save's own guard
+        // is released before rename's critical section can even start, so
+        // rename is never blocked mid-way or left half-done.
+        let new_file_name = rename_result.unwrap();
+        assert_eq!(new_file_name, "new-name.md");
+
+        // The critical invariant: the pre-rename filename is never
+        // resurrected as an orphan.
+        assert!(
+            !old_path.exists(),
+            "trial {trial}: old path must never be resurrected as an orphan"
+        );
+        if let Err(e) = &save_result {
+            assert!(
+                e.contains("No such agent"),
+                "trial {trial}: a losing save must fail cleanly, not some other error: {e}"
+            );
+        }
+
+        // Exactly one agent file exists in the directory — never a stray
+        // duplicate left behind by a resurrected orphan.
+        let remaining: Vec<_> = fs::read_dir(agents_dir(&dir)).unwrap().flatten().collect();
+        assert_eq!(remaining.len(), 1, "trial {trial}: exactly one agent file must remain");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn skill_rename_during_save_never_resurrects_the_old_skill_dir() {
+    // Twin of `agent_rename_during_save_never_resurrects_the_old_file` —
+    // `save_doc` is shared between `agent_save` and `skill_save`, and
+    // `AGENT_FS` guards `skill_rename`/`skill_save` too (WO11_CONTRACT.md
+    // §11.2 names both surfaces), so the same race and the same fix apply
+    // to skills.
+    for trial in 0..25 {
+        let dir = temp_project(&format!("skill-save-rename-fixed-{trial}"));
+        let root = dir.to_string_lossy().into_owned();
+        let created = skill_create(root.clone(), "Old Skill".to_string()).unwrap();
+        let old_dir_name = created.dir_name.clone();
+        let old_path = skills_dir(&dir).join(&old_dir_name);
+
+        let root_save = root.clone();
+        let root_rename = root.clone();
+        let save_dir_name = old_dir_name.clone();
+        let rename_dir_name = old_dir_name.clone();
+
+        let save_thread = std::thread::spawn(move || {
+            let fields = FmFields {
+                description: Some("Edit racing a rename.".to_string()),
+                ..Default::default()
+            };
+            skill_save(root_save, save_dir_name, Some(fields), None, None)
+        });
+        let rename_thread = std::thread::spawn(move || {
+            skill_rename(root_rename, rename_dir_name, "New Skill".to_string())
+        });
+
+        let save_result = save_thread.join().unwrap();
+        let rename_result = rename_thread.join().unwrap();
+
+        let new_dir_name = rename_result.unwrap();
+        assert_eq!(new_dir_name, "new-skill");
+
+        assert!(
+            !old_path.exists(),
+            "trial {trial}: old skill dir must never be resurrected as an orphan"
+        );
+        if let Err(e) = &save_result {
+            assert!(
+                e.contains("No such skill"),
+                "trial {trial}: a losing save must fail cleanly, not some other error: {e}"
+            );
+        }
+
+        let remaining: Vec<_> = fs::read_dir(skills_dir(&dir)).unwrap().flatten().collect();
+        assert_eq!(remaining.len(), 1, "trial {trial}: exactly one skill dir must remain");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -7,8 +7,9 @@
 
 import { useState } from "react";
 import { FolderOpen, Plus, Trash2, Workflow } from "lucide-react";
-import { PRODUCER_FILE, useAgentsStore, metaOrDefault, seedFor, type Selection } from "../store/agents";
-import { useGraphStore } from "../store/graph";
+import { PRODUCER_FILE, useAgentsStore, metaOrDefault, seedFor } from "../store/agents";
+import { useFocusStore } from "../canvas/types";
+import { sameRelPath, useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
 import { revealPath } from "../fs/api";
@@ -84,13 +85,14 @@ export function AgentsRailSection({ root }: { root: string }) {
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const setSelection = useGraphStore((s) => s.setSelection);
   const adoptFile = useGraphStore((s) => s.adoptFile);
+  const requestFocus = useFocusStore((s) => s.requestFocus);
   const files = useProjectStore((s) => s.files);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
 
   const nodeFor = (fileName: string) =>
-    nodes.find((n) => n.filePath === `.claude/agents/${fileName}`);
+    nodes.find((n) => sameRelPath(n.filePath, `.claude/agents/${fileName}`));
 
   // Producer always renders first (contract §4) — a real doc when
   // .claude/agents/producer.md exists, else a virtual row that materializes
@@ -105,12 +107,15 @@ export function AgentsRailSection({ root }: { root: string }) {
   };
 
   const pick = (fileName: string) => {
-    const sel: Selection = { kind: "agent", key: fileName };
-    select(sel);
     const node = nodeFor(fileName);
-    // Adopted agent → drive the normal three-way selection sync; otherwise
-    // clear the graph selection so the Inspector shows the standalone editor.
+    // Graph selection FIRST, ours second: `setSelection` clears the other
+    // panel-owning selections (WO10 item 10), so setting ours first would
+    // immediately undo it.
     setSelection(node !== undefined ? [node.id] : [], []);
+    select({ kind: "agent", key: fileName });
+    // An adopted agent lives somewhere on the canvas — ask to be shown it.
+    // GraphCanvas ignores the request when the card is already in view.
+    if (node !== undefined) requestFocus(node.id);
   };
 
   const openMenu = (e: React.MouseEvent, fileName: string, title: string) => {
@@ -223,7 +228,16 @@ export function AgentsRailSection({ root }: { root: string }) {
               </div>
               {armed === a.fileName && (
                 <ConfirmStrip
-                  label={`Delete .claude/agents/${a.fileName}?`}
+                  label={
+                    // WO11 §10 amendment — a landing agentDeleteListeners seam
+                    // (UI-D produces, UI-C consumes deleteNodes) means deleting
+                    // an on-graph agent now takes its node, edges, selection
+                    // and assemble state with it. This confirm must say so
+                    // truthfully; an off-graph agent has no node to mention.
+                    node !== undefined
+                      ? `Delete .claude/agents/${a.fileName}? Its node on the graph goes too.`
+                      : `Delete .claude/agents/${a.fileName}?`
+                  }
                   onConfirm={() => {
                     setArmed(null);
                     select({ kind: "agent", key: a.fileName });
@@ -291,8 +305,9 @@ export function SkillsRailSection({ root }: { root: string }) {
             <li key={sk.dirName}>
               <div
                 onClick={() => {
-                  select({ kind: "skill", key: sk.dirName });
+                  // Graph selection first — see the note in `pick`.
                   setSelection([], []);
+                  select({ kind: "skill", key: sk.dirName });
                 }}
                 onContextMenu={(e) => openMenu(e, sk.dirName)}
                 className={`flex h-row cursor-default items-center gap-2 px-3 ${

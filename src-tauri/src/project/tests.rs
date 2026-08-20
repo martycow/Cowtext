@@ -131,6 +131,50 @@ fn write_md_file_rejects_claude_settings_json() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ---- WO11 §12.3 item 4 / §12.7 (R2): write_md_file rejects agent paths ----
+// (Amendment 3 — the Markdown tab was a second, uncoordinated writer to
+// `.claude/agents/*.md`, racing agent_save's autosave queue across human
+// time. One writer per file: agent_save owns those, enforced here as a
+// runtime rejection, not a documented-only rule.)
+
+#[test]
+fn write_md_file_rejects_agent_paths() {
+    let dir = temp_project("agent-path-guard");
+    let root = dir.to_string_lossy().into_owned();
+    for bad in [
+        ".claude/agents/x.md",
+        ".claude\\agents\\x.md",
+        ".CLAUDE/AGENTS/X.MD",
+    ] {
+        let err = write_md_file(root.clone(), bad.into(), "# hi".into()).unwrap_err();
+        assert_eq!(err, "Use agent_save to write an agent file");
+    }
+    assert!(!dir.join(".claude/agents/x.md").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_md_file_still_allows_skills_and_ordinary_md_files() {
+    // The carve-out: skills keep the explicit-Save path (agents.rs's
+    // AGENT_FS-guarded skill_save is a different writer, not this one), and
+    // ordinary context nodes / CLAUDE.md are entirely unaffected by the new
+    // arm — it must match `.claude/agents/` specifically, not `.claude/`
+    // generally.
+    let dir = temp_project("agent-path-guard-carveout");
+    let root = dir.to_string_lossy().into_owned();
+
+    write_md_file(root.clone(), ".claude/skills/demo/SKILL.md".into(), "# demo".into()).unwrap();
+    assert!(dir.join(".claude/skills/demo/SKILL.md").is_file());
+
+    write_md_file(root.clone(), "context/notes.md".into(), "# notes".into()).unwrap();
+    assert!(dir.join("context/notes.md").is_file());
+
+    write_md_file(root, "CLAUDE.md".into(), "# CLAUDE".into()).unwrap();
+    assert!(dir.join("CLAUDE.md").is_file());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn graph_round_trip() {
     let dir = temp_project("graph");
@@ -489,7 +533,65 @@ fn v2_graph_migrates_to_v3_with_omitted_defaults() {
     }
     for e in &g.edges {
         assert_eq!(e.color, None, "color should default None for {}", e.id);
+        assert!(
+            e.waypoints.is_empty(),
+            "waypoints should default empty for {}",
+            e.id
+        );
     }
+}
+
+/// WO10 v4: a v3 graph carrying no `waypoints` migrates to v4 with the field
+/// present-but-empty, and a v3 graph that already carries one (hand-edited,
+/// or written by a newer build that a downgrade then read) keeps it verbatim.
+/// The route is layout, not semantics — losing it silently would be worse
+/// than a load error, so this pins that it survives.
+#[test]
+fn v3_graph_migrates_to_v4_preserving_edge_waypoints() {
+    // `edge` is built without the key at all when `waypoints` is None, so
+    // the "absent" case exercises serde's `default`, not a null coercion.
+    let base = |waypoints: Option<serde_json::Value>| {
+        let mut edge = json!({ "id": "e1", "source": "a", "target": "b", "kind": "imports" });
+        if let Some(w) = waypoints {
+            edge.as_object_mut().unwrap().insert("waypoints".to_string(), w);
+        }
+        json!({
+            "version": 3,
+            "projectName": "demo",
+            "nodes": [
+                { "id": "a", "title": "A", "role": "rules", "brief": "", "filePath": "context/a.md",
+                  "readOrder": 1, "pinned": false, "position": { "x": 0, "y": 0 } },
+                { "id": "b", "title": "B", "role": "task", "brief": "", "filePath": "context/b.md",
+                  "readOrder": 2, "pinned": false, "position": { "x": 400, "y": 0 } }
+            ],
+            "edges": [edge],
+            "compileTargets": ["claude"]
+        })
+        .to_string()
+    };
+
+    // Absent ⇒ empty ⇒ the automatic route.
+    let g = migrate_graph(&base(None)).unwrap();
+    assert_eq!(g.version, GRAPH_VERSION);
+    assert!(g.edges[0].waypoints.is_empty());
+
+    // Present ⇒ carried through unchanged, in order.
+    let g =
+        migrate_graph(&base(Some(json!([{ "x": 120, "y": 40 }, { "x": 120, "y": 200 }])))).unwrap();
+    assert_eq!(g.version, GRAPH_VERSION);
+    assert_eq!(
+        g.edges[0].waypoints,
+        vec![Position { x: 120, y: 40 }, Position { x: 120, y: 200 }]
+    );
+
+    // Idempotent: re-migrating the v4 serialization is a no-op.
+    let once = serialize_graph(&g);
+    let twice = serialize_graph(&migrate_graph(&once).unwrap());
+    assert_eq!(once, twice);
+    assert!(
+        once.contains("\"waypoints\""),
+        "a non-empty route must survive serialization: {once}"
+    );
 }
 
 #[test]
@@ -598,6 +700,7 @@ fn serialize_includes_v3_fields_when_set_with_sorted_meta_keys() {
             condition: None,
             note: None,
             color: Some("#ffcc00".to_string()),
+            waypoints: vec![Position { x: 10, y: 20 }, Position { x: 10, y: 40 }],
         }],
         compile_targets: vec![CompileTarget::Claude],
     };
@@ -643,6 +746,7 @@ fn serialize_sorts_nodes_and_edges_by_id() {
         condition: None,
         note: None,
         color: None,
+        waypoints: Vec::new(),
     };
     let g = BarnGraph {
         version: GRAPH_VERSION,

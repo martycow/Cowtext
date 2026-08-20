@@ -145,12 +145,23 @@ function RolePicker({ role, onChange }: { role: NodeRole; onChange: (r: NodeRole
                   }`}
                   style={active ? { borderColor: roleVar(r) } : undefined}
                 >
-                  <span className="flex items-center gap-1.5" style={{ color: roleVar(r) }}>
-                    <RoleGlyph role={r} size={13} />
-                    <span className="font-mono text-2xs uppercase tracking-wider">{r}</span>
-                  </span>
                   <span
-                    className="truncate text-2xs leading-snug text-content-secondary"
+                    className="flex w-full min-w-0 items-center gap-1.5"
+                    style={{ color: roleVar(r) }}
+                  >
+                    <RoleGlyph role={r} size={13} />
+                    <span className="min-w-0 truncate font-mono text-2xs uppercase tracking-wider">
+                      {r}
+                    </span>
+                  </span>
+                  {/* w-full + min-w-0 are what make `truncate` bind (WO10
+                      item 9). The button is `flex-col items-start`, so a
+                      bare inline child sizes to its CONTENT on the cross
+                      axis — `overflow: hidden` then has nothing to clip
+                      against and the description ran straight out past the
+                      button's edge into the neighbouring cell. */}
+                  <span
+                    className="w-full min-w-0 truncate text-2xs leading-snug text-content-secondary"
                     title={ROLE_DESCRIPTIONS[r]}
                   >
                     {ROLE_DESCRIPTIONS[r]}
@@ -351,24 +362,43 @@ export function NodeWizard({
         position: typeof initialPosition === "function" ? initialPosition() : initialPosition,
       });
       if (newId !== null && runAssemble) {
-        // Fire-and-forget, exactly like the Inspector's Assemble button —
-        // failures surface on the node card / Inspector once selected, the
-        // wizard itself has already closed by the time they could arrive.
-        await useGraphStore.getState().flushSave();
-        const s = useGraphStore.getState();
-        const graphJson = serializeGraph({
-          version: GRAPH_VERSION,
-          projectName: s.projectName,
-          nodes: s.nodes,
-          edges: s.edges,
-          compileTargets: s.compileTargets,
-        });
-        useGraphStore.getState().setAssembleStatus(newId, "queued");
-        assembleNode(root, graphJson, newId).catch(() => {
+        // F1 hardening (WO11 §2.2): this used to fire `assembleNode(...)`
+        // without awaiting it — a detached `.catch()` chain hanging off the
+        // invoke call, running independently of this async scope and of the
+        // wizard's own unmount (`onClose()` below tears down NodeWizard via
+        // GraphCanvas's `setWizardPos(null)`). A rejection or a throw inside
+        // that detached `.catch()` callback (e.g. from `setAssembleStatus`)
+        // would have become an unhandled promise rejection nothing here
+        // ever observed. Now the whole enqueue — flush, serialize, mark
+        // "queued", invoke — is awaited *inside* this same try/catch, the
+        // same shape as the two proven-safe siblings (Inspector's
+        // `AssembleSection.run`, `MemoryNodeCard.runAssemble`), so no
+        // promise from this step can escape uncaught regardless of which
+        // component (this wizard, or GraphCanvas/MemoryNodeCard rendering
+        // the new node) commits first. A failed enqueue never rethrows: the
+        // node itself was already created and selected, and the wizard
+        // still closes cleanly below either way.
+        try {
+          await useGraphStore.getState().flushSave();
+          const s = useGraphStore.getState();
+          const graphJson = serializeGraph({
+            version: GRAPH_VERSION,
+            projectName: s.projectName,
+            nodes: s.nodes,
+            edges: s.edges,
+            compileTargets: s.compileTargets,
+          });
+          // Optimistic freeze BEFORE the invoke — real "assemble://status"
+          // events (wired independently in store/events.ts, decoupled from
+          // this component's lifecycle) always win over this mark, never
+          // the reverse.
+          useGraphStore.getState().setAssembleStatus(newId, "queued");
+          await assembleNode(root, graphJson, newId);
+        } catch {
           if (useGraphStore.getState().assembleStatus[newId] === "queued") {
             useGraphStore.getState().setAssembleStatus(newId, "idle");
           }
-        });
+        }
       }
       onClose();
     })().catch((e: unknown) => {

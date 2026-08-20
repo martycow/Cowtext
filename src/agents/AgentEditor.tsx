@@ -1,14 +1,20 @@
-// Right pane of AgentsModal for an agent selection (contract §7.3). Identity
-// header (avatar, rename, nickname, reveal), fields grid bound to the draft,
-// priority/influence bound to the sidecar meta (autosaved, debounced by the
-// store), skills-attach checklist, Duties body editor, explicit Save. When
-// the doc is `raw` the fields grid is replaced by one whole-file editor.
+// Right pane of the agent rail / Inspector for an agent selection (contract
+// §7.3, amended WO11_CONTRACT.md §5.7/§5.11). Identity header (avatar,
+// rename, nickname, reveal), fields grid bound to the draft, priority/
+// influence bound to the sidecar meta (autosaved, debounced by the store),
+// skills-attach checklist, Duties body editor. There is NO Save button
+// (WO11 D4): every field edit for an agent autosaves through
+// `agentEdit`/`attachSkill`/`detachSkill`, debounced 500 ms per file. When
+// the doc is `raw` the fields grid is replaced by one whole-file editor —
+// the identity header, avatar control and Memory control stay available
+// either way, since none of them depend on frontmatter having parsed.
 
-import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Minus, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FolderOpen, ImagePlus, Minus, Plus, RefreshCw, RotateCw, Trash2, X } from "lucide-react";
 import {
   draftKey,
-  isDirty,
+  flushAgentSave,
   metaOrDefault,
   seedFor,
   usedBy,
@@ -16,16 +22,17 @@ import {
   type Selection,
 } from "../store/agents";
 import type { AgentDoc, FmFields } from "./types";
+import { agentMemoryStatus, type AgentMemoryStatus } from "./api";
 import { revealPath } from "../fs/api";
 import { CodeMirrorEditor } from "../inspector/CodeMirrorEditor";
 import { AgentAvatar } from "./AgentAvatar";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
-import { companyFor, MODEL_CATALOG, MODEL_NOTES } from "./modelCatalog";
-
-const SAVE_BTN =
-  "h-control-sm flex-none rounded bg-accent px-3 text-xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled";
+import { companyFor, isAliasModel, MODEL_CATALOG, MODEL_NOTES } from "./modelCatalog";
+import { ToolPicker } from "./ToolPicker";
+import { ContextMenu } from "../ui/ContextMenu";
+import type { MenuItem } from "../ui/menuTypes";
 
 export function FieldLabel({ children }: { children: string }) {
   return (
@@ -139,7 +146,12 @@ export function ChipEditor({
  *  Company is INFERRED from the stored value every time this remounts (the
  *  caller keys it on the doc identity, same idiom as the CodeMirror
  *  `docKey`), so a value picked outside the catalog (hand-edited frontmatter)
- *  still lands on the right step instead of silently resetting. */
+ *  still lands on the right step instead of silently resetting.
+ *
+ *  WO11 D3: the bare aliases (`opus`/`sonnet`/`haiku`) no longer appear as
+ *  pickable rows in the Anthropic list, but a file that already has one on
+ *  disk must keep showing it — as a disabled, appended option — rather than
+ *  going blank or silently swapping to a different model. */
 export function ModelPicker({
   value,
   disabled,
@@ -161,6 +173,7 @@ export function ModelPicker({
 
   const effectiveValue = value ?? companyDef.models[0];
   const note = MODEL_NOTES[effectiveValue];
+  const legacyAlias = !isOther && value !== null && isAliasModel(value) && !companyDef.models.includes(value);
 
   return (
     <div className="flex flex-col gap-1">
@@ -198,6 +211,11 @@ export function ModelPicker({
                 {m}
               </option>
             ))}
+            {legacyAlias && value !== null && (
+              <option value={value} disabled title={MODEL_NOTES[value]}>
+                {value} (legacy alias)
+              </option>
+            )}
           </select>
         )}
       </div>
@@ -254,30 +272,40 @@ function SkillsChecklist({
   );
 }
 
+/** WO11 D2 fix: which of the four unhealthy shapes a memory index is in,
+ *  read straight off the `agent_memory_status` probe — never inferred from
+ *  the project scan (`useProjectStore.files` cannot see `.claude/`). */
+function memoryReason(status: AgentMemoryStatus): string {
+  if (!status.dirExists) return "no memory folder";
+  if (!status.indexExists) return "no MEMORY.md";
+  if (status.indexBytes === 0) return "index is empty";
+  return "index is not valid UTF-8";
+}
+
 export function AgentEditor({
   root,
   doc,
   disabled,
-  onRequestDelete,
-  onSave,
 }: {
   root: string;
   doc: AgentDoc;
   disabled: boolean;
-  onRequestDelete: () => void;
-  /** Routes through AgentsModal's phase machine (busy lock) so a row switch
-   *  mid-save can't raise a confirmDiscard sheet for this doc — see contract
-   *  §7.3 and AgentsModal's `doSave`. */
-  onSave: () => Promise<string | null>;
 }) {
   const sel: Selection = { kind: "agent", key: doc.fileName };
   const rawDraft = useAgentsStore((s) => s.drafts[draftKey(sel)]);
   const meta = useAgentsStore((s) => s.meta);
-  const dirty = useAgentsStore((s) => isDirty(s, sel));
-  const updateDraft = useAgentsStore((s) => s.updateDraft);
+  const agentEdit = useAgentsStore((s) => s.agentEdit);
+  const retryAgentSave = useAgentsStore((s) => s.retryAgentSave);
+  const saveState = useAgentsStore((s) => s.agentSaveState[doc.fileName] ?? "idle");
+  const saveErr = useAgentsStore((s) => s.agentSaveErrors[doc.fileName] ?? null);
+  const reloadNonce = useAgentsStore((s) => s.reloadNonce[doc.fileName] ?? 0);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const renameSelected = useAgentsStore((s) => s.renameSelected);
   const ensureMemory = useAgentsStore((s) => s.ensureMemory);
+  const avatars = useAgentsStore((s) => s.avatars);
+  const loadAvatar = useAgentsStore((s) => s.loadAvatar);
+  const setAvatarImage = useAgentsStore((s) => s.setAvatarImage);
+  const clearAvatarImage = useAgentsStore((s) => s.clearAvatarImage);
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const files = useProjectStore((s) => s.files);
@@ -287,33 +315,57 @@ export function AgentEditor({
   const m = metaOrDefault(meta, doc.fileName);
   const memoryStem = doc.fileName.replace(/\.md$/i, "");
   const memoryPath = `.claude/agent-memory/${memoryStem}/`;
+  const avatarSrc = avatars[doc.fileName] ?? null;
 
   const [nameDraft, setNameDraft] = useState(displayName);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [gen, setGen] = useState(0);
-  const prevContent = useRef(doc.content);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarMenuAnchor, setAvatarMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [memStatus, setMemStatus] = useState<AgentMemoryStatus | null>(null);
+  const [memoryActionError, setMemoryActionError] = useState<string | null>(null);
+  const avatarBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Selection changed to a different file — resync locals and force the
-  // editor to rebuild (§7.3 docKey idiom).
+  // Selection changed to a different file — resync locals.
   useEffect(() => {
     setNameDraft(displayName);
     setRenameError(null);
     setRevealError(null);
-    setSaveError(null);
-    setGen((g) => g + 1);
+    setAvatarError(null);
   }, [doc.fileName, displayName]);
 
+  // WO11 D4 (§5.9) — "agent selection change" is one of the flush points:
+  // whatever autosave is pending for the file we're LEAVING must be kicked
+  // off rather than left to the timer alone. Fires on fileName change and
+  // on unmount (covers the Inspector switching away entirely).
   useEffect(() => {
-    if (doc.content !== prevContent.current) {
-      prevContent.current = doc.content;
-      setGen((g) => g + 1);
-    }
-  }, [doc.content]);
+    return () => {
+      flushAgentSave();
+    };
+  }, [doc.fileName]);
+
+  // WO11 D2 (§5.5) — source of truth is the read-only probe, re-run whenever
+  // the selected file changes and after every Fix/action, NEVER inferred
+  // from the project scan.
+  const refreshMemoryStatus = useCallback(() => {
+    void agentMemoryStatus(root, doc.fileName)
+      .then((status) => setMemStatus(status))
+      .catch((e: unknown) => setMemoryActionError(String(e)));
+  }, [root, doc.fileName]);
+
+  useEffect(() => {
+    setMemStatus(null);
+    setMemoryActionError(null);
+    refreshMemoryStatus();
+  }, [refreshMemoryStatus]);
+
+  // WO11 G6 — lazy fetch, cached in the store; a no-op once cached.
+  useEffect(() => {
+    void loadAvatar(doc.fileName);
+  }, [doc.fileName, loadAvatar]);
 
   // No draft exists until the first edit (store lazily creates one on
-  // updateDraft/attachSkill/detachSkill) — fall back to the saved doc so a
+  // agentEdit/attachSkill/detachSkill) — fall back to the saved doc so a
   // freshly-selected, untouched file still renders its real content.
   const draft = rawDraft ?? { fields: doc.fields, body: doc.body, rawContent: doc.content, raw: doc.raw };
 
@@ -330,28 +382,96 @@ export function AgentEditor({
   };
 
   const patchFields = (patch: Partial<FmFields>) => {
-    updateDraft(sel, { fields: { ...draft.fields, ...patch } });
+    agentEdit(doc.fileName, { fields: { ...draft.fields, ...patch } });
   };
 
-  const doEnsureMemory = () => {
-    setSaveError(null);
+  const doFixMemory = () => {
+    setMemoryActionError(null);
     void ensureMemory(doc.fileName).then((err) => {
-      if (err !== null) setSaveError(err);
+      if (err !== null) setMemoryActionError(err);
+      else refreshMemoryStatus();
     });
   };
 
-  const doSave = () => {
-    setSaveError(null);
-    void onSave().then((err) => {
-      if (err !== null) setSaveError(err);
+  const doRevealMemory = () => {
+    if (memStatus === null) return;
+    setMemoryActionError(null);
+    void revealPath(root, memStatus.indexRelPath).catch((e: unknown) => setMemoryActionError(String(e)));
+  };
+
+  const openAvatarMenu = () => {
+    if (disabled) return;
+    const rect = avatarBtnRef.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    setAvatarMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
+  };
+
+  const doUploadAvatar = () => {
+    void open({
+      multiple: false,
+      title: "Choose an avatar image",
+      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+    }).then((picked) => {
+      if (typeof picked !== "string") return;
+      setAvatarError(null);
+      void setAvatarImage(doc.fileName, picked).then((err) => {
+        if (err !== null) setAvatarError(err);
+      });
     });
   };
+
+  const doResetAvatarSeed = () => {
+    updateMeta(doc.fileName, { avatarSeed: Math.random().toString(36).slice(2) });
+  };
+
+  const doRemoveAvatarImage = () => {
+    setAvatarError(null);
+    void clearAvatarImage(doc.fileName).then((err) => {
+      if (err !== null) setAvatarError(err);
+    });
+  };
+
+  const avatarMenuItems: MenuItem[] = [
+    { kind: "item", id: "upload", label: "Upload image…", icon: ImagePlus, onSelect: doUploadAvatar },
+    { kind: "item", id: "reset-seed", label: "Reset seed", icon: RefreshCw, onSelect: doResetAvatarSeed },
+    ...(avatarSrc !== null
+      ? [
+          {
+            kind: "item" as const,
+            id: "remove",
+            label: "Remove image",
+            icon: Trash2,
+            danger: true,
+            onSelect: doRemoveAvatarImage,
+          },
+        ]
+      : []),
+  ];
+
+  const docKey = `${doc.fileName}:${reloadNonce}`;
 
   return (
     <div className="flex flex-col gap-4 p-4">
       {/* Identity header */}
       <div className="flex items-start gap-3">
-        <AgentAvatar seed={seedFor(meta, doc.fileName)} size={44} />
+        <button
+          ref={avatarBtnRef}
+          type="button"
+          onClick={openAvatarMenu}
+          disabled={disabled}
+          title="Change avatar"
+          className="flex-none rounded-sm outline-none transition-opacity duration-fast hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <AgentAvatar seed={seedFor(meta, doc.fileName)} size={44} src={avatarSrc} />
+        </button>
+        {avatarMenuAnchor !== null && (
+          <ContextMenu
+            x={avatarMenuAnchor.x}
+            y={avatarMenuAnchor.y}
+            items={avatarMenuItems}
+            onClose={() => setAvatarMenuAnchor(null)}
+          />
+        )}
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <input
             value={nameDraft}
@@ -408,6 +528,73 @@ export function AgentEditor({
       {revealError !== null && (
         <p className="font-mono text-xs text-danger-text">{revealError}</p>
       )}
+      {avatarError !== null && (
+        <p className="font-mono text-xs text-danger-text">{avatarError}</p>
+      )}
+
+      {/* WO11 D4 — the failure surface for the per-keystroke autosave. A
+          failed save keeps the draft (nothing is lost); Retry re-attempts
+          the exact current draft, bypassing the debounce. Rendered here,
+          above the raw/structured split, so it is visible in BOTH branches —
+          fixing D2's second, smaller defect (the old error only rendered
+          deep inside the structured branch). */}
+      {saveState === "error" && (
+        <div className="flex items-center gap-2 rounded border border-amber-border bg-amber-surface px-2.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-amber-text">
+            {saveErr ?? "Autosave failed"}
+          </span>
+          <button
+            type="button"
+            onClick={() => retryAgentSave(doc.fileName)}
+            disabled={disabled}
+            className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-amber-border bg-surface-2 px-2 text-2xs text-amber-text transition-colors duration-fast hover:bg-amber-surface disabled:text-content-disabled"
+          >
+            <RotateCw size={11} strokeWidth={1.5} />
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* WO11 D2 — memory control, unconditional (not gated on doc.raw): an
+          agent whose frontmatter fails to parse still has a memory folder
+          concept, and Marty's "does nothing" repro was on a healthy agent,
+          not specifically a broken one. */}
+      <div>
+        <FieldLabel>Memory</FieldLabel>
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary">
+            {memStatus?.dirRelPath ?? memoryPath}
+          </span>
+          {memStatus !== null &&
+            (memStatus.healthy ? (
+              <button
+                type="button"
+                onClick={doRevealMemory}
+                disabled={disabled}
+                className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled"
+              >
+                <FolderOpen size={12} strokeWidth={1.5} />
+                Reveal in Explorer
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={doFixMemory}
+                disabled={disabled}
+                title={memoryReason(memStatus)}
+                className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-amber-border bg-amber-surface px-2 text-xs text-amber-text transition-colors duration-fast hover:border-amber disabled:text-content-disabled"
+              >
+                Fix
+              </button>
+            ))}
+        </div>
+        {memStatus !== null && !memStatus.healthy && (
+          <p className="mt-1 text-2xs text-content-muted">{memoryReason(memStatus)}</p>
+        )}
+        {memoryActionError !== null && (
+          <p className="mt-1 font-mono text-xs text-danger-text">{memoryActionError}</p>
+        )}
+      </div>
 
       {doc.raw ? (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -416,25 +603,15 @@ export function AgentEditor({
               {doc.parseError}
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-content-muted">
-              This file must be edited as raw text — the fields grid is unavailable.
-            </span>
-            <div className="flex-1" />
-            {dirty && (
-              <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" title="Unsaved changes" />
-            )}
-            <button onClick={doSave} disabled={!dirty || disabled} className={SAVE_BTN}>
-              Save
-            </button>
-          </div>
-          {saveError !== null && <p className="font-mono text-xs text-danger-text">{saveError}</p>}
+          <p className="text-xs text-content-muted">
+            This file must be edited as raw text — the fields grid is unavailable.
+          </p>
           <div className="h-[360px] min-h-0 rounded border border-border-subtle bg-surface-inset">
             <CodeMirrorEditor
-              docKey={`${doc.fileName}:${gen}`}
+              docKey={docKey}
               value={draft.rawContent}
-              onChange={(v) => updateDraft(sel, { rawContent: v })}
-              onSave={doSave}
+              onChange={(v) => agentEdit(doc.fileName, { rawContent: v })}
+              onSave={() => retryAgentSave(doc.fileName)}
             />
           </div>
         </div>
@@ -491,10 +668,15 @@ export function AgentEditor({
             </div>
             <div className="col-span-2">
               <FieldLabel>Tools</FieldLabel>
-              <ChipEditor
+              {/* WO10 item 11 — a dropdown over agents/toolCatalog.ts, not
+                  free text. Tool names are case-sensitive and a misspelled
+                  one is dropped silently by Claude Code, so "type it and
+                  hope" was the wrong control for this field. Free text
+                  survives as the popup's bottom row, because MCP tool names
+                  are per-installation and cannot be enumerated. */}
+              <ToolPicker
                 items={draft.fields.tools}
                 disabled={disabled}
-                placeholder="Read, Grep, Glob…"
                 onChange={(items) => patchFields({ tools: items })}
               />
             </div>
@@ -509,56 +691,19 @@ export function AgentEditor({
             <SkillsChecklist fileName={doc.fileName} draftSkills={draft.fields.skills} disabled={disabled} />
           </div>
 
-          <div>
-            <FieldLabel>Memory</FieldLabel>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-content-secondary">{memoryPath}</span>
-              <button
-                type="button"
-                onClick={doEnsureMemory}
-                disabled={disabled}
-                className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled"
-              >
-                Create memory folder
-              </button>
-            </div>
-          </div>
-
           <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <FieldLabel>Duties</FieldLabel>
-              <div className="flex-1" />
-              {dirty && (
-                <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" title="Unsaved changes" />
-              )}
-              <button onClick={doSave} disabled={!dirty || disabled} className={SAVE_BTN}>
-                Save
-              </button>
-            </div>
-            {saveError !== null && (
-              <p className="font-mono text-xs text-danger-text">{saveError}</p>
-            )}
+            <FieldLabel>Duties</FieldLabel>
             <div className="h-[280px] min-h-0 rounded border border-border-subtle bg-surface-inset">
               <CodeMirrorEditor
-                docKey={`${doc.fileName}:${gen}`}
+                docKey={docKey}
                 value={draft.body}
-                onChange={(v) => updateDraft(sel, { body: v })}
-                onSave={doSave}
+                onChange={(v) => agentEdit(doc.fileName, { body: v })}
+                onSave={() => retryAgentSave(doc.fileName)}
               />
             </div>
           </div>
         </>
       )}
-
-      <div className="border-t border-border-subtle pt-3">
-        <button
-          onClick={onRequestDelete}
-          disabled={disabled}
-          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-danger-text transition-colors duration-fast hover:border-danger hover:bg-danger-surface disabled:text-content-disabled"
-        >
-          Delete agent
-        </button>
-      </div>
     </div>
   );
 }

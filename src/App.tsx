@@ -1,35 +1,33 @@
-import { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
+import { useEffect, useRef, useState, Suspense, lazy } from "react";
 import {
   Bot,
   ChevronDown,
-  ChevronRight,
-  Copy,
   FileOutput,
-  FileText,
   FolderOpen,
-  Folder,
   Gem,
+  GitBranch,
+  Home,
   Import as ImportIcon,
   MousePointer2,
   Package,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Pencil,
-  Plus,
-  RefreshCw,
   Redo2,
   Send,
   Settings,
+  Sparkles,
   Undo2,
   Users,
   Wand2,
+  Workflow,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useProjectStore } from "./store/project";
-import type { MdFile } from "./store/project";
-import { isRenameProtected, useGraphStore, type CompileTarget, type SaveState } from "./store/graph";
-import { useHighlightStore, useInspectorTabStore } from "./canvas/types";
+import {
+  useGraphStore,
+  type CompileTarget,
+  type SaveState,
+} from "./store/graph";
+import { ProjectWizard, type ProjectWizardMode } from "./project/ProjectWizard";
 import { initEventListener } from "./store/events";
 import { initSessionsListener, useSessionsStore } from "./store/sessions";
 import { useReviewStore } from "./store/review";
@@ -38,6 +36,7 @@ import { GraphCanvas } from "./canvas/GraphCanvas";
 import { EventLog } from "./inspector/EventLog";
 import { ProblemsPanel } from "./inspector/ProblemsPanel";
 import { RosterBar } from "./sessions/RosterBar";
+import { FileRail } from "./rail/Hierarchy";
 // Lazy-loaded for code splitting
 const Inspector = lazy(() => import("./inspector/Inspector").then(m => ({ default: m.Inspector })));
 const CompileModal = lazy(() => import("./compile/CompileModal").then(m => ({ default: m.CompileModal })));
@@ -53,13 +52,14 @@ const ReviewModal = lazy(() => import("./review/ReviewModal").then(m => ({ defau
 const ImportReviewModal = lazy(() =>
   import("./import/ImportReviewModal").then((m) => ({ default: m.ImportReviewModal })),
 );
+// WO11 G2 — git init + .gitignore composer (UI-A's frozen seam, §5.10),
+// mounted from the project row's context menu and the topbar's Git button.
+const GitWizard = lazy(() => import("./git/GitWizard").then((m) => ({ default: m.GitWizard })));
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
-import { flushMetaSave, useAgentsStore } from "./store/agents";
-import { AgentsRailSection, SkillsRailSection } from "./agents/RailSections";
+import { flushAgentSave, flushMetaSave, useAgentsStore } from "./store/agents";
 import { initSfx } from "./scene/sfx";
 import { probeProjectDirs, revealPath } from "./fs/api";
 import { ResizeHandle } from "./ui/ResizeHandle";
-import { ScanOverlay } from "./ui/ScanOverlay";
 import { ContextMenu } from "./ui/ContextMenu";
 import { useContextMenu } from "./ui/useContextMenu";
 import type { MenuItem } from "./ui/menuTypes";
@@ -140,11 +140,6 @@ function PixelLogo() {
       ))}
     </div>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
 }
 
 function projectName(root: string): string {
@@ -323,6 +318,9 @@ function TopBar({
   onPresets,
   onHandoff,
   onImport,
+  onProjectProps,
+  onGit,
+  onHome,
   view,
   onViewChange,
 }: {
@@ -331,6 +329,9 @@ function TopBar({
   onPresets: () => void;
   onHandoff: () => void;
   onImport: () => void;
+  onProjectProps: () => void;
+  onGit: () => void;
+  onHome: () => void;
   view: View;
   onViewChange: (v: View) => void;
 }) {
@@ -354,6 +355,18 @@ function TopBar({
         </>
       )}
       <div className="flex-1" />
+      {/* WO11 G1 — house icon, left of the view segments. Closes the project
+          and returns to the title screen; live agent sessions keep running
+          (App.tsx's confirm strip handles the warning, not this button). */}
+      {root !== null && (
+        <button
+          onClick={onHome}
+          title="Close project and return to the title screen"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <Home size={14} strokeWidth={1.5} />
+        </button>
+      )}
       {root !== null && (
         <ViewToggle view={view} onChange={onViewChange} managerMode={managerMode} />
       )}
@@ -362,6 +375,33 @@ function TopBar({
       {root !== null && <SaveIndicator />}
       {root !== null && <UndoRedoButtons />}
       {root !== null && <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />}
+      {/* WO10 (INPUT_PROMPT 08/19 item 10) — the project's own properties.
+          Written by the title-screen wizard, edited here; they compile into
+          the pinned context/project.md Memory Node. */}
+      {root !== null && (
+        <button
+          onClick={onProjectProps}
+          title="Project properties — name, brief, requirements, hard rules"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <Gem size={14} strokeWidth={1.5} />
+        </button>
+      )}
+      {/* WO11 G2 — reaches GitWizard (git init + .gitignore composer). The
+          contract names a "topbar overflow menu"; with exactly one item to
+          hold, a single icon button matches this bar's existing idiom
+          (Project properties, Import, Presets, Handoff are all standalone
+          buttons too) instead of standing up generic overflow-menu chrome
+          for one entry — see the final report for this deviation. */}
+      {root !== null && (
+        <button
+          onClick={onGit}
+          title="Git — initialize a repository or edit .gitignore"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <GitBranch size={14} strokeWidth={1.5} />
+        </button>
+      )}
       {root !== null && (
         <button
           onClick={onImport}
@@ -569,7 +609,7 @@ function RecentProjects() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ onWizard }: { onWizard: (mode: ProjectWizardMode) => void }) {
   const { openProject } = useProjectStore();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto py-8">
@@ -587,13 +627,33 @@ function EmptyState() {
         Pick a folder and Cowtext will find every markdown file in it. Adopt them as memory
         nodes, wire the graph, and the herd has a barn.
       </p>
-      <button
-        onClick={() => void openProject()}
-        className="mt-2 flex h-control-lg items-center gap-2 rounded bg-accent px-4 text-base font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
-      >
-        <FolderOpen size={15} strokeWidth={1.8} />
-        Open folder
-      </button>
+      {/* WO10 (INPUT_PROMPT 08/19 items 7-8) — three doors, not one. "Open
+          folder" only helps with a project Cowtext already knows; the other
+          two are the states a new user is actually in. */}
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+        <button
+          onClick={() => void openProject()}
+          className="flex h-control-lg items-center gap-2 rounded bg-accent px-4 text-base font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
+        >
+          <FolderOpen size={15} strokeWidth={1.8} />
+          Open folder
+        </button>
+        <button
+          onClick={() => onWizard("new")}
+          className="flex h-control-lg items-center gap-2 rounded border border-border bg-surface-2 px-4 text-base text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <Sparkles size={15} strokeWidth={1.8} />
+          New project
+        </button>
+        <button
+          onClick={() => onWizard("convert")}
+          title="Scaffold Cowtext's files alongside an existing project, then import its context"
+          className="flex h-control-lg items-center gap-2 rounded border border-border bg-surface-2 px-4 text-base text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+        >
+          <Workflow size={15} strokeWidth={1.8} />
+          Convert existing
+        </button>
+      </div>
       <RecentProjects />
     </div>
   );
@@ -614,451 +674,6 @@ function Scanning({ caption }: { caption: string }) {
         <span className="h-2 w-2 bg-border" />
       </div>
       <span className="font-pixel text-micro tracking-wide text-amber-text">{caption}</span>
-    </div>
-  );
-}
-
-function FileRow({ file, root }: { file: MdFile; root: string }) {
-  const node = useGraphStore((s) => s.nodes.find((n) => n.filePath === file.relPath));
-  const adoptFile = useGraphStore((s) => s.adoptFile);
-  const setSelection = useGraphStore((s) => s.setSelection);
-  const rescan = useProjectStore((s) => s.rescan);
-  const contextMenu = useContextMenu();
-  // Selection sync: the rail row, the canvas card and the Inspector always
-  // point at the same node — the row of the selected node is tinted and
-  // kept in view.
-  const isSelected = useGraphStore(
-    (s) => node !== undefined && s.selectedNodeIds.includes(node.id),
-  );
-  const rowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (isSelected) rowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [isSelected]);
-
-  // Hovering a mapped row lights up the node AND its whole neighbourhood
-  // (touching edges + the nodes on their far ends) on the canvas. Computed
-  // at hover time from a snapshot — no extra store subscription per row.
-  const hoverHighlight = () => {
-    if (node === undefined) return;
-    const touching = useGraphStore
-      .getState()
-      .edges.filter((e) => e.source === node.id || e.target === node.id);
-    useHighlightStore
-      .getState()
-      .setHighlight(
-        [node.id, ...touching.map((e) => (e.source === node.id ? e.target : e.source))],
-        touching.map((e) => e.id),
-      );
-  };
-  const clearHighlight = () => useHighlightStore.getState().clearHighlight();
-  // Rows unmount wholesale on rescan/file removal — drop any highlight left
-  // behind (mouseleave never fires on a removed element).
-  useEffect(() => clearHighlight, []);
-  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
-  // error, never a silent no-op."
-  const [revealError, setRevealError] = useState<string | null>(null);
-
-  const openMenu = (e: React.MouseEvent) => {
-    const protectedFile = isRenameProtected(file.relPath);
-    const items: MenuItem[] = [
-      node !== undefined
-        ? {
-            kind: "item",
-            id: "select",
-            label: "Select node",
-            icon: FileText,
-            onSelect: () => setSelection([node.id], []),
-          }
-        : {
-            kind: "item",
-            id: "adopt",
-            label: "Adopt as memory node",
-            icon: Plus,
-            onSelect: () => adoptFile(file.relPath),
-          },
-      ...(node !== undefined
-        ? ([
-            {
-              kind: "item",
-              id: "rename",
-              label: "Rename file…",
-              icon: Pencil,
-              disabled: protectedFile,
-              hint: protectedFile ? "generated file — not renameable" : undefined,
-              onSelect: () => {
-                setSelection([node.id], []);
-                useInspectorTabStore.getState().requestRename();
-              },
-            },
-          ] satisfies MenuItem[])
-        : []),
-      {
-        kind: "item",
-        id: "reveal",
-        label: "Reveal in File Explorer",
-        icon: FolderOpen,
-        onSelect: () => {
-          setRevealError(null);
-          void revealPath(root, file.relPath).catch((err: unknown) => setRevealError(String(err)));
-        },
-      },
-      {
-        kind: "item",
-        id: "copy",
-        label: "Copy relative path",
-        icon: Copy,
-        onSelect: () => void navigator.clipboard.writeText(file.relPath),
-      },
-      { kind: "separator", id: "sep-1" },
-      {
-        kind: "item",
-        id: "rescan",
-        label: "Rescan",
-        icon: RefreshCw,
-        onSelect: () => void rescan(),
-      },
-    ];
-    contextMenu.openAt(e, items);
-  };
-
-  return (
-    <li className="group flex flex-col" onContextMenu={openMenu}>
-      <div
-        ref={rowRef}
-        className={`flex h-row cursor-default items-center gap-2 px-3 ${
-          isSelected
-            ? "bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
-            : "hover:bg-[var(--surface-hover)]"
-        }`}
-        title={file.relPath}
-        onClick={() => {
-          if (node !== undefined) setSelection([node.id], []);
-        }}
-        onMouseEnter={hoverHighlight}
-        onMouseLeave={clearHighlight}
-      >
-        {node !== undefined ? (
-          <span
-            className="h-2 w-2 flex-none rounded-sm"
-            style={{ background: `var(--role-${node.role})` }}
-            title={`On canvas — ${node.role}`}
-          />
-        ) : (
-          <FileText size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
-        )}
-        <span
-          className={`min-w-0 flex-1 truncate font-mono text-xs [direction:rtl] [text-align:left] ${
-            isSelected ? "text-accent-text" : "text-content-secondary"
-          }`}
-        >
-          {file.relPath}
-        </span>
-        <span className="flex-none font-mono text-2xs text-content-disabled group-hover:hidden">
-          {formatSize(file.sizeBytes)}
-        </span>
-        {node === undefined && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              adoptFile(file.relPath);
-            }}
-            title="Adopt as memory node"
-            className="hidden h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text group-hover:flex"
-          >
-            <Plus size={11} strokeWidth={1.5} />
-            adopt
-          </button>
-        )}
-      </div>
-      {revealError !== null && (
-        <div className="flex items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
-          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
-            {revealError}
-          </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setRevealError(null);
-            }}
-            title="Dismiss"
-            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
-          >
-            <X size={10} strokeWidth={1.5} />
-          </button>
-        </div>
-      )}
-      {contextMenu.menu !== null && (
-        <ContextMenu
-          x={contextMenu.menu.x}
-          y={contextMenu.menu.y}
-          items={contextMenu.menu.items}
-          onClose={contextMenu.close}
-        />
-      )}
-    </li>
-  );
-}
-
-// ── File-rail directory tree (contract §6) ─────────────────────────────
-// Pure presentation over the flat `contextFiles` list: root files first,
-// then directories alphabetically, each level nested in its own <ul> so
-// indentation is just that <ul>'s padding-left — FileRow is never touched,
-// it still only ever receives a flat MdFile.
-
-interface DirEntry {
-  kind: "dir";
-  name: string;
-  path: string;
-  children: TreeEntry[];
-}
-interface FileEntry {
-  kind: "file";
-  file: MdFile;
-}
-type TreeEntry = DirEntry | FileEntry;
-
-function entrySortName(e: TreeEntry): string {
-  return e.kind === "file" ? (e.file.relPath.split("/").pop() ?? e.file.relPath) : e.name;
-}
-
-function sortEntries(children: TreeEntry[]): void {
-  children.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "file" ? -1 : 1;
-    return entrySortName(a).localeCompare(entrySortName(b));
-  });
-  for (const c of children) {
-    if (c.kind === "dir") sortEntries(c.children);
-  }
-}
-
-/** Root files first, then directories alphabetically — recursively, at
- *  every level (contract §6). */
-function buildFileTree(files: MdFile[]): TreeEntry[] {
-  const root: DirEntry = { kind: "dir", name: "", path: "", children: [] };
-  const dirIndex = new Map<string, DirEntry>([["", root]]);
-  for (const f of files) {
-    const parts = f.relPath.split("/");
-    parts.pop(); // basename — stays on f.relPath, only the directory chain matters here
-    let cur = root;
-    let curPath = "";
-    for (const part of parts) {
-      curPath = curPath === "" ? part : `${curPath}/${part}`;
-      let next = dirIndex.get(curPath);
-      if (next === undefined) {
-        next = { kind: "dir", name: part, path: curPath, children: [] };
-        dirIndex.set(curPath, next);
-        cur.children.push(next);
-      }
-      cur = next;
-    }
-    cur.children.push({ kind: "file", file: f });
-  }
-  sortEntries(root.children);
-  return root.children;
-}
-
-function DirRow({
-  entry,
-  root,
-  collapsedDirs,
-  onToggle,
-}: {
-  entry: DirEntry;
-  root: string;
-  collapsedDirs: Set<string>;
-  onToggle: (path: string) => void;
-}) {
-  const isCollapsed = collapsedDirs.has(entry.path);
-  return (
-    <li className="flex flex-col">
-      <div
-        onClick={() => onToggle(entry.path)}
-        title={entry.path}
-        className="flex h-row cursor-default items-center gap-1.5 px-3 hover:bg-[var(--surface-hover)]"
-      >
-        {isCollapsed ? (
-          <ChevronRight size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
-        ) : (
-          <ChevronDown size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
-        )}
-        <Folder size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary">
-          {entry.name}
-        </span>
-      </div>
-      {!isCollapsed && (
-        <ul style={{ paddingLeft: 12 }}>
-          {entry.children.map((c) =>
-            c.kind === "file" ? (
-              <FileRow key={c.file.relPath} file={c.file} root={root} />
-            ) : (
-              <DirRow key={c.path} entry={c} root={root} collapsedDirs={collapsedDirs} onToggle={onToggle} />
-            ),
-          )}
-        </ul>
-      )}
-    </li>
-  );
-}
-
-/** Left rail — width and collapsed flag both come from the settings store
- *  (contract §7.3) so they survive a restart; the drag handle lives beside
- *  this component in Workspace. */
-function FileRail({ root }: { root: string }) {
-  const { files, rescan, scanning } = useProjectStore();
-  // Agent files scan too (project.rs opts into .claude/agents/) but they
-  // render in the AGENTS section below, not among context files.
-  const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
-  const tree = useMemo(() => buildFileTree(contextFiles), [contextFiles]);
-  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
-  const toggleDir = (path: string) => {
-    setCollapsedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-  const leftPanelWidth = useSettingsStore((s) => s.leftPanelWidth);
-  const collapsed = useSettingsStore((s) => s.leftPanelCollapsed);
-  const setCollapsed = useSettingsStore((s) => s.setLeftPanelCollapsed);
-  const headerMenu = useContextMenu();
-  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
-  // error, never a silent no-op."
-  const [revealError, setRevealError] = useState<string | null>(null);
-
-  const openHeaderMenu = (e: React.MouseEvent) => {
-    const items: MenuItem[] = [
-      { kind: "item", id: "rescan", label: "Rescan", icon: RefreshCw, onSelect: () => void rescan() },
-      {
-        kind: "item",
-        id: "reveal-root",
-        label: "Reveal project in File Explorer",
-        icon: FolderOpen,
-        onSelect: () => {
-          setRevealError(null);
-          void revealPath(root, null).catch((err: unknown) => setRevealError(String(err)));
-        },
-      },
-      {
-        kind: "item",
-        id: "collapse",
-        label: "Collapse panel",
-        icon: PanelLeftClose,
-        onSelect: () => setCollapsed(true),
-      },
-    ];
-    headerMenu.openAt(e, items);
-  };
-
-  if (collapsed) {
-    return (
-      <div className="flex w-[34px] flex-none flex-col items-center border-r border-border-subtle bg-surface-1 py-2">
-        <button
-          onClick={() => setCollapsed(false)}
-          title="Show files"
-          className="grid h-control-sm w-control-sm place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
-        >
-          <PanelLeftOpen size={14} strokeWidth={1.5} />
-        </button>
-        <span className="mt-3 font-mono text-2xs uppercase tracking-wider text-content-muted [writing-mode:vertical-rl]">
-          {contextFiles.length} files
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="flex flex-none flex-col border-r border-border-subtle bg-surface-1"
-      style={{ width: leftPanelWidth }}
-    >
-      <div
-        onContextMenu={openHeaderMenu}
-        className="flex h-[31px] flex-none items-center gap-1.5 border-b border-border-subtle px-3"
-      >
-        <span className="flex-none font-mono text-2xs uppercase tracking-wider text-content">
-          Hierarchy
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-content-muted">
-          {contextFiles.length} {contextFiles.length === 1 ? "file" : "files"}
-        </span>
-        <button
-          onClick={() => void rescan()}
-          disabled={scanning}
-          title="Rescan"
-          className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content disabled:text-content-disabled"
-        >
-          <RefreshCw size={13} strokeWidth={1.5} />
-        </button>
-        <button
-          onClick={() => setCollapsed(true)}
-          title="Hide files"
-          className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
-        >
-          <PanelLeftClose size={13} strokeWidth={1.5} />
-        </button>
-        {headerMenu.menu !== null && (
-          <ContextMenu
-            x={headerMenu.menu.x}
-            y={headerMenu.menu.y}
-            items={headerMenu.menu.items}
-            onClose={headerMenu.close}
-          />
-        )}
-      </div>
-      {revealError !== null && (
-        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-3 py-1">
-          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
-            {revealError}
-          </span>
-          <button
-            onClick={() => setRevealError(null)}
-            title="Dismiss"
-            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
-          >
-            <X size={10} strokeWidth={1.5} />
-          </button>
-        </div>
-      )}
-      <div className="relative min-h-0 flex-1 overflow-y-auto">
-        <ScanOverlay caption="rescanning" />
-        <div className="flex flex-col">
-          {/* The project root is the panel's anchor, not a tree node: it has
-              no chevron and never collapses. Collapsing it hid the entire
-              hierarchy behind one click and left the panel showing nothing
-              but its own title — use "Collapse panel" for that instead.
-              Indent still aligns with the child rows' chevron column. */}
-          <div
-            title={root}
-            className="flex h-row flex-none cursor-default items-center gap-1.5 px-3"
-          >
-            <Folder size={12} strokeWidth={1.5} className="ml-[17px] flex-none text-content-muted" />
-            <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-content">
-              {projectName(root)}
-            </span>
-          </div>
-          <div style={{ paddingLeft: 12 }}>
-              {contextFiles.length === 0 ? (
-                <div className="flex items-center justify-center px-3 py-6">
-                  <span className="text-center text-sm text-content-muted">No markdown files here.</span>
-                </div>
-              ) : (
-                <ul className="py-1">
-                  {tree.map((e) =>
-                    e.kind === "file" ? (
-                      <FileRow key={e.file.relPath} file={e.file} root={root} />
-                    ) : (
-                      <DirRow key={e.path} entry={e} root={root} collapsedDirs={collapsedDirs} onToggle={toggleDir} />
-                    ),
-                  )}
-                </ul>
-              )}
-              <AgentsRailSection root={root} />
-              <SkillsRailSection root={root} />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1125,6 +740,43 @@ function ReviewBanner() {
   );
 }
 
+/** WO11 G1 — Home's confirm strip. Marty's ratified decision (contract §5.9,
+ *  ASK #3): warn, naming the live session count, then go Home with those
+ *  sessions still running — Home never kills them. Amber because this is the
+ *  agent-liveness channel ("N sessions keep running"), same idiom as
+ *  ReviewBanner's amber-surface strip for "something outside Cowtext". */
+function HomeConfirmBanner({
+  count,
+  onConfirm,
+  onCancel,
+}: {
+  count: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
+      <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" />
+      <span className="truncate font-mono text-xs text-amber-text">
+        {count} agent session{count === 1 ? "" : "s"} keep running in the background
+      </span>
+      <div className="flex-1" />
+      <button
+        onClick={onConfirm}
+        className="flex h-control-sm items-center rounded border border-amber-border bg-surface-1 px-2 text-xs font-medium text-amber-text transition-colors duration-fast hover:bg-surface-2"
+      >
+        Go home
+      </button>
+      <button
+        onClick={onCancel}
+        className="flex h-control-sm items-center rounded border border-border bg-surface-1 px-2 text-xs text-content-secondary transition-colors duration-fast hover:border-border-strong"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 /** N4: slim status strip, the very bottom of the window — N/M straight from
  *  the graph store, J the review queue length (shrinks on Accept/Revert/
  *  dismiss), K the session's running external-change counter (only resets
@@ -1145,7 +797,17 @@ function StatusBar() {
   );
 }
 
-function Workspace({ root, view }: { root: string; view: View }) {
+function Workspace({
+  root,
+  view,
+  onEditProject,
+  onOpenGit,
+}: {
+  root: string;
+  view: View;
+  onEditProject: () => void;
+  onOpenGit: () => void;
+}) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
   // The agent panel is reachable from any view, including the barn — without
@@ -1180,7 +842,7 @@ function Workspace({ root, view }: { root: string; view: View }) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <FileRail root={root} />
+      <FileRail root={root} onEditProject={onEditProject} onOpenGit={onOpenGit} />
       {!leftPanelCollapsed && (
         <ResizeHandle
           value={leftPanelWidth}
@@ -1270,7 +932,19 @@ export default function App() {
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // WO10 (INPUT_PROMPT 08/19 items 7-8) — the title-screen wizards. `null`
+  // = closed. `pendingImportRoot` carries the "convert" flow's second half:
+  // the importer can only run once the project is actually open, so the
+  // wizard records the intent and the effect below acts on it when the
+  // scan lands.
+  const [wizardMode, setWizardMode] = useState<ProjectWizardMode | null>(null);
+  const [pendingImportRoot, setPendingImportRoot] = useState<string | null>(null);
   const [view, setView] = useState<View>("canvas");
+  // WO11 G2 — GitWizard (init + .gitignore composer).
+  const [gitWizardOpen, setGitWizardOpen] = useState(false);
+  // WO11 G1 — Home's confirm strip. `null` = not showing; a number = the
+  // live-session count named in the strip at the moment Home was clicked.
+  const [homeConfirmCount, setHomeConfirmCount] = useState<number | null>(null);
 
   // A new project always opens on the canvas.
   useEffect(() => {
@@ -1291,6 +965,19 @@ export default function App() {
       void useAgentsStore.getState().loadAgents(root);
     }
   }, [root, loadGraph]);
+
+  // Second half of the "convert existing project" flow (WO10). The importer
+  // needs an OPEN project — it scans the root and proposes nodes against the
+  // live graph — so the wizard can only record the intent and this effect
+  // acts on it once the open actually lands. Compared against the root the
+  // wizard picked, not merely "root became non-null", so an unrelated
+  // project opened in between can't inherit somebody else's import.
+  useEffect(() => {
+    if (pendingImportRoot === null || root === null) return;
+    if (root !== pendingImportRoot) return;
+    setPendingImportRoot(null);
+    setImportOpen(true);
+  }, [root, pendingImportRoot]);
 
   // Wire barn://event + assemble://status once (idempotent — StrictMode-safe).
   // The listeners live for the app's lifetime; no teardown on re-render.
@@ -1315,10 +1002,44 @@ export default function App() {
       void useGraphStore.getState().flushSave();
       flushSettings();
       flushMetaSave();
+      // WO11 D4/§5.9 — agent-properties autosave (UI-D's frozen seam) is
+      // debounced 500 ms same as the others; a keystroke inside that window
+      // must not be lost on close either.
+      flushAgentSave();
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
   }, []);
+
+  // WO11 G1 — Home. Marty's ratified order (§5.9): flush everything, THEN
+  // clear every store (useProjectStore.closeProject() owns steps 1-3), THEN
+  // reset this component's own view/modal state (step 4 — component state,
+  // not covered by any store). Live sessions are never touched; when any are
+  // alive the confirm strip gates the whole flow (ASK #3).
+  const goHome = () => {
+    setHomeConfirmCount(null);
+    void useProjectStore.getState().closeProject().then(() => {
+      setView("canvas");
+      setCompileOpen(false);
+      setCompileLockedTarget(undefined);
+      setSettingsOpen(false);
+      setPresetsOpen(false);
+      setHandoffOpen(false);
+      setImportOpen(false);
+      setGitWizardOpen(false);
+      setWizardMode(null);
+      setPendingImportRoot(null);
+    });
+  };
+
+  const requestHome = () => {
+    const aliveCount = useSessionsStore.getState().sessions.filter((s) => s.alive).length;
+    if (aliveCount > 0) {
+      setHomeConfirmCount(aliveCount);
+      return;
+    }
+    goHome();
+  };
 
   return (
     <div className="flex h-screen flex-col bg-surface-0">
@@ -1331,9 +1052,19 @@ export default function App() {
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
         onImport={() => setImportOpen(true)}
+        onProjectProps={() => setWizardMode("edit")}
+        onGit={() => setGitWizardOpen(true)}
+        onHome={requestHome}
         view={view}
         onViewChange={setView}
       />
+      {homeConfirmCount !== null && (
+        <HomeConfirmBanner
+          count={homeConfirmCount}
+          onConfirm={goHome}
+          onCancel={() => setHomeConfirmCount(null)}
+        />
+      )}
       {error !== null && (
         <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
           <span className="h-1.5 w-1.5 flex-none bg-danger" />
@@ -1347,12 +1078,17 @@ export default function App() {
         scanning ? (
           <Scanning caption="the cow is reading" />
         ) : (
-          <EmptyState />
+          <EmptyState onWizard={setWizardMode} />
         )
       ) : (
         <>
           <ReviewBanner />
-          <Workspace root={root} view={view} />
+          <Workspace
+            root={root}
+            view={view}
+            onEditProject={() => setWizardMode("edit")}
+            onOpenGit={() => setGitWizardOpen(true)}
+          />
           <RosterBar root={root} />
           <ProblemsPanel root={root} onNavigate={() => setView("canvas")} />
           <EventLog root={root} />
@@ -1395,6 +1131,29 @@ export default function App() {
         <Suspense fallback={null}>
           <ImportReviewModal root={root} onClose={() => setImportOpen(false)} />
         </Suspense>
+      )}
+      {gitWizardOpen && root !== null && (
+        <Suspense fallback={null}>
+          <GitWizard root={root} onClose={() => setGitWizardOpen(false)} />
+        </Suspense>
+      )}
+      {wizardMode !== null && (
+        <ProjectWizard
+          mode={wizardMode}
+          root={root ?? undefined}
+          onClose={() => setWizardMode(null)}
+          onDone={(picked, openImport) => {
+            const wasEdit = wizardMode === "edit";
+            setWizardMode(null);
+            if (openImport) setPendingImportRoot(picked);
+            // Editing an already-open project must not re-OPEN it: that
+            // remounts the workspace and throws away the canvas viewport
+            // mid-session. A rescan is enough to pick up a refreshed
+            // context/project.md.
+            if (wasEdit) void useProjectStore.getState().rescan();
+            else void useProjectStore.getState().openProjectAt(picked);
+          }}
+        />
       )}
     </div>
   );

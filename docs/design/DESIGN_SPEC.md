@@ -92,12 +92,28 @@ Set `data-warmth` on `<html>`. Surface/border/text ramps only; accents shared.
   - `overrides` — 4px solid, pixel arrow + trailing bar. Structural, "wins".
   - `supersedes` — 2px dash 8 4, hollow square. Advisory.
   - `conflicts-with` — 2px dash 2 2, cross. Advisory.
-  - Selected edge → `--accent`.
+  - **Three emphasis tones, in priority order** (WO10): the wire itself selected →
+    `--edge-selected` and lifted above every other wire so a crossing can be followed;
+    a wire touching the SELECTED NODE → `--edge-related` (`--accent-border`) and one
+    step thicker; otherwise rest.
+  - **One label per wire, never a stack** (WO10). An icon plus one short verb saying what
+    the edge does — Reads / Refers / Then / Controls / Replaces / Conflicts — or, for
+    `conditional`, the condition itself compacted to ~18 chars. An author's `note`
+    replaces the verb. Labels are swept clear of each other along y by a pure solver
+    (`src/canvas/labelSlots.ts`) so two wires' chips never overlap.
+  - **The one exception to "edges are neutral"** (WO10): an author may pin a wire to a
+    colour from a CLOSED, token-backed palette (`src/canvas/edgeColor.ts`, `--edge-c-*`).
+    The palette borrows no role hue, so "colour means role" still holds; the override
+    repaints the line and its arrowhead together.
   - Routing is orthogonal with square corners (`src/canvas/edgePath.ts`). The riser turns
     one stub short of the target rather than at the midpoint: fan-in is the common shape
     and a midpoint riser makes every incoming edge share the whole second half of the run,
     so a dashed advisory edge paints over a solid structural one. Fan-OUT still overlaps on
     the source side — that needs a global router, which this is not.
+  - **A route may be hand-edited** (WO10). Selecting a wire hangs a 9px handle on each
+    interior segment; dragging one snaps to the 4px grid and persists as `waypoints` in
+    `graph.json` v4. The two stub segments are never draggable — they are what keeps the
+    wire plugged into its connector. "Reset path" returns it to the router.
 
 ## Node roles
 
@@ -131,7 +147,9 @@ bottom-right. The whole plate is the hit target.
    `--role-*` with the 8×8 glyph knocked out at 14px in `--barn-canvas`. Replaces the old
    3px stripe: louder at zoom, and it frees the plate edge to carry state instead.
 2. **Read-order tag** — Silkscreen 10px on `--barn-tag`, stamped into the top-right corner
-   with a 2px left/bottom edge. Grows leftward for 2–3 digits.
+   with a 2px left/bottom edge. Grows leftward for 2–3 digits. **Memory plates only**
+   (WO10): read order is the sequence the context is assembled in, and an agent is the
+   thing doing the reading, not a step in it.
 3. **Role label** — Silkscreen 8px uppercase, tinted to role.
 4. **Live square / pin** — 6px amber square (hard one-step blink) and the 11px pin icon,
    right-aligned on the label row.
@@ -154,6 +172,11 @@ moved to shape.
 - **Nameplate** — model name in Silkscreen 8px, knocked out of an identity-colour block
   under the portrait.
 - Priority moves to a tag; the old AGENT chip is gone (the whole plate says it).
+- **Model name is shortened for display** (WO10) — `claude-haiku-4-5-20251001` → `Haiku-4.5`.
+  The 46px nameplate cannot hold a wire id, and truncating one eats the only part that
+  differs between two Anthropic models. Full id stays in the tooltip.
+- **Nickname under the title, in quotes**, when the sidecar has one (WO10) — what Marty
+  actually calls this agent, as opposed to its file identity on the line above.
 
 ### Plate states
 
@@ -177,16 +200,25 @@ flashing.
 
 ### Connectors
 
-Ports read as hardware and are always visible. Input: a 20 × 24 socket bay straddling the
-left edge, `--plate-inset` on a 2px `--plate-edge-hi` frame. Output: an 8 × 24 shoulder
-flush to the right edge with a 14 × 8 pin protruding (`::before`). Asymmetry is deliberate
-— you can tell input from output without following the wire. Neutral at rest (hue belongs
-to roles), `--amber-text` on plate hover, `--accent` when aimed at or while a connection
-drag is live. A transparent `::after` holds a 26 × 34 hit area regardless of the mark.
+Ports read as hardware and are always visible: cartridge edge connectors. Input — a 20px
+socket bay straddling the left edge, `--plate-inset` inside a 2px `--port-body` frame with
+the left face open. Output — an 8px shoulder flush to the right edge, its contact pins
+running through it and 14px out into open canvas. The asymmetry is deliberate: you can
+tell input from output without following the wire. Neutral at rest (hue belongs to roles),
+`--amber-text` on plate hover, `--accent` when aimed at or while a connection drag is live.
+A transparent `::after` holds a **26 × 52** hit area regardless of how small the mark is.
 
-The whole treatment is one block in `styles/index.css`; `PIN_TIP` / `SOCKET_GAP` in
-`canvas/edgePath.ts` mirror its geometry so wires start at the pin tip and stop at the
-socket face instead of disappearing under the plate. Change them together.
+**A port shows one contact finger per connection** (WO10) — floor 1, cap 9 — on an 8px
+pitch, so the block's height says how loaded the port is before you trace anything. Height
+is `portHeight(pins)` from `canvas/portSlots.ts`: 12px at one pin, **44px at five**, 76px at
+the cap. Fingers are elements, not paint, because a gradient has no way to know how many
+wires arrived.
+
+The whole treatment is one block in `styles/index.css`; `PIN_REACH` / `SOCKET_BITE` in
+`canvas/edgePath.ts` land the wire 4px inside the pin and 3px inside the socket, so it
+plugs in with no daylight rather than floating short of the hardware. `SLOT_PITCH` (8px) is
+the one number CSS and TS must agree on. Change them together — the frozen geometry table
+and its WO10 amendment are `docs/design/WO09_CONNECTOR_CONTRACT.md` §3 / §3a.
 
 ## Typography
 

@@ -51,16 +51,21 @@ export interface PresetEdge {
   note?: string;
   /** v3 (WO03) — edge colour override, see MemoryEdge.color. */
   color?: string;
+  /** v4 (WO10) — hand-edited route, see MemoryEdge.waypoints. Layout, like
+   *  the node `position` a preset already carries. */
+  waypoints?: { x: number; y: number }[];
 }
 
 /** Preset format version. The Rust side (preset.rs) now accepts and
- *  auto-upgrades presets saved at 1, 2, or 3 (contract WO03 §"Graph v3
+ *  auto-upgrades presets saved at 1..4 (contract WO03 §"Graph v3
  *  schema": "Preset format bumps in lockstep; preset_read/preset_apply
  *  auto-upgrade v2 presets") — a bare `1` literal here rejected a valid v2/
- *  v3 preset client-side before Rust ever saw it. `buildPreset` always
- *  writes the CURRENT version; `parsePreset` accepts any version in range. */
-export type PresetVersion = 1 | 2 | 3;
-export const PRESET_VERSION: PresetVersion = 3;
+ *  v3 preset client-side before Rust ever saw it. v4 (WO10) bumps in
+ *  lockstep with graph v4 for the edge `waypoints` field. `buildPreset`
+ *  always writes the CURRENT version; `parsePreset` accepts any version in
+ *  range. */
+export type PresetVersion = 1 | 2 | 3 | 4;
+export const PRESET_VERSION: PresetVersion = 4;
 
 export interface CowtextPreset {
   version: PresetVersion;
@@ -111,6 +116,9 @@ export function buildPreset(name: string): string {
         ...(e.condition !== undefined && e.condition !== "" ? { condition: e.condition } : {}),
         ...(e.note !== undefined && e.note !== "" ? { note: e.note } : {}),
         ...(e.color !== undefined && e.color !== "" ? { color: e.color } : {}),
+        ...(e.waypoints !== undefined && e.waypoints.length > 0
+          ? { waypoints: e.waypoints.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })) }
+          : {}),
       })),
     compileTargets: s.compileTargets,
   };
@@ -125,6 +133,21 @@ function asRole(v: unknown): NodeRole {
 
 function asKind(v: unknown): EdgeKind {
   return EDGE_KINDS.find((k) => k === v) ?? "references";
+}
+
+/** v4 waypoints, tolerantly. A preset is user-editable JSON, so a malformed
+ *  point drops the whole route rather than half of it — a partially applied
+ *  bend is worse than none (the router just draws its own). */
+function asWaypoints(v: unknown): { x: number; y: number }[] {
+  if (!Array.isArray(v)) return [];
+  const out: { x: number; y: number }[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "object" || raw === null) return [];
+    const p = raw as { x?: unknown; y?: unknown };
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return [];
+    out.push({ x: Math.round(p.x as number), y: Math.round(p.y as number) });
+  }
+  return out;
 }
 
 function str(v: unknown, fallback = ""): string {
@@ -205,6 +228,7 @@ export function parsePreset(json: string): CowtextPreset {
           : {}),
         ...(typeof e.note === "string" && e.note !== "" ? { note: e.note } : {}),
         ...(typeof e.color === "string" && e.color !== "" ? { color: e.color } : {}),
+        ...(asWaypoints(e.waypoints).length > 0 ? { waypoints: asWaypoints(e.waypoints) } : {}),
       };
     })
     // Dangling edges would fail compile validation later — drop them here.

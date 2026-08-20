@@ -59,8 +59,11 @@ export function agentConvert(root: string, relPath: string, newName: string): Pr
   return invoke<AgentDoc>("agent_convert", { root, relPath, newName });
 }
 
-export function agentSave(root: string, fileName: string, patch: SavePatch): Promise<void> {
-  return invoke<void>("agent_save", {
+/** WO11 §3 (ASK #7, ratified): returns the freshly saved `AgentDoc` instead
+ *  of `()`, re-read off disk, so callers (the per-keystroke autosave, §5.7)
+ *  can update their store in place without a full `agentsScan`. */
+export function agentSave(root: string, fileName: string, patch: SavePatch): Promise<AgentDoc> {
+  return invoke<AgentDoc>("agent_save", {
     root,
     fileName,
     fields: patch.fields ?? null,
@@ -101,4 +104,21 @@ export function skillDelete(root: string, dirName: string): Promise<void> {
 
 export function agentsMetaWrite(root: string, content: string): Promise<void> {
   return invoke<void>("agents_meta_write", { root, content });
+}
+
+/** Result of `agent_memory_status` (WO11 §4.3) — a read-only probe of an
+ *  agent's memory index. `healthy === false` with `indexExists === true`
+ *  means the index is present but not valid UTF-8, or 0 bytes; source of
+ *  truth for the Reveal/Fix control (§5.5), never `useProjectStore.files`. */
+export interface AgentMemoryStatus {
+  dirRelPath: string;
+  indexRelPath: string;
+  dirExists: boolean;
+  indexExists: boolean;
+  indexBytes: number;
+  healthy: boolean;
+}
+
+export function agentMemoryStatus(root: string, fileName: string): Promise<AgentMemoryStatus> {
+  return invoke<AgentMemoryStatus>("agent_memory_status", { root, fileName });
 }

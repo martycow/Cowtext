@@ -131,11 +131,11 @@ export function RosterBar({ root }: { root: string }) {
       <button
         onClick={() => setAddOpen(true)}
         disabled={atCap}
-        title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Add agent"}
+        title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Spawn a session"}
         className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-2 font-mono text-2xs text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text disabled:text-content-disabled disabled:hover:border-border disabled:hover:text-content-secondary"
       >
         <Plus size={12} strokeWidth={1.5} />
-        Add agent
+        Spawn agent
       </button>
       {sessions.length === 0 ? (
         <span className="font-mono text-2xs text-content-disabled">no agents running</span>

@@ -119,6 +119,24 @@
   --edge-supersedes:     #574A38;  /* 2px dash 8 4, hollow square — advisory */
   --edge-conflicts-with:  #A08A6A;  /* 2px dash 2 2, cross marker — advisory */
   --edge-selected:    var(--accent);
+  /* Every wire touching the selected node (WO10 item 1). Deliberately the
+     BORDER accent, not the accent itself: one step below `--edge-selected`,
+     so "this wire is selected" and "this wire touches what's selected" stay
+     distinguishable at a glance. Same value the Relations-hover marquee
+     already uses on the card. */
+  --edge-related:     var(--accent-border);
+  /* Per-edge colour override palette (WO10 item 13) — a CLOSED set, every
+     entry aliasing a token that already exists so `[data-warmth]` propagates
+     and no new hex enters the app. Deliberately NOT the role hues: hue on
+     the canvas belongs to roles, and a wire that borrows `--role-agent`
+     would read as a role marker. See canvas/edgeColor.ts, which quotes these
+     names. */
+  --edge-c-amber:     var(--amber);
+  --edge-c-blue:      var(--accent);
+  --edge-c-green:     var(--success);
+  --edge-c-red:       var(--danger);
+  --edge-c-violet:    var(--role-invariant);
+  --edge-c-slate:     var(--role-snippet);
 
   /* ── Typography ───────────────────────────────────────── */
   --font-ui:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;

@@ -23,6 +23,7 @@ import {
   skillRename,
   skillSave,
 } from "../agents/api";
+import { agentAvatarClear, agentAvatarRead, agentAvatarSet } from "../agents/avatarApi";
 import type { AgentDoc, AgentsScan, FmFields, SkillDoc } from "../agents/types";
 
 // ── Types (contract §7.2) ───────────────────────────────────────────────
@@ -90,11 +91,40 @@ export interface AgentsState {
   busy: boolean; // a command is in flight
   opError: string | null; // last operation error, cleared on next op
 
+  /** WO11 D4 — per-file autosave status for AGENT documents (skills keep the
+   *  explicit-Save discipline and never touch these two maps). Absent key =
+   *  "idle" (nothing pending, nothing failed). Never gated by `busy` — a
+   *  keystroke autosave must not flicker every other control in the editor
+   *  between enabled/disabled twice a second. */
+  agentSaveState: Record<string, "idle" | "saving" | "saved" | "error">;
+  agentSaveErrors: Record<string, string>;
+
+  /** WO11 G6 — cached avatar data URLs, keyed by agent fileName. A key
+   *  absent from the map means "not fetched yet"; a key present with `null`
+   *  means "fetched, no custom avatar" (render the identicon). */
+  avatars: Record<string, string | null>;
+
+  /** WO11 D4 — CodeMirror's `docKey` seam: `${fileName}:${reloadNonce}`.
+   *  Bumped only by `loadAgents` (every agent gets the current load's
+   *  generation number) and by `bumpAgentReloadNonce` (the hook a future
+   *  fs-watcher calls for an external change to one file) — NEVER by our
+   *  own autosave, which is the whole point: the editor must rebuild when
+   *  the file changed out from under it, and must NOT rebuild (losing the
+   *  caret) just because the debounced save it triggered came back. Absent
+   *  key = 0. */
+  reloadNonce: Record<string, number>;
+
   loadAgents(root: string): Promise<void>;
   select(sel: Selection | null): void;
   updateDraft(sel: Selection, patch: Partial<DocDraft>): void;
   revertDraft(sel: Selection): void;
   saveDoc(sel: Selection): Promise<string | null>; // null = success, else message
+  /** WO11 D4 — the agent-only replacement for the Save button: updates the
+   *  draft (as `updateDraft` does) and schedules a per-file, 500 ms debounced
+   *  autosave keyed by `fileName` so two agents never share a timer. */
+  agentEdit(fileName: string, patch: Partial<DocDraft>): void;
+  /** Re-attempts a failed autosave immediately (bypasses the debounce). */
+  retryAgentSave(fileName: string): void;
   createAgent(name: string, opts?: { fileName?: string; withMemory?: boolean }): Promise<string | null>;
   /** Idempotent backfill for an existing agent. null = success, else the message. */
   ensureMemory(fileName: string): Promise<string | null>;
@@ -107,10 +137,21 @@ export interface AgentsState {
    *  .claude/agents/). Resolves to the new AgentDoc; throws on failure. */
   convertToAgent(relPath: string, newName: string): Promise<AgentDoc>;
   deleteSelected(): Promise<string | null>;
-  attachSkill(fileName: string, skillName: string): void; // draft-only
-  detachSkill(fileName: string, skillName: string): void; // draft-only
+  attachSkill(fileName: string, skillName: string): void; // draft + autosave
+  detachSkill(fileName: string, skillName: string): void; // draft + autosave
   updateMeta(fileName: string, patch: Partial<AgentMeta>): void; // 700 ms debounce
   cleanupOrphans(): Promise<string | null>;
+  /** WO11 G6 — lazily fetches and caches one agent's avatar; a no-op once
+   *  the fileName key is already present in `avatars` (fetched or not). */
+  loadAvatar(fileName: string): Promise<void>;
+  /** `sourcePath` must come from `@tauri-apps/plugin-dialog`'s `open()` — see
+   *  WO11_CONTRACT.md §4.2. null = success, else the message. */
+  setAvatarImage(fileName: string, sourcePath: string): Promise<string | null>;
+  clearAvatarImage(fileName: string): Promise<string | null>;
+  /** Seam for a future fs-watcher: bump one file's `reloadNonce` so its open
+   *  CodeMirror editor rebuilds from disk. Not called anywhere yet — no
+   *  watcher pipes per-file external changes into this store today. */
+  bumpAgentReloadNonce(fileName: string): void;
 }
 
 // Rename fan-out: the GRAPH store keeps agent-backed nodes' filePath/title in
@@ -122,6 +163,19 @@ export const agentRenameListeners: AgentRenameListener[] = [];
 
 function notifyAgentRenamed(oldFileName: string, newFileName: string, newName: string): void {
   for (const l of agentRenameListeners) l(oldFileName, newFileName, newName);
+}
+
+// Delete fan-out: same shape as the rename seam directly above, for the same
+// reason (WO11_CONTRACT.md §10.3) — deleting an agent FILE from the rail's
+// context menu must not silently orphan an adopted node on the graph, and
+// the graph store cannot be reached from here directly (one-directional
+// import). Called ONLY after `agent_delete` has actually succeeded on disk
+// AND after this store's own `set()` has applied — never on the error path.
+export type AgentDeleteListener = (fileName: string) => void;
+export const agentDeleteListeners: AgentDeleteListener[] = [];
+
+function notifyAgentDeleted(fileName: string): void {
+  for (const l of agentDeleteListeners) l(fileName);
 }
 
 // ── Small pure helpers used both internally and exported (§7.2 / B6) ────
@@ -314,6 +368,13 @@ function serializeMeta(meta: Record<string, AgentMeta>, orphan: Record<string, u
 let orphanRaw: Record<string, unknown> = {};
 let metaSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
+// Monotonic — every `loadAgents` (a fresh project OR an explicit rescan)
+// gets the next number, stamped onto every agent's `reloadNonce`. This is
+// what lets the SAME fileName in two different projects (or a rescan that
+// picked up an external edit) still force a CodeMirror rebuild, while our
+// own autosave — which never touches this counter — does not.
+let agentsLoadGeneration = 0;
+
 /** Removes `key` from the module-level orphan bookkeeping if present, and
  *  returns the reconciled AgentMeta parsed from the stale orphan payload
  *  (so a recreated/renamed-into agent inherits its old metadata) — or
@@ -351,6 +412,250 @@ export function flushMetaSave(): void {
   void flushMetaSaveInternal();
 }
 
+// ── Agent document autosave (WO11 §5.7 / D4) ────────────────────────────
+//
+// Per-fileName debounce, 500 ms, so two agents can never share a timer. The
+// three correctness properties the contract calls out by name:
+//   - no write storm       → one timer per file, cleared and reset on every
+//                             edit (ordinary debounce).
+//   - no interleaved        → every write attempt for a file is APPENDED to
+//     out-of-order writes     that file's own `tail` promise chain
+//                             (`runAgentSave`) — at most one `agent_save` is
+//                             ever in flight per file, and later attempts
+//                             always land after earlier ones, never before.
+//   - no lost last keystroke → `performAgentSave` reads the draft FRESH at
+//                             the moment its turn in the chain actually
+//                             runs, not a snapshot taken when it was
+//                             enqueued — so a turn that starts after more
+//                             keystrokes arrived saves those keystrokes too.
+//
+// WO11 tester audit, fix round 1 (HIGH #1): the previous design tracked a
+// single `promise | null` per file and, when a caller asked for a save while
+// one was already in flight, set a `pendingAfterFlight` flag and handed back
+// the ALREADY-IN-FLIGHT promise — which resolves when the OLD write lands,
+// not the newer follow-up it just scheduled. `flushAgentSaveFor` (used
+// before rename/delete, where the contract promises the write "must land or
+// fail before the file moves") awaited exactly that stale promise, so it
+// could report done while the write holding the user's latest keystroke was
+// still in flight, unguarded, under the file's OLD name — `agent_rename`
+// would then move the file out from under it, `agent_save` would fail
+// cleanly (`path.is_file()`), and the error would land in
+// `agentSaveState`/`agentSaveErrors` keyed to a fileName no panel was
+// showing anymore. A silently lost keystroke with a misdirected error.
+//
+// The chain below removes the two-state (`promise`/`pendingAfterFlight`)
+// tracking entirely: `runAgentSave` always returns a promise for the turn IT
+// just enqueued, chained strictly after whatever was queued before it. A
+// caller that awaits its own return value is therefore always waiting for
+// ITS turn (and everything ahead of it) to actually settle — never a stale
+// reference to someone else's write. Because that turn is *whatever is
+// queued at the time it runs*, and `flushAgentSaveFor` is called and awaited
+// synchronously before `agent_rename`/`agent_delete` proceed, the rename/
+// delete can no longer race ahead of the write that holds the latest
+// keystroke, and any failure surfaces while the old fileName is still the
+// live selection.
+
+interface AgentSaveQueueEntry {
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** FIFO chain of every write attempt for this file. Never rejects (see
+   *  `runAgentSave`), so it never wedges. */
+  tail: Promise<void>;
+}
+
+const agentSaveQueues = new Map<string, AgentSaveQueueEntry>();
+
+function queueFor(fileName: string): AgentSaveQueueEntry {
+  let q = agentSaveQueues.get(fileName);
+  if (q === undefined) {
+    q = { timer: undefined, tail: Promise.resolve() };
+    agentSaveQueues.set(fileName, q);
+  }
+  return q;
+}
+
+/** Enqueues one write attempt for `fileName`, serialized strictly after
+ *  whatever is already queued for that file. The returned promise resolves
+ *  to THIS attempt's own outcome (`null` = landed or was a no-op, else the
+ *  message) once this attempt — and everything ahead of it in the chain —
+ *  has settled. Safe to await before a rename/delete, and safe for
+ *  `saveAgentRaw` to read directly: unlike sharing `agentSaveErrors[fileName]`
+ *  (which can hold a STALE message left by a different, unrelated attempt),
+ *  the value threaded through this promise is never anyone else's.
+ *
+ *  `rawOverride`, when present, writes exactly that text as a whole-file
+ *  raw save instead of reading `st.drafts` — this is `saveAgentRaw`'s path
+ *  (WO11_CONTRACT.md §12.3/§12.5): the Markdown tab's buffer, and a review
+ *  revert's snapshot, are NOT the structured fields-grid draft and must not
+ *  create or disturb one. */
+function runAgentSave(fileName: string, rawOverride?: string): Promise<string | null> {
+  const q = queueFor(fileName);
+  // `result` is what THIS call hands back to ITS caller. `q.tail` only needs
+  // to track completion for ordering (not the value), and must never
+  // reject — so it is derived from `result` but always settles to
+  // `undefined` regardless of that outcome.
+  const result = q.tail.then(
+    () => performAgentSave(fileName, rawOverride),
+    () => performAgentSave(fileName, rawOverride),
+  );
+  q.tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function performAgentSave(fileName: string, rawOverride?: string): Promise<string | null> {
+  const s = useAgentsStore.getState();
+  if (s.root === null) return "No project open";
+  const doc = s.agents.find((a) => a.fileName === fileName);
+  if (doc === undefined) return rawOverride === undefined ? null : "Agent not found";
+
+  let patch: { fields?: FmFields; body?: string; rawContent?: string };
+  if (rawOverride !== undefined) {
+    if (rawOverride === doc.content) {
+      useAgentsStore.setState((st) => {
+        if (st.agentSaveState[fileName] === undefined || st.agentSaveState[fileName] === "idle") return {};
+        return { agentSaveState: { ...st.agentSaveState, [fileName]: "idle" } };
+      });
+      return null;
+    }
+    patch = { rawContent: rawOverride };
+  } else {
+    const sel: Selection = { kind: "agent", key: fileName };
+    const draft = s.drafts[draftKey(sel)];
+    if (draft === undefined) return null; // nothing was ever edited — a background timer with no draft
+    const unchanged = draft.raw
+      ? draft.rawContent === doc.content
+      : draft.body === doc.body && sameFields(draft.fields, doc.fields);
+    if (unchanged) {
+      useAgentsStore.setState((st) => {
+        if (st.agentSaveState[fileName] === undefined || st.agentSaveState[fileName] === "idle") return {};
+        return { agentSaveState: { ...st.agentSaveState, [fileName]: "idle" } };
+      });
+      return null;
+    }
+    patch = draft.raw ? { rawContent: draft.rawContent } : { fields: draft.fields, body: draft.body };
+  }
+
+  const root = s.root;
+  useAgentsStore.setState((st) => ({
+    agentSaveState: { ...st.agentSaveState, [fileName]: "saving" },
+  }));
+  try {
+    const savedDoc = await agentSave(root, fileName, patch);
+    useAgentsStore.setState((st) => {
+      // The file may have been renamed/deleted while this save was in
+      // flight; only splice the result back in if it is still present.
+      if (!st.agents.some((a) => a.fileName === fileName)) return {};
+      const agents = st.agents.map((a) => (a.fileName === fileName ? savedDoc : a)).sort(byFileName);
+      const agentSaveErrors = { ...st.agentSaveErrors };
+      delete agentSaveErrors[fileName];
+      // A raw-override write (Markdown tab / review revert) is not the
+      // structured draft the Agent panel edits — clear any stale draft so
+      // that panel falls back to the fresh, freshly-re-parsed `savedDoc`
+      // instead of continuing to show whatever it had before. A normal
+      // draft-driven save leaves the draft alone (D4 §5.7 — avoids an
+      // in-progress keystroke burst losing its caret to a rebuild).
+      const drafts = { ...st.drafts };
+      if (rawOverride !== undefined) delete drafts[draftKey({ kind: "agent", key: fileName })];
+      return {
+        agents,
+        drafts,
+        agentSaveState: { ...st.agentSaveState, [fileName]: "saved" },
+        agentSaveErrors,
+      };
+    });
+    return null;
+  } catch (e) {
+    const msg = String(e);
+    useAgentsStore.setState((st) => ({
+      agentSaveState: { ...st.agentSaveState, [fileName]: "error" },
+      agentSaveErrors: { ...st.agentSaveErrors, [fileName]: msg },
+    }));
+    return msg;
+  }
+}
+
+function scheduleAgentSave(fileName: string): void {
+  const q = queueFor(fileName);
+  clearTimeout(q.timer);
+  q.timer = setTimeout(() => {
+    q.timer = undefined;
+    void runAgentSave(fileName);
+  }, 500);
+}
+
+/** Awaited flush for a single file — used before a rename/delete (where the
+ *  write must land or fail before the file moves) and before WO11 §12's
+ *  agent-aware Markdown tab mounts (`Inspector.tsx`'s `openMarkdownTab`),
+ *  so the store is quiescent and `AgentDoc.content` is current before that
+ *  branch reads it. Distinct from the fire-and-forget `flushAgentSave()`
+ *  below (used for navigation/unload, where nothing can be awaited) — do
+ *  not collapse the two.
+ *
+ *  Always enqueues (and awaits) a fresh turn rather than branching on
+ *  whether a timer/in-flight write already exists: `runAgentSave` chains
+ *  strictly after whatever is already queued, so this is correct whether
+ *  nothing is pending (the turn reads an unchanged draft and no-ops fast —
+ *  see `performAgentSave`'s `unchanged` check), a debounce timer is still
+ *  counting down (cleared here so the turn runs now instead of at +500 ms),
+ *  or a write is already in flight (the turn queues behind it and reads
+ *  whatever the draft looks like BY THE TIME its turn actually runs — so it
+ *  still captures a keystroke that arrived after this call started). This is
+ *  precisely the fix for HIGH #1: no branch here can return a promise that
+ *  resolves before the LATEST queued write for this file has settled. */
+export async function flushAgentSaveFor(fileName: string): Promise<void> {
+  const q = agentSaveQueues.get(fileName);
+  if (q === undefined) return; // this agent was never edited — nothing to flush
+  clearTimeout(q.timer);
+  q.timer = undefined;
+  await runAgentSave(fileName);
+}
+
+/** Best-effort flush of every pending agent autosave — mirrors
+ *  `flushMetaSave`'s idiom (fire, don't await) because its exported contract
+ *  is `(): void`. Wired into App.tsx's beforeunload handler, agent selection
+ *  change and project close (lane UI-B); rename/delete and the Markdown tab
+ *  use the awaited `flushAgentSaveFor` instead, where a real guarantee is
+ *  needed. */
+export function flushAgentSave(): void {
+  for (const [fileName, q] of agentSaveQueues) {
+    if (q.timer !== undefined) {
+      clearTimeout(q.timer);
+      q.timer = undefined;
+      void runAgentSave(fileName);
+    }
+    // A file with no pending timer either has nothing dirty, or already has
+    // a write in flight/queued in its `tail` chain — either way it will
+    // settle on its own; nothing to do here for a fire-and-forget flush.
+  }
+}
+
+/** WO11_CONTRACT.md §12.3/§12.5/§12.6 — the frozen seam for any surface that
+ *  owns a whole-file buffer for an agent (the Markdown tab; a review
+ *  revert's snapshot) instead of the structured fields-grid draft. Enqueues
+ *  a raw whole-file write on the SAME per-file `runAgentSave` queue
+ *  `agentEdit` uses — never a second queue, never `write_md_file` — after
+ *  first clearing any pending debounce timer, so a stale structured-draft
+ *  turn cannot land after this one and clobber it (the "flush, then write"
+ *  guarantee, folded into one call so every caller gets it for free without
+ *  having to also call `flushAgentSaveFor` itself). Resolves `null` on
+ *  success or a true no-op, else the message — always THIS attempt's own
+ *  outcome, never a stale `agentSaveErrors[fileName]` left by an unrelated
+ *  earlier failure. Never gated by, and never sets, the global `busy` flag,
+ *  matching `agentEdit`'s autosave discipline. A free function, like
+ *  `flushAgentSave`/`flushAgentSaveFor` above — not a store action — so a
+ *  caller with only a `fileName`/`text` pair (no `Selection`, no draft) can
+ *  use it directly. */
+export async function saveAgentRaw(fileName: string, text: string): Promise<string | null> {
+  const s = useAgentsStore.getState();
+  if (s.root === null) return "No project open";
+  const q = queueFor(fileName);
+  clearTimeout(q.timer);
+  q.timer = undefined;
+  return runAgentSave(fileName, text);
+}
+
 // ── Store ─────────────────────────────────────────────────────────────
 
 export const useAgentsStore = create<AgentsState>((set, get) => ({
@@ -371,9 +676,16 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   busy: false,
   opError: null,
 
+  agentSaveState: {},
+  agentSaveErrors: {},
+  avatars: {},
+  reloadNonce: {},
+
   loadAgents: async (root) => {
     clearTimeout(metaSaveTimer);
     orphanRaw = {};
+    for (const q of agentSaveQueues.values()) clearTimeout(q.timer);
+    agentSaveQueues.clear();
     set({
       root,
       loading: true,
@@ -388,11 +700,19 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
       drafts: {},
       busy: false,
       opError: null,
+      agentSaveState: {},
+      agentSaveErrors: {},
+      avatars: {},
+      reloadNonce: {},
     });
     try {
       const scan: AgentsScan = await agentsScan(root);
       const parsed = parseMetaJson(scan.metaJson, scan.agents);
       orphanRaw = parsed.orphan;
+      agentsLoadGeneration += 1;
+      const gen = agentsLoadGeneration;
+      const reloadNonce: Record<string, number> = {};
+      for (const a of scan.agents) reloadNonce[a.fileName] = gen;
       set({
         agents: scan.agents,
         skills: scan.skills,
@@ -401,6 +721,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         metaError: parsed.metaError,
         orphanKeys: parsed.orphanKeys,
         loading: false,
+        reloadNonce,
       });
     } catch (e) {
       set({ loading: false, loadError: String(e) });
@@ -428,6 +749,18 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     });
   },
 
+  agentEdit: (fileName, patch) => {
+    get().updateDraft({ kind: "agent", key: fileName }, patch);
+    scheduleAgentSave(fileName);
+  },
+
+  retryAgentSave: (fileName) => {
+    const q = queueFor(fileName);
+    clearTimeout(q.timer);
+    q.timer = undefined;
+    void runAgentSave(fileName);
+  },
+
   saveDoc: async (sel) => {
     const s = get();
     if (s.busy) return "Busy";
@@ -435,14 +768,33 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     const key = draftKey(sel);
     const draft = s.drafts[key];
     if (draft === undefined) return null;
+    if (sel.kind === "agent") {
+      // WO11 doctrine (§12.8, "one writer per file") — no live call site
+      // passes an agent Selection to `saveDoc` anymore (AgentEditor routes
+      // every edit through `agentEdit`/the autosave queue exclusively,
+      // D4), but this branch used to call `agent_save` directly, which
+      // would be a second, uncoordinated writer to the exact file the
+      // queue owns the instant anything called it again. Routing through
+      // the SAME `runAgentSave` queue instead — reading the same draft
+      // this function already found — makes that impossible rather than
+      // merely unlikely, per the enforcement principle §12.8 records
+      // ("a runtime rejection ... not a comment"). Not gated by `busy`
+      // (the queue has its own discipline), so the check below is
+      // skipped for this branch.
+      const err = await runAgentSave(sel.key);
+      if (err === null) {
+        set((st) => {
+          const drafts = { ...st.drafts };
+          delete drafts[key];
+          return { drafts };
+        });
+      }
+      return err;
+    }
     set({ busy: true, opError: null });
     try {
       const patch = draft.raw ? { rawContent: draft.rawContent } : { fields: draft.fields, body: draft.body };
-      if (sel.kind === "agent") {
-        await agentSave(s.root, sel.key, patch);
-      } else {
-        await skillSave(s.root, sel.key, patch);
-      }
+      await skillSave(s.root, sel.key, patch);
       // Simplest correct choice (§7.2): refresh from a full agentsScan.
       const scan = await agentsScan(s.root);
       set((st) => {
@@ -548,6 +900,9 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     set({ busy: true, opError: null });
     try {
       if (sel.kind === "agent") {
+        // A rename is a `mv`: whatever the draft holds must land on disk
+        // under the OLD name before the file moves, or it is lost.
+        await flushAgentSaveFor(sel.key);
         const nextName = await agentRename(s.root, sel.key, newName);
         // As in createAgent: the destination name may already be sitting
         // in the orphan bucket. Reconcile it so serializeMeta never has to
@@ -574,7 +929,16 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           const orphanKeys = st.orphanKeys.includes(nextName)
             ? st.orphanKeys.filter((k) => k !== nextName)
             : st.orphanKeys;
-          return { agents, drafts, meta, selection: newSel, orphanKeys };
+          const avatars = { ...st.avatars };
+          if (avatars[sel.key] !== undefined) {
+            avatars[nextName] = avatars[sel.key];
+            delete avatars[sel.key];
+          }
+          const agentSaveState = { ...st.agentSaveState };
+          delete agentSaveState[sel.key];
+          const agentSaveErrors = { ...st.agentSaveErrors };
+          delete agentSaveErrors[sel.key];
+          return { agents, drafts, meta, selection: newSel, orphanKeys, avatars, agentSaveState, agentSaveErrors };
         });
         scheduleMetaSave();
         notifyAgentRenamed(sel.key, nextName, newName);
@@ -616,6 +980,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     set({ busy: true, opError: null });
     try {
       const sel: Selection = { kind: "agent", key: fileName };
+      await flushAgentSaveFor(fileName);
       const nextName = await agentRename(s.root, fileName, newName);
       const reconciled = reconcileOrphan(nextName);
       set((st) => {
@@ -643,7 +1008,16 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           st.selection !== null && st.selection.kind === "agent" && st.selection.key === fileName
             ? newSel
             : st.selection;
-        return { agents, drafts, meta, selection, orphanKeys };
+        const avatars = { ...st.avatars };
+        if (avatars[fileName] !== undefined) {
+          avatars[nextName] = avatars[fileName];
+          delete avatars[fileName];
+        }
+        const agentSaveState = { ...st.agentSaveState };
+        delete agentSaveState[fileName];
+        const agentSaveErrors = { ...st.agentSaveErrors };
+        delete agentSaveErrors[fileName];
+        return { agents, drafts, meta, selection, orphanKeys, avatars, agentSaveState, agentSaveErrors };
       });
       scheduleMetaSave();
       notifyAgentRenamed(fileName, nextName, newName);
@@ -665,6 +1039,17 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     set({ busy: true, opError: null });
     try {
       const doc = await agentConvert(s.root, relPath, newName);
+      // WO10 item 12 — an agent gets its memory index when it becomes an
+      // agent, however it got there. `createAgent` already did this; convert
+      // did not, so a converted agent was the one kind that still needed the
+      // (now removed) "Create memory folder" button. Idempotent server-side,
+      // and best-effort: failing to seed a memory index must not undo a
+      // conversion that already succeeded on disk.
+      try {
+        await agentMemoryEnsure(s.root, doc.fileName);
+      } catch (e) {
+        set({ opError: String(e) });
+      }
       const reconciled = reconcileOrphan(doc.fileName);
       set((st) => {
         const agents = [...st.agents.filter((a) => a.fileName !== doc.fileName), doc].sort(byFileName);
@@ -693,6 +1078,12 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     set({ busy: true, opError: null });
     try {
       if (sel.kind === "agent") {
+        // Deleting a file with an unsaved pending edit still in flight would
+        // otherwise race the delete — settle it first (even though the
+        // result is about to be discarded, this keeps `agent_save` from
+        // ever writing to a file `agent_delete` has already removed).
+        await flushAgentSaveFor(sel.key);
+        agentSaveQueues.delete(sel.key);
         await agentDelete(s.root, sel.key);
         set((st) => {
           const idx = st.agents.findIndex((a) => a.fileName === sel.key);
@@ -701,11 +1092,23 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           delete drafts[draftKey(sel)];
           const meta = { ...st.meta };
           delete meta[sel.key];
+          const avatars = { ...st.avatars };
+          delete avatars[sel.key];
+          const agentSaveState = { ...st.agentSaveState };
+          delete agentSaveState[sel.key];
+          const agentSaveErrors = { ...st.agentSaveErrors };
+          delete agentSaveErrors[sel.key];
           const neighbor = agents[idx] ?? agents[idx - 1];
           const selection: Selection | null = neighbor ? { kind: "agent", key: neighbor.fileName } : null;
-          return { agents, drafts, meta, selection };
+          return { agents, drafts, meta, selection, avatars, agentSaveState, agentSaveErrors };
         });
         scheduleMetaSave();
+        // WO11_CONTRACT.md §10.3 — after the delete has actually succeeded
+        // AND after this store's own state has settled, never before and
+        // never on the error path (the catch block below never reaches
+        // here). The graph store registers against this to prune the
+        // now-orphaned node (agentDeleteListeners, declared above).
+        notifyAgentDeleted(sel.key);
       } else {
         await skillDelete(s.root, sel.key);
         set((st) => {
@@ -731,24 +1134,31 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   attachSkill: (fileName, skillName) => {
     const sel: Selection = { kind: "agent", key: fileName };
     const key = draftKey(sel);
+    let changed = false;
     set((st) => {
       const existing = st.drafts[key] ?? draftFromDoc(findDoc(st, sel));
       if (existing === null) return {};
       if (existing.fields.skills.includes(skillName)) return { drafts: { ...st.drafts, [key]: existing } };
+      changed = true;
       const skills = [...existing.fields.skills, skillName];
       return { drafts: { ...st.drafts, [key]: { ...existing, fields: { ...existing.fields, skills } } } };
     });
+    if (changed) scheduleAgentSave(fileName);
   },
 
   detachSkill: (fileName, skillName) => {
     const sel: Selection = { kind: "agent", key: fileName };
     const key = draftKey(sel);
+    let changed = false;
     set((st) => {
       const existing = st.drafts[key] ?? draftFromDoc(findDoc(st, sel));
       if (existing === null) return {};
+      if (!existing.fields.skills.includes(skillName)) return { drafts: { ...st.drafts, [key]: existing } };
+      changed = true;
       const skills = existing.fields.skills.filter((s) => s !== skillName);
       return { drafts: { ...st.drafts, [key]: { ...existing, fields: { ...existing.fields, skills } } } };
     });
+    if (changed) scheduleAgentSave(fileName);
   },
 
   updateMeta: (fileName, patch) => {
@@ -791,5 +1201,60 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     } finally {
       set({ busy: false });
     }
+  },
+
+  loadAvatar: async (fileName) => {
+    const s = get();
+    if (s.root === null) return;
+    if (fileName in s.avatars) return; // already fetched (string or null)
+    const root = s.root;
+    try {
+      const dataUrl = await agentAvatarRead(root, fileName);
+      set((st) => ({ avatars: { ...st.avatars, [fileName]: dataUrl } }));
+    } catch {
+      // A broken avatar must never stop the rail/editor from rendering
+      // (contract §4.2) — cache "no avatar" so this doesn't retry forever.
+      set((st) => ({ avatars: { ...st.avatars, [fileName]: null } }));
+    }
+  },
+
+  setAvatarImage: async (fileName, sourcePath) => {
+    const s = get();
+    if (s.busy) return "Busy";
+    if (s.root === null) return "No project open";
+    set({ busy: true, opError: null });
+    try {
+      const ref = await agentAvatarSet(s.root, fileName, sourcePath);
+      set((st) => ({ avatars: { ...st.avatars, [fileName]: ref.dataUrl } }));
+      return null;
+    } catch (e) {
+      const msg = String(e);
+      set({ opError: msg });
+      return msg;
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  clearAvatarImage: async (fileName) => {
+    const s = get();
+    if (s.busy) return "Busy";
+    if (s.root === null) return "No project open";
+    set({ busy: true, opError: null });
+    try {
+      await agentAvatarClear(s.root, fileName);
+      set((st) => ({ avatars: { ...st.avatars, [fileName]: null } }));
+      return null;
+    } catch (e) {
+      const msg = String(e);
+      set({ opError: msg });
+      return msg;
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  bumpAgentReloadNonce: (fileName) => {
+    set((st) => ({ reloadNonce: { ...st.reloadNonce, [fileName]: (st.reloadNonce[fileName] ?? 0) + 1 } }));
   },
 }));

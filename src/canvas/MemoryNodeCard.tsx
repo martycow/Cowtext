@@ -36,7 +36,15 @@ import {
 } from "lucide-react";
 import { useProjectStore } from "../store/project";
 import { useSettingsStore } from "../store/settings";
-import { GRAPH_VERSION, isAgentFile, isRenameProtected, serializeGraph, useGraphStore } from "../store/graph";
+import {
+  GRAPH_VERSION,
+  canonPath,
+  isAgentFile,
+  isRenameProtected,
+  sameRelPath,
+  serializeGraph,
+  useGraphStore,
+} from "../store/graph";
 import { lastLiveTs, lensLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
 import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
 import { revealPath } from "../fs/api";
@@ -44,6 +52,8 @@ import { activityEmphasis, brightnessFor, useLensTickStore, weightEmphasis } fro
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
 import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { shortModelLabel } from "../agents/modelCatalog";
+import { portHeight } from "./portSlots";
 import { useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
@@ -58,7 +68,7 @@ function formatTokens(bytes: number): string {
 function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const node = data.memory;
   const root = useProjectStore((s) => s.root);
-  const file = useProjectStore((s) => s.files.find((f) => f.relPath === node.filePath));
+  const file = useProjectStore((s) => s.files.find((f) => sameRelPath(f.relPath, node.filePath)));
   const assembleStatus = useGraphStore((s) => s.assembleStatus[node.id] ?? "idle");
   const updateNode = useGraphStore((s) => s.updateNode);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
@@ -68,7 +78,11 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const role = roleVar(node.role);
   // Agent-backed nodes wear their identity avatar instead of the role glyph.
   const agentBacked = isAgentFile(node.filePath);
-  const agentFileName = agentBacked ? (node.filePath.split("/").pop() ?? node.filePath) : "";
+  // WO11_CONTRACT.md §10.5 — a bare "/" split left a Windows backslash path
+  // (`.claude\agents\tech-ui.md`) as the whole `agentFileName`, matching no
+  // AgentDoc. `canonPath` normalizes separators/case first, same fix as
+  // Inspector.tsx's AgentNodePanel and graph.ts's rename listener.
+  const agentFileName = agentBacked ? (canonPath(node.filePath).split("/").pop() ?? node.filePath) : "";
   const avatarSeed = useAgentsStore((s) => (agentBacked ? seedFor(s.meta, agentFileName) : ""));
   // §7.2 (#5): display name + model chip come from the live agent doc;
   // priority chip comes from the sidecar meta. Both fall back gracefully
@@ -80,6 +94,18 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const agentDisplayName =
     agentDoc?.fields.name?.trim() || agentFileName.replace(/\.md$/i, "");
   const agentModel = agentDoc?.fields.model ?? "inherit";
+  // WO10 item 14 — the nameplate is a fixed 46px box, so a raw wire id like
+  // "claude-haiku-4-5-20251001" showed as "claude-h…" and told you nothing.
+  // The full id stays in the tooltip.
+  const agentModelShort = shortModelLabel(agentModel);
+  // WO10 item 15 — the nickname is what Marty actually calls this agent; it
+  // was stored in the sidecar and rendered in three other places but never
+  // on the plate, which is the one surface you look at while wiring.
+  const agentNickname = agentMeta?.nickname.trim() ?? "";
+  // WO10 item 3 — pin counts ride in on node data (computed once per edge
+  // change in GraphCanvas), so a card never sweeps the edge list itself.
+  const inPins = data.pins?.in ?? 1;
+  const outPins = data.pins?.out ?? 1;
   const contextMenu = useContextMenu();
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op." The card has no room for a permanent
@@ -204,6 +230,29 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
             label: "Create file",
             icon: FilePlus2,
             onSelect: () => {
+              // WO11_CONTRACT.md §12.5 — an agent path must never be created
+              // through the generic `write_md_file` (a bare `# {title}\n\n`
+              // stub with no frontmatter, which `agents_scan` then reports
+              // as a broken `raw` agent). Route through the SAME
+              // `agent_create` every other "new agent" surface uses, at the
+              // exact fileName this node already names — it writes the real
+              // template and seeds the memory folder.
+              if (isAgentFile(node.filePath)) {
+                const fileName = canonPath(node.filePath).split("/").pop() ?? node.filePath;
+                void useAgentsStore
+                  .getState()
+                  .createAgent(node.title, { fileName })
+                  .then((err) => {
+                    if (err !== null) {
+                      console.error(err);
+                      return;
+                    }
+                    setSelection([node.id], []);
+                    setInspectorTab("markdown");
+                    void useProjectStore.getState().rescan();
+                  });
+                return;
+              }
               invoke("write_md_file", {
                 root,
                 relPath: node.filePath,
@@ -308,6 +357,13 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
 
   // Read-order — a stamped corner tag butted into the top-right edge, so it
   // never collides with the selection marquee and never inflates the plate.
+  //
+  // WO10 item 6: memory plates only. Read order is the sequence the CONTEXT
+  // is assembled in; an agent is the thing doing the reading, not a step in
+  // it, so a number stamped on an agent plate was answering a question
+  // nobody asked. The field itself stays on the node (sequence edges still
+  // read it, and the Inspector still edits it on memory nodes) — this hides
+  // the badge, it does not drop the data.
   const orderTag = (
     <span
       className="absolute right-0 top-0 z-10 flex h-6 min-w-[26px] items-center justify-center border-b-2 border-l-2 px-1 font-pixel text-[10px] leading-none text-content"
@@ -424,7 +480,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
               boxShadow: "inset 1px 1px 0 var(--plate-lip)",
             }}
           >
-            {orderTag}
+            {/* No orderTag here — WO10 item 6. */}
             {/* Portrait window + nameplate */}
             <div className="flex w-[66px] flex-none flex-col items-start gap-[5px] pb-2 pl-[10px] pt-[10px]">
               <span
@@ -438,11 +494,11 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
                 style={{ background: agentFrame, color: "var(--barn-canvas)" }}
                 title={`Model: ${agentModel}`}
               >
-                {agentModel}
+                {agentModelShort}
               </span>
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-1.5 pb-2 pl-1.5 pr-2.5 pt-[9px]">
-              <div className="flex items-center gap-1.5 pr-[22px]">
+              <div className="flex items-center gap-1.5 pr-1">
                 <span
                   className="truncate font-pixel text-[8px] leading-none"
                   style={{ color: agentFrame }}
@@ -454,6 +510,18 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
                 {liveAndPin}
               </div>
               {titleBlock}
+              {/* Nickname sits directly under the title, in quotes, so it
+                  reads as what you CALL this agent rather than as another
+                  identifier. Absent when unset — an empty pair of quotes
+                  would be worse than nothing. */}
+              {agentNickname !== "" && (
+                <div
+                  className="-mt-0.5 truncate text-xs italic text-content-secondary"
+                  title={`Nickname: ${agentNickname}`}
+                >
+                  {`“${agentNickname}”`}
+                </div>
+              )}
               {tagRow}
             </div>
           </div>
@@ -491,13 +559,36 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       )}
 
       {/* Ports: ONE socket bay (left) and ONE pin block (right), always
-          visible — a port you cannot see is a port you cannot aim at. Each
-          side is a run of five cartridge contact fingers (styles/index.css
-          connector block); still no handle ids — which finger a given wire
-          lands on is decided by canvas/portSlots.ts and applied by
-          canvas/edgePath.ts, not by the handle itself. */}
-      <Handle type="target" position={Position.Left} className="ct-port ct-port-in" />
-      <Handle type="source" position={Position.Right} className="ct-port ct-port-out" />
+          visible — a port you cannot see is a port you cannot aim at. Still
+          no handle ids: which finger a given wire lands on is decided by
+          canvas/portSlots.ts and applied by canvas/edgePath.ts, not by the
+          handle itself.
+
+          WO10 item 3 — the fingers are DOM children now, one per connection
+          (floor 1, capped at MAX_PINS), instead of a fixed five painted by a
+          repeating-linear-gradient. A port therefore SAYS how loaded it is
+          before you trace a single wire, and the block's height follows from
+          `portHeight` — 44px at five pins, exactly the frozen WO09 G1. */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="ct-port ct-port-in"
+        style={{ height: portHeight(inPins) }}
+      >
+        {Array.from({ length: inPins }, (_, i) => (
+          <span key={i} className="ct-pin" />
+        ))}
+      </Handle>
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="ct-port ct-port-out"
+        style={{ height: portHeight(outPins) }}
+      >
+        {Array.from({ length: outPins }, (_, i) => (
+          <span key={i} className="ct-pin" />
+        ))}
+      </Handle>
 
       {revealError !== null && (
         <div className="absolute left-0 right-0 top-full z-tooltip mt-2 flex items-center gap-1.5 border-2 border-danger bg-danger-surface px-2 py-1 shadow-plate-sm">

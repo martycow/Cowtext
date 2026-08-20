@@ -16,7 +16,8 @@
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { useGraphStore } from "./graph";
+import { canonPath, isAgentFile, sameRelPath, useGraphStore } from "./graph";
+import { saveAgentRaw } from "./agents";
 import type { FsChange } from "./project";
 
 export type ReviewKind = "modify" | "create" | "remove";
@@ -47,6 +48,11 @@ interface ReviewState {
   /** Root the counters/snapshots above belong to; internal bookkeeping for
    *  the project-switch reset, not meant to be read by callers. */
   currentRoot: string | null;
+  /** WO11_CONTRACT.md §12.5 — `revertCurrent`'s failure, when the reverted
+   *  path is an agent file (`saveAgentRaw`, not `write_md_file`). Previously
+   *  swallowed silently; now readable so a revert failure is not invisible.
+   *  Cleared at the start of every `revertCurrent` call. */
+  revertError: string | null;
 
   /** Seeds snapshots for `relPaths` from disk (parallel, missing tolerated —
    *  a file that can't be read just never gets a snapshot). */
@@ -69,16 +75,30 @@ interface ReviewState {
   /** Disk content becomes the new snapshot; the entry leaves the queue. */
   acceptCurrent: (root: string) => Promise<void>;
   /** Writes the last snapshot back to disk (self-write-suppressed — this
-   *  does not re-enqueue itself) and dequeues. */
+   *  does not re-enqueue itself). Dequeues and clears `reviewing` on
+   *  success. On failure, leaves `reviewing` and the queue entry untouched
+   *  (see `revertError`) — the entry has no other way to leave the queue,
+   *  and nulling `reviewing` in the same commit that sets the error would
+   *  unmount the modal (`ReviewModal`'s own mount gate) before the failure
+   *  strip it renders could ever be seen. Close/Skip/Accept remain the
+   *  user's way to move on from there. */
   revertCurrent: (root: string) => Promise<void>;
   /** Drops the whole queue and the review pointer without touching disk. */
   dismissAll: () => void;
 }
 
 /** Is `relPath` some node's file? Read live at call time — never cached —
- *  so a node adopted/removed between events is always current. */
+ *  so a node adopted/removed between events is always current.
+ *
+ *  WO11 tester sweep (MEDIUM #3): was a bare `===`, same class as the other
+ *  five path-comparison bugs fixed this order — a node whose `filePath` is
+ *  stored with backslashes (or different case; the established Windows
+ *  shape this whole class of bug traces back to, per the standing rule in
+ *  WO11_CONTRACT.md §10.5) would never be recognized as "managed" by an
+ *  incoming `fs://change`, so an external edit to that exact file would
+ *  silently skip the review queue instead of prompting Accept/Revert. */
 function isManaged(relPath: string): boolean {
-  return useGraphStore.getState().nodes.some((n) => n.filePath === relPath);
+  return useGraphStore.getState().nodes.some((n) => sameRelPath(n.filePath, relPath));
 }
 
 export const useReviewStore = create<ReviewState>((set, get) => ({
@@ -87,6 +107,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   reviewing: null,
   externalChangeCount: 0,
   currentRoot: null,
+  revertError: null,
 
   initSnapshots: async (root, relPaths) => {
     // A different root than last time this store saw = a project switch —
@@ -99,6 +120,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
         queue: [],
         reviewing: null,
         externalChangeCount: 0,
+        revertError: null,
       });
     }
     const reads = await Promise.all(
@@ -204,15 +226,52 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
   revertCurrent: async (root) => {
     const entry = get().reviewing;
     if (entry === null) return;
+    set({ revertError: null });
     const snapshot = get().snapshots.get(entry.relPath);
+    let failed = false;
     if (snapshot !== undefined) {
-      try {
-        await invoke("write_md_file", { root, relPath: entry.relPath, content: snapshot });
-      } catch {
-        // Best-effort: still dequeue so the banner never wedges on a
-        // write failure the user has no way to retry from this dialog.
+      if (isAgentFile(entry.relPath)) {
+        // WO11_CONTRACT.md §12.5 — one writer per file: an agent path is
+        // `store/agents.ts`'s save queue to write, never `write_md_file`
+        // (which R2's guard rejects outright for agent paths anyway). The
+        // real defect this fixes is the REVERSE of the naive one: a pending
+        // autosave that lands AFTER this revert would silently undo the
+        // user's explicit "restore my version" — `saveAgentRaw` closes that
+        // by clearing the file's pending debounce timer before it writes,
+        // on the SAME per-file queue `agentEdit` uses.
+        const fileName = canonPath(entry.relPath).split("/").pop() ?? entry.relPath;
+        const err = await saveAgentRaw(fileName, snapshot);
+        // Do NOT swallow: under the guard above, a silently-caught failure
+        // here would be a silent no-op — the same class of bug this whole
+        // amendment exists to close.
+        if (err !== null) {
+          set({ revertError: err });
+          failed = true;
+        }
+      } else {
+        try {
+          await invoke("write_md_file", { root, relPath: entry.relPath, content: snapshot });
+        } catch (e) {
+          // Best-effort for non-agent files (unaffected by the guard); still
+          // record the failure rather than discarding it entirely.
+          set({ revertError: String(e) });
+          failed = true;
+        }
       }
     }
+    // WO11 follow-up fix (post-§12.5): dequeuing unconditionally here — even
+    // on failure — raced ReviewModal's own mount gate (`reviewing !== null`)
+    // under React 19's automatic batching: `revertError` and `reviewing:
+    // null` landed in the SAME commit, so the modal unmounted in the exact
+    // commit that set the error, and the amber strip below was unreachable
+    // for the one case it exists to show. On failure, leave `reviewing` (and
+    // the queue entry) exactly where they are — the modal stays open, the
+    // strip renders, and Close/Skip/Accept (all still enabled/reachable from
+    // there) are how the user moves on; nothing here special-cases retrying,
+    // but nothing prevents the user from pressing Revert again either, since
+    // the entry and its snapshot are both still present. Success is
+    // unchanged: dequeue and null the pointer exactly as before.
+    if (failed) return;
     set((st) => ({
       queue: st.queue.filter((e) => e.relPath !== entry.relPath),
       reviewing: null,

@@ -89,10 +89,10 @@ fn save_and_read_reject_invalid_presets() {
     assert!(save_inner(&dir, "x", &wrong_kind)
         .unwrap_err()
         .contains("kind"));
-    // Wrong version — 1, 2, and 3 are all accepted (persona→agent role
-    // rename, then the WO03 v3 schema bump), so this must be a version
-    // outside that range.
-    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 4");
+    // Wrong version — 1..4 are all accepted (persona→agent role rename, the
+    // WO03 v3 schema bump, then the WO10 v4 edge-waypoints bump), so this
+    // must be a version outside that range.
+    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 5");
     assert!(save_inner(&dir, "x", &wrong_version)
         .unwrap_err()
         .contains("version"));

@@ -1,6 +1,7 @@
 # WO09 — Canvas connectors, round 2 (FROZEN)
 
-Status: FROZEN 2026-08-19. One lane (tech-ui). Two findings from Marty's round-1
+Status: FROZEN 2026-08-19. **AMENDED 2026-08-20 by WO10 item 3 — see
+§3a.** One lane (tech-ui). Two findings from Marty's round-1
 rejection. This is a UI round, not a work order — nothing outside the file-zone
 grid below may be touched.
 
@@ -99,6 +100,51 @@ corners, no radius, `crispEdges`).
 | G18 | `RISER_STEP` | **8px** | `edgePath.ts` | per-slot stagger of the fan-in turn column |
 | G19 | hit area | **26 × 52px** | `.ct-port::after` | pseudo-elements are excluded from `getBoundingClientRect`, so this never moves the reported port position |
 | G20 | `interactionWidth` | **12** | `MemoryEdge.tsx` | was 16; at `FINGER_PITCH` 8 a 16px band straddles the neighbouring wire |
+
+### §3a — WO10 amendment: the finger count is no longer frozen (2026-08-20)
+
+Marty, INPUT_PROMPT 08/20 item 3: *"Amount of visible Connectors's Pins must be
+equal to amount of current connections (By default there's always 1 pin on each
+Connector)."*
+
+That contradicts **G1** (`CONN_H` fixed at 44px) and **G2** (`FINGER_COUNT`
+fixed at 5), and it is the right call: a fixed five-finger block says the same
+thing about a port carrying one wire and a port carrying five, which is exactly
+the information a reader wants before tracing anything.
+
+**What changed.** The fingers stopped being paint and became elements.
+
+| # | Was | Now |
+|---|---|---|
+| G1 | `CONN_H` = 44px, in CSS | `portHeight(pins)` = `8·pins + 4`, inline from `portSlots.ts`. **44px at 5 pins — byte-identical to the frozen value** |
+| G2 | `FINGER_COUNT` = 5, a gradient stop | `pinCount(degree)` = `clamp(degree, 1, MAX_PINS)`; `MAX_PINS` = 9 |
+| G4 | 4px gradient stop | 4px `.ct-pin` element (`FINGER_H`) |
+| — | `SLOT_COUNT` / `CENTER_SLOT` | deleted; a slot is now `{ rank, pins }` (`PortSlot`), and `SINGLE_SLOT` is the fallback |
+| — | `slotOffset(slot)` | `slotOffset({rank, pins})` = `(rank − (pins−1)/2) × SLOT_PITCH` |
+
+**G3 `SLOT_PITCH` = 8px is untouched, and is now the ONLY cross-file
+invariant.** The CSS reproduces it as a 4px flex child plus a 4px `gap`; if
+those two ever stop summing to 8, wires land between contacts. Everything
+else — height, count, offsets — derives from `portSlots.ts` and cannot drift,
+because there is no second copy of it to drift from.
+
+**Why the offsets still land on whole pixels.** For an even `pins`,
+`(pins−1)/2` ends in `.5`, and `.5 × 8 = 4`. Both parities stay on the 4px
+grid; the 5-pin ladder is still exactly −16, −8, 0, +8, +16.
+
+**Heights, for reference:** 12px (1 pin) · 20 · 28 · 36 · **44 (5 pins — the
+old frozen value)** · 52 · 60 · 68 · 76px (9 pins, the cap). Past nine, ranks
+wrap round-robin exactly as `slotForRank` used to past five. The cap exists so
+a hub node's connector cannot grow taller than the ~93px card it is bolted to.
+
+**G19 (the 26 × 52 transparent hit area) matters more now, not less** — a
+one-pin port's visible mark is 12px tall, and the hit area is what keeps it
+aimable. It is unchanged.
+
+**G8 / G10 are unchanged**, so `targetX` / `sourceX` still arrive at the same
+places and none of §2's landing math moved.
+
+---
 
 Invariants a reviewer checks in one glance:
 

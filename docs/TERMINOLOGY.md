@@ -8,13 +8,12 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (63) |
-| `src-tauri/src/main.rs` | Thin shim → `cowtext_lib::run()`; `windows_subsystem = "windows"` |
+| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (73); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` |
 | `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
-| `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root`, `checked_root` |
+| `src-tauri/src/project.rs` | `.md` scan, graph read/write (schema **v4**), `write_atomic`, `resolve_within_root`, `checked_root` |
+| `src-tauri/src/project_meta.rs` | `.cowtext/project.json` v1 sidecar, `context/project.md` renderer, `project_init` scaffolder |
 | `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
-| `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
-| `src-tauri/src/lint.rs` | Linter v1: cycles, duplication, stale (lastVerified), conflict via explicit edges; reports as Problems |
+| `src-tauri/src/import.rs`, `lint.rs` | Importer (CLAUDE.md/AGENTS.md/.cursor rules → proposed changeset, never clobbers) · Linter v1 (cycles, duplication, stale, conflicts → Problems) |
 | `src-tauri/src/assemble.rs` | `claude -p` queue (FIFO, max 2), Runner trait seam, `set_claude_override` |
 | `src-tauri/src/hooks.rs` | Hooks preview/write into user `.claude/settings.json` (trust boundary) |
 | `src-tauri/src/hooks_server.rs` | axum on `127.0.0.1:4923`, `POST /event` → `BarnEvent` → emit |
@@ -22,18 +21,18 @@
 | `src-tauri/src/preset.rs` | Preset save/list/read/export/apply (never-clobber) |
 | `src-tauri/src/handoff.rs` | `HANDOFF.md` generation via ClaudeRunner, GENERATED header |
 | `src/store/` | Zustand stores: `useProjectStore`, `useGraphStore` (graph.ts), `useEventsStore` (events.ts), `useSettingsStore` (settings.ts) |
-| `src/canvas/` | React Flow view, port slot assignment: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, `portSlots` (assignPortSlots) |
-| `src/inspector/` | Inspector panel, `EventLog`, `HooksModal`, AssembleSection |
-| `src/compile/` | CompileModal, invoke wrappers, hand-rolled LCS diff (`diff.ts`) |
+| `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, plus five pure modules — `portSlots` (pins/slots), `edgePath` (router), `edgeEdit` (waypoints), `labelSlots` (label collisions), `edgeVerb`/`edgeColor` (label + palette) |
+| `src/inspector/` | Inspector panel, `InspectorSection` (collapsible components), `EventLog`, `HooksModal`, AssembleSection |
+| `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `src/project/` | Feature UI: CompileModal + LCS `diff.ts` · SettingsModal · preset & handoff modals with clipboard variants · `ProjectWizard` (new / convert / edit) |
 | `src-tauri/src/frontmatter.rs` | Frontmatter parser/emitter: read-patch-write round-trip with byte-identity invariant, line-level EOL tracking, no regex/YAML crate |
-| `src-tauri/src/agents.rs` | Agent/skill CRUD, file creation, rename, delete, metadata write; validation (component/path guards), sidecar schema |
+| `src-tauri/src/agents.rs` | Agent/skill CRUD, file creation, rename, delete, metadata write; validation (component/path guards), sidecar schema, `AGENT_FS` mutex for .claude/agents/ + .claude/skills/ write safety |
+| `src-tauri/src/git.rs` | Git probe/init/`.gitignore` write, shells out to system `git`, `gitAvailable` fallback when git not on PATH |
+| `src/git/` | GitWizard modal, `.gitignore` composer with presets, line-ending preservation, diff-preview gate |
 | `src/identity/` | Identity hash (fnv1a32), avatar grid + accent/patch derivation, calf appearance generation |
 | `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
 | `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
-| `src/settings/` | `SettingsModal.tsx` |
-| `src/preset/`, `src/handoff/` | Preset & handoff UI, clipboard variants |
 
-## Invoke commands (63)
+## Invoke commands (73)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -41,19 +40,18 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Group | Commands |
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
-| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
+| git | `git_status`, `git_init`, `gitignore_write` |
+| agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `agent_avatar_set`, `agent_avatar_read`, `agent_avatar_clear`, `agent_memory_status`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
 | compile | `compile_preview`, `compile_write` |
-| import | `import_scan`, `import_apply` |
-| lint | `lint_run` |
+| import / lint | `import_scan`, `import_apply`, `lint_run` |
 | assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
 | settings | `read_app_settings`, `write_app_settings` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
-| handoff | `handoff_generate`, `handoff_write` |
+| handoff | `handoff_generate`, `handoff_write`, `handoff_node_propose` |
 | tasks | `tasks_scan`, `task_toggle`, `task_append`, `task_move`, `task_update`, `task_id_ensure`, `task_depends_add`, `task_depends_remove` |
-| tasklinks | `tasklinks_read`, `tasklink_set`, `tasklink_delete` |
-| taskctx | `task_context_preview`, `task_context_write` |
-| handoff-node | `handoff_node_propose` |
+| tasklinks / taskctx | `tasklinks_read`, `tasklink_set`, `tasklink_delete`, `task_context_preview`, `task_context_write` |
+| project-meta | `project_meta_read`, `project_meta_write`, `project_init` |
 | worktree | `worktree_check`, `worktree_add` |
 | sessions | `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list` |
 
@@ -85,7 +83,12 @@ React Flow and PixiJS never import each other.
 | Edge kinds | **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `conditional` (glob/NL condition), `supersedes`, `conflicts-with` |
 | Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure — **excludes `overrides`** (affects compile order, not pinned set) |
 | readOrder | Manual tie-break inside topological order (Kahn, pops by `(readOrder, id)`) |
-| BarnGraph | `graph.json` shape: `version: 3` (v1→v2 = persona→agent; v2→v3 = roles 7→13, edges 4→7, tags/owner/meta, edge color), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
+| BarnGraph | `graph.json` shape: `version: 4` (v1→v2 = persona→agent; v2→v3 = roles 7→13, edges 4→7, tags/owner/meta, edge color; v3→v4 = edge `waypoints`), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
+| Waypoints | Per-edge hand-edited route (v4): flow-space corners the wire passes through; absent ⇒ the automatic route. Connector stubs are never editable |
+| Contact finger / pin | One 4px bar on a connector. Count = that port's connection count (floor 1, cap 9) on the 8px `SLOT_PITCH`; height = `portHeight` (44px at five — the frozen WO09 value) |
+| Edge tone | `selected` (accent, lifted above every wire) > `related` (touches the selected node) > rest (kind colour, or the author's palette override) |
+| Project sidecar | `.cowtext/project.json` v1: name/brief/type/requirements/hardRules/audience/architecture/constraints, rendered into the pinned `context/project.md` so it reaches the agent through compile |
+| Inspector section | One collapsible titled component (Position / Metadata / Context / Relations / File / Assemble / Actions); collapse persists in `AppSettings.collapsedSections` |
 | Compile | One graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` / `GEMINI.md`; never writes without diff-preview approval |
 | Compile target | `"claude" | "agents" | "cursor" | "copilot" | "gemini"` in `graph.json`; cursor/copilot/gemini off by default |
 | GENERATED header | First line of every compiled file; absence marks a file handwritten; `compile_write` refuses content without it |
@@ -116,6 +119,10 @@ React Flow and PixiJS never import each other.
 | Manager mode | App setting that hides the Barn view and never loads the Pixi scene — pure context-graph + agents UI (toggle in SettingsModal) |
 | Status bar | Bottom strip showing node/edge counts, external file changes, and items queued for review; updates live from graph and review stores |
 | @mention chip | Inline editor decoration for `@rel/path/to/node.md` syntax (N1 feature): resolved mentions light up as accent-colored clickable chip, unresolved as muted; click focuses the node, shift-click adds a references edge |
+| Agent avatar | Custom image for an agent (`.cowtext/avatars/<stem>.<ext>`): magic-byte validated (PNG/JPEG/WebP/GIF), ≤ 512 KB, no sidecar key, identicon fallback, moved by `agent_rename`, removed by `agent_delete` |
+| Agent memory status | Read-only probe of `.claude/agent-memory/<stem>/MEMORY.md` (exists, healthy UTF-8, non-empty); distinct from project scan (intentionally outside it) |
+| One writer per file | Doctrine: any UI surface that writes a file which a store-level save queue also writes MUST route through that queue. A second write path is a lost update, not a race — a lock cannot fix human-time stale reads. Extends to the Rust chokepoint: `write_md_file` rejects agent paths, enforcement not comment. |
+| Standing rule (path safety) | No bare `===` and no bare `.split("/")` on a `.md` path in `src/` — use `canonPath`/`sameRelPath` on both sides to handle Windows backslash variants |
 
 Cross-references like "FEATURES n.n" resolve to the Feature inventory section of
 `docs/tasks/BACKLOG.md` (formerly `docs/FEATURES.md`, archived).

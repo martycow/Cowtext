@@ -43,6 +43,7 @@ fn edge(id: &str, source: &str, target: &str, kind: EdgeKind) -> MemoryEdge {
         condition: None,
         note: None,
         color: None,
+        waypoints: Vec::new(),
     }
 }
 

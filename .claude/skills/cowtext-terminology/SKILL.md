@@ -1,6 +1,6 @@
 ---
 name: cowtext-terminology
-description: Canonical Cowtext vocabulary — module map, the 63 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
+description: Canonical Cowtext vocabulary — module map, the 73 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
 ---
 
 # Cowtext canonical terminology
@@ -13,7 +13,7 @@ synonyms for existing terms.
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (63) |
+| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (73) |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root` |
 | `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
 | `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
@@ -29,9 +29,10 @@ synonyms for existing terms.
 | `src/scene/` | Pixi barn + `sfx.ts` (howler confined here) |
 | `src/settings/`, `src/preset/`, `src/handoff/` | SettingsModal, preset & handoff UI |
 
-## Invoke commands (63) — byte-exact names
+## Invoke commands (73) — byte-exact names
 
 project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs`
+· git: `git_status`, `git_init`, `gitignore_write`
 · compile: `compile_preview`, `compile_write`
 · import: `import_scan`, `import_apply`
 · lint: `lint_run`
@@ -39,12 +40,11 @@ project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_
 · hooks: `hooks_preview`, `hooks_write`, `hooks_status`
 · settings: `read_app_settings`, `write_app_settings`
 · preset: `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply`
-· handoff: `handoff_generate`, `handoff_write`
-· agents: `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`, `agent_convert`, `agent_memory_ensure`
+· handoff: `handoff_generate`, `handoff_write`, `handoff_node_propose`
+· agents: `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `agent_avatar_set`, `agent_avatar_read`, `agent_avatar_clear`, `agent_memory_status`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write`
 · tasks: `tasks_scan`, `task_toggle`, `task_update`, `task_append`, `task_move`, `task_id_ensure`, `task_depends_add`, `task_depends_remove`
 · tasklinks: `tasklinks_read`, `tasklink_set`, `tasklink_delete`
 · taskctx: `task_context_preview`, `task_context_write`
-· handoff-node: `handoff_node_propose`
 · worktree: `worktree_check`, `worktree_add`
 · sessions: `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list`
 

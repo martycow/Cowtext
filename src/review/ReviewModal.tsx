@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X } from "lucide-react";
+import { RotateCw, X } from "lucide-react";
 import { useReviewStore, type ReviewEntry, type ReviewKind } from "../store/review";
 import { diffLines, type DiffHunk } from "../ui/diff";
 
@@ -115,6 +115,13 @@ export function ReviewModal({ root, onClose }: { root: string; onClose: () => vo
   const revertCurrent = useReviewStore((s) => s.revertCurrent);
   const skipCurrent = useReviewStore((s) => s.skipCurrent);
   const queueLen = useReviewStore((s) => s.queue.length);
+  // WO11_CONTRACT.md §12.5 — revertCurrent's failure (agent-path reverts
+  // route through saveAgentRaw and no longer swallow the error). Not scoped
+  // to a relPath in the store, so it must be cleared here whenever the
+  // reviewed entry changes — otherwise a stale failure from a PREVIOUS
+  // entry's revert would render against a fresh one that hasn't been
+  // touched yet, which is worse than not showing it at all.
+  const revertError = useReviewStore((s) => s.revertError);
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [diskContent, setDiskContent] = useState("");
@@ -137,6 +144,10 @@ export function ReviewModal({ root, onClose }: { root: string; onClose: () => vo
     let live = true;
     setBusy(false);
     setErrText(null);
+    // See the `revertError` note above — this entry hasn't had a revert
+    // attempt yet, so any leftover error belongs to whatever was reviewed
+    // before it.
+    useReviewStore.setState({ revertError: null });
     if (entry.kind === "remove") {
       setPhase("removed");
       return;
@@ -277,6 +288,31 @@ export function ReviewModal({ root, onClose }: { root: string; onClose: () => vo
             </div>
           )}
         </div>
+
+        {/* WO11 §12.5 — revert failure. Same amber-strip idiom as D4's
+            autosave failure surface in AgentEditor (plain message + Retry).
+            Verified, not assumed: on failure `revertCurrent` now sets
+            `revertError` and returns BEFORE the dequeue, so `reviewing`,
+            the queue entry and its snapshot are all left exactly as they
+            were — a second `runRevert` on the same entry re-reads that same
+            still-present snapshot and is safe to fire. That's what makes a
+            real Retry (not a no-op) possible here now. */}
+        {revertError !== null && (
+          <div className="flex flex-none items-center gap-2 border-t border-amber-border bg-amber-surface px-4 py-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-amber-text">
+              Revert failed: {revertError}
+            </span>
+            <button
+              type="button"
+              onClick={runRevert}
+              disabled={busy}
+              className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-amber-border bg-surface-2 px-2 text-2xs text-amber-text transition-colors duration-fast hover:bg-amber-surface disabled:text-content-disabled"
+            >
+              <RotateCw size={11} strokeWidth={1.5} />
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* Footer — 50px, consequence text left, actions right */}
         <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">

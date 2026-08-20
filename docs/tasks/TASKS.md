@@ -2,7 +2,7 @@
 
 Active and recently completed work items. v2 replan 2026-08-19: v0.1.0 cut re-based to the WO03 landing (see ROADMAP.md). Schema: Name | Status | Priority | Tags | Agent | Created | Description.
 
-All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 2026-08-19 (103ac80). Current work: acceptance walks + WO03 dispatch.
+All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 2026-08-19 (103ac80); WO03 / WO06 / WO09 / WO10 landed. Current work: acceptance walks.
 
 ## Open — toward v2 / WO03+
 
@@ -11,6 +11,8 @@ All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 
 | WO01 full acceptance walk (manual sections A-F + N) | new | high | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps. Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
 | WO02 acceptance walk (manual A-H, 61 steps) | new | high | wo02, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO02_TEST_MANUAL.md. WO02 committed as 103ac80; gates green. |
 | WO03 acceptance walk (manual A-H, 583 lines incl. CSP production-build step) | new | critical | wo03, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO03_TEST_MANUAL.md: 71 steps A–H including CSP production-build verification (replaced old v0.1.0 gate). All 14 defects fixed; audit observations recorded. Gates re-run green. |
+| WO10 acceptance walk (manual A-L, 17 sections, 87 steps) | new | critical | wo10, qa, acceptance |  | 2026-08-20 | Walk docs/testing/WO10_TEST_MANUAL.md: all 16 items of the 08/20 brainstorm list plus the four unbuilt 08/19 project items. Section K creates two scratch projects and runs last. Gates green at landing (553 Rust tests, 66/66 invokes). |
+| Global edge router (08/19 2:10PM item 2, partly met) | new | medium | wo10, canvas, backlog |  | 2026-08-20 | routeEdge still sidesteps at most the two endpoint cards — no global obstacle set, no edge-vs-edge avoidance. WO10 made hand-editing the answer where the router is wrong (graph v4 waypoints); a real router is still open. |
 | WO06 acceptance walk (manual A-K, 7 sections, WO02 regression at end) | new | high | wo06, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO06_TEST_MANUAL.md: B–H sections cover task DAG, blockage, O1/O2/O3 board defects, per-task subgraph injection, token budgets, handoff → node. Manual was authored pre-fixes (snapshots of audit findings); actual codebase is feature-complete (542 tests, 63/63 reachable). Awaiting Marty's walk. |
 
 ## Done — WO03 dispatch (2026-08-19)
