@@ -1,8 +1,11 @@
-// Problems panel — collapsible bottom bar, same idiom as EventLog.tsx
-// (header row always visible, body expands on click). Runs `lint_run`
-// (WO03 Lane E, now wired into lib.rs's invoke_handler) on open, on every
-// settled save, and on manual refresh; clicking a row selects the
-// offending node/edge and asks the caller to switch to the canvas view.
+// Problems tab body (WO14 declutter) — one of Dock's three tab contents.
+// Runs `lint_run` (WO03 Lane E, now wired into lib.rs's invoke_handler) on
+// mount/project switch, on every settled save, and on manual refresh;
+// clicking a row selects the offending node/edge and asks the caller to
+// switch to the canvas view. Visibility (which tab is showing, whether the
+// dock is expanded) is entirely Dock's concern now — this component always
+// renders its full toolbar + list; `onCountChange` reports the item count
+// up to Dock so its tab badge stays accurate even while this tab is hidden.
 //
 // WO03 audit D7: the original catch mapped EVERY rejection — including a
 // genuinely corrupt graph.json, the one situation this panel exists to
@@ -15,7 +18,7 @@
 // exactly `Command {name} not found` — matched narrowly below. Everything
 // else renders as a real error row.
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, ListChecks, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useGraphStore } from "../store/graph";
 import { useFocusStore } from "../canvas/types";
 import { lintRun } from "../lint/api";
@@ -77,8 +80,17 @@ function ProblemRow({ item, onNavigate }: { item: LintItem; onNavigate: (item: L
 
 type Status = "idle" | "loading" | "ready" | "unavailable" | "error";
 
-export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: () => void }) {
-  const [collapsed, setCollapsed] = useState(true);
+export function ProblemsPanel({
+  root,
+  onNavigate,
+  onCountChange,
+}: {
+  root: string;
+  onNavigate: () => void;
+  /** Reports the current item count + whether status is "error", so Dock's
+   *  tab badge stays accurate without duplicating the lint fetch. */
+  onCountChange?: (n: number, hasError: boolean) => void;
+}) {
   const [items, setItems] = useState<LintItem[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [errText, setErrText] = useState<string | null>(null);
@@ -125,6 +137,10 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
     if (saveState === "saved") refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveState]);
+  useEffect(() => {
+    onCountChange?.(items.length, status === "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, status]);
 
   // Every severity actually present, ranked error → warning → info (and
   // anything unranked sorts last rather than erroring — see SEVERITY_RANK).
@@ -154,16 +170,8 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
   };
 
   return (
-    <div className="flex-none border-t border-border-subtle bg-surface-1">
-      <div
-        onClick={() => setCollapsed((c) => !c)}
-        className="flex h-[31px] flex-none cursor-default items-center gap-2 px-3 hover:bg-[var(--surface-hover)]"
-        title={collapsed ? "Show problems" : "Hide problems"}
-      >
-        <ListChecks size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
-        <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
-          Problems
-        </span>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-[30px] flex-none items-center gap-2 border-b border-border-subtle px-3">
         {status === "unavailable" ? (
           <span className="font-mono text-2xs text-content-disabled">unavailable</span>
         ) : status === "error" ? (
@@ -175,10 +183,7 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
             {severities.map((sev) => (
               <button
                 key={sev}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSeverityFilter((cur) => (cur === sev ? null : sev));
-                }}
+                onClick={() => setSeverityFilter((cur) => (cur === sev ? null : sev))}
                 title={`Show only ${sev}`}
                 aria-pressed={severityFilter === sev}
                 className={`inline-flex h-[17px] items-center rounded-sm border px-1 font-mono text-micro transition-opacity duration-fast ${severityClasses(sev)} ${
@@ -195,46 +200,36 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
         )}
         <div className="flex-1" />
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            refresh();
-          }}
+          onClick={refresh}
           title="Re-run lint"
           className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
         >
           <RefreshCw size={12} strokeWidth={1.5} className={status === "loading" ? "animate-spin" : undefined} />
         </button>
-        {collapsed ? (
-          <ChevronUp size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
-        ) : (
-          <ChevronDown size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
-        )}
       </div>
-      {!collapsed && (
-        <ul className="max-h-[168px] flex-none overflow-y-auto">
-          {status === "unavailable" && (
-            <li className="px-3 py-2 text-xs text-content-muted">
-              Lint isn't available in this build yet.
-            </li>
-          )}
-          {status === "error" && errText !== null && (
-            <li className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
-              {errText}
-            </li>
-          )}
-          {status === "ready" && items.length === 0 && (
-            <li className="px-3 py-2 text-xs text-content-muted">No problems found.</li>
-          )}
-          {status === "ready" && items.length > 0 && visibleItems.length === 0 && (
-            <li className="px-3 py-2 text-xs text-content-muted">
-              No {severityFilter} problems — {items.length} hidden by the filter.
-            </li>
-          )}
-          {visibleItems.map((item, i) => (
-            <ProblemRow key={i} item={item} onNavigate={navigate} />
-          ))}
-        </ul>
-      )}
+      <ul className="min-h-0 flex-1 overflow-y-auto">
+        {status === "unavailable" && (
+          <li className="px-3 py-2 text-xs text-content-muted">
+            Lint isn't available in this build yet.
+          </li>
+        )}
+        {status === "error" && errText !== null && (
+          <li className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
+            {errText}
+          </li>
+        )}
+        {status === "ready" && items.length === 0 && (
+          <li className="px-3 py-2 text-xs text-content-muted">No problems found.</li>
+        )}
+        {status === "ready" && items.length > 0 && visibleItems.length === 0 && (
+          <li className="px-3 py-2 text-xs text-content-muted">
+            No {severityFilter} problems — {items.length} hidden by the filter.
+          </li>
+        )}
+        {visibleItems.map((item, i) => (
+          <ProblemRow key={i} item={item} onNavigate={navigate} />
+        ))}
+      </ul>
     </div>
   );
 }

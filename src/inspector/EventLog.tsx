@@ -1,10 +1,12 @@
-// Event log — collapsible bottom panel showing the live BarnEvent feed
-// (Phase 4). Every event is shown, including unknown paths (faint accent
-// tint per DESIGN_SPEC); node mapping is cosmetic here, never a filter.
-// Also hosts the hooks-install entry point (trust-boundary modal).
+// Activity tab body (WO14 declutter) — one of Dock's three tab contents,
+// showing the live BarnEvent feed (Phase 4). Every event is shown,
+// including unknown paths (faint accent tint per DESIGN_SPEC); node mapping
+// is cosmetic here, never a filter. Also hosts the hooks-install entry
+// point (trust-boundary modal). Visibility is Dock's concern now — this
+// component always renders its full toolbar + list.
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Copy, FolderOpen, Plug, Trash2, X } from "lucide-react";
+import { Copy, FolderOpen, Plug, Trash2, X } from "lucide-react";
 import { useEventsStore, resolveNodeId, type BarnEvent, type LogEvent } from "../store/events";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
@@ -150,7 +152,6 @@ export function EventLog({ root }: { root: string }) {
   const clear = useEventsStore((s) => s.clear);
   const hooksInstalled = useProjectStore((s) => s.hooksInstalled);
   const hooksReadable = useProjectStore((s) => s.hooksReadable);
-  const [collapsed, setCollapsed] = useState(true);
   const [hooksOpen, setHooksOpen] = useState(false);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op."
@@ -161,19 +162,11 @@ export function EventLog({ root }: { root: string }) {
   useEffect(() => {
     const el = listRef.current;
     if (el !== null) el.scrollTop = el.scrollHeight;
-  }, [events.length, collapsed]);
+  }, [events.length]);
 
   return (
-    <div className="flex flex-none flex-col border-t border-border-subtle bg-surface-1">
-      {/* The whole header is the collapse toggle; inner buttons stop the click. */}
-      <div
-        className="flex h-[31px] flex-none cursor-default items-center gap-2 px-3 hover:bg-[var(--surface-hover)]"
-        onClick={() => setCollapsed((c) => !c)}
-        title={collapsed ? "Show event feed" : "Hide event feed"}
-      >
-        <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">
-          event feed
-        </span>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-[30px] flex-none items-center gap-2 border-b border-border-subtle px-3">
         {events.length > 0 && (
           <span className="font-mono text-2xs text-content-disabled">{events.length}</span>
         )}
@@ -221,26 +214,16 @@ export function EventLog({ root }: { root: string }) {
           </button>
         ) : null}
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            clear();
-          }}
+          onClick={clear}
           disabled={events.length === 0}
           title="Clear feed"
           className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content disabled:text-content-disabled"
         >
           <Trash2 size={13} strokeWidth={1.5} />
         </button>
-        <span className="grid h-control-sm w-control-sm flex-none place-items-center text-content-muted">
-          {collapsed ? (
-            <ChevronUp size={13} strokeWidth={1.5} />
-          ) : (
-            <ChevronDown size={13} strokeWidth={1.5} />
-          )}
-        </span>
       </div>
-      {!collapsed && revealError !== null && (
-        <div className="flex flex-none items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
+      {revealError !== null && (
+        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-3 py-1">
           <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
             {revealError}
           </span>
@@ -253,24 +236,18 @@ export function EventLog({ root }: { root: string }) {
           </button>
         </div>
       )}
-      {!collapsed &&
-        (events.length === 0 ? (
-          <p className="border-t border-border-subtle px-3 py-4 text-center text-sm text-content-muted">
-            No events yet. Install hooks, then run Claude Code in this project — or start
-            barn demo mode.
-          </p>
-        ) : (
-          <ul
-            ref={listRef}
-            className={`max-h-[168px] flex-none overflow-y-auto py-0.5 ${
-              revealError === null ? "border-t border-border-subtle" : ""
-            }`}
-          >
-            {events.map((e, i) => (
-              <EventRow key={`${e.ts}-${i}`} event={e} root={root} onRevealError={setRevealError} />
-            ))}
-          </ul>
-        ))}
+      {events.length === 0 ? (
+        <p className="px-3 py-4 text-center text-sm text-content-muted">
+          No events yet. Install hooks, then run Claude Code in this project — or start
+          barn demo mode.
+        </p>
+      ) : (
+        <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-0.5">
+          {events.map((e, i) => (
+            <EventRow key={`${e.ts}-${i}`} event={e} root={root} onRevealError={setRevealError} />
+          ))}
+        </ul>
+      )}
       {hooksOpen && <HooksModal root={root} onClose={() => setHooksOpen(false)} />}
     </div>
   );

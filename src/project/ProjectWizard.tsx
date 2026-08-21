@@ -183,6 +183,45 @@ function Disclosure({
 
 const STEPS = ["Folder", "Project", "Create"] as const;
 
+/** WO14 declutter — a left-rail numbered stepper replaces the header's flat
+ *  pill row, so the wizard reads as a real sequence (numbered circles, a
+ *  connecting line, a done-state check) instead of small text chips easy to
+ *  miss above the form. Edit mode never renders this (it has no steps). */
+function StepRail({ step }: { step: number }) {
+  return (
+    <div className="flex w-[136px] flex-none flex-col border-r border-border-subtle px-4 py-4">
+      {STEPS.map((label, i) => (
+        <div key={label} className="relative flex items-start gap-2.5 pb-7 last:pb-0">
+          {i < STEPS.length - 1 && (
+            <span
+              aria-hidden
+              className="absolute bottom-[-4px] left-[10px] top-[22px] w-px bg-border-default"
+            />
+          )}
+          <span
+            className={`z-10 grid h-[21px] w-[21px] flex-none place-items-center rounded-pill border font-mono text-[10.5px] ${
+              i === step
+                ? "border-accent bg-accent font-bold text-content-inverse"
+                : i < step
+                  ? "border-accent-border bg-accent-surface text-accent-text"
+                  : "border-border-default bg-surface-2 text-content-muted"
+            }`}
+          >
+            {i < step ? <Check size={11} strokeWidth={2.5} /> : i + 1}
+          </span>
+          <span
+            className={`pt-0.5 text-xs ${
+              i === step ? "font-medium text-content" : "text-content-muted"
+            }`}
+          >
+            {label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ProjectWizard({
   mode,
   /** Required in "edit" mode — the already-open project. Ignored otherwise,
@@ -385,33 +424,19 @@ export function ProjectWizard({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="flex max-h-[85vh] w-[680px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
+        className="flex max-h-[85vh] w-[800px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
           <span className="text-[15px] font-semibold">{title}</span>
-          <div className="flex items-center gap-1.5">
-            {(isEdit ? [] : STEPS).map((s, i) => (
-              <span
-                key={s}
-                className={`rounded-sm px-1.5 py-0.5 font-mono text-micro uppercase tracking-wider ${
-                  i === step
-                    ? "bg-accent-surface text-accent-text"
-                    : i < step
-                      ? "text-content-muted"
-                      : "text-content-disabled"
-                }`}
-              >
-                {s}
-              </span>
-            ))}
-          </div>
           <div className="min-w-0 flex-1" />
           <button onClick={onClose} title="Close" disabled={busy || hooksOpen} className={ICON_BTN}>
             <X size={14} strokeWidth={1.5} />
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1">
+          {!isEdit && <StepRail step={step} />}
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
           {error !== null && (
             <div className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
               {error}
@@ -622,6 +647,7 @@ export function ProjectWizard({
               )}
             </div>
           )}
+          </div>
         </div>
 
         <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">
@@ -629,10 +655,10 @@ export function ProjectWizard({
             {isEdit
               ? "These properties compile into context/project.md."
               : step === 0
-                ? "Step 1 of 3 — choose where this project lives."
+                ? "Choose where this project lives."
                 : step === 1
-                  ? "Step 2 of 3 — this becomes a pinned Memory Node."
-                  : "Step 3 of 3 — review and create."}
+                  ? "This becomes a pinned Memory Node."
+                  : "Review and create."}
           </span>
           {step > 0 && !isEdit && (
             <button onClick={() => setStep(step - 1)} disabled={busy} className={SECONDARY_BTN}>
