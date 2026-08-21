@@ -2,14 +2,17 @@ import { useEffect, useRef, useState, Suspense, lazy } from "react";
 import {
   Bot,
   ChevronDown,
+  ChevronUp,
   FileOutput,
   FolderOpen,
   Gem,
   GitBranch,
   Home,
   Import as ImportIcon,
+  Info,
   MousePointer2,
   Package,
+  Play,
   Redo2,
   Send,
   Settings,
@@ -23,13 +26,14 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useProjectStore } from "./store/project";
 import {
+  sameRelPath,
   useGraphStore,
   type CompileTarget,
   type SaveState,
 } from "./store/graph";
 import { ProjectWizard, type ProjectWizardMode } from "./project/ProjectWizard";
 import { initEventListener } from "./store/events";
-import { initSessionsListener, useSessionsStore } from "./store/sessions";
+import { initSessionsListener, MAX_SESSIONS, useSessionsStore } from "./store/sessions";
 import { useReviewStore } from "./store/review";
 import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
@@ -55,6 +59,19 @@ const ImportReviewModal = lazy(() =>
 // WO11 G2 — git init + .gitignore composer (UI-A's frozen seam, §5.10),
 // mounted from the project row's context menu and the topbar's Git button.
 const GitWizard = lazy(() => import("./git/GitWizard").then((m) => ({ default: m.GitWizard })));
+// WO12 F3 — the Run button's context-prefilled launch dialog. File kept as
+// AddAgentDialog.tsx (avoids git churn) but the export is RunSessionDialog.
+const RunSessionDialog = lazy(() =>
+  import("./sessions/AddAgentDialog").then((m) => ({ default: m.RunSessionDialog })),
+);
+// WO12 F7 — the always-on assemble/refine/summarize trust-boundary gate.
+const AssembleConfirmModal = lazy(() =>
+  import("./assemble/AssembleConfirmModal").then((m) => ({ default: m.AssembleConfirmModal })),
+);
+// WO12 F2 — surfaces a session's COWTEXT_ASK question and replies inline.
+const AgentQuestionModal = lazy(() =>
+  import("./sessions/AgentQuestionModal").then((m) => ({ default: m.AgentQuestionModal })),
+);
 import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
 import { flushAgentSave, flushMetaSave, useAgentsStore } from "./store/agents";
 import { initSfx } from "./scene/sfx";
@@ -63,6 +80,10 @@ import { ResizeHandle } from "./ui/ResizeHandle";
 import { ContextMenu } from "./ui/ContextMenu";
 import { useContextMenu } from "./ui/useContextMenu";
 import type { MenuItem } from "./ui/menuTypes";
+// WO12 F1 — the toast channel. NOT lazy: it must already be present before
+// the first failure that would want to raise a toast can occur, and it is
+// small (~2 KB) — no code-splitting benefit worth the mount-order risk.
+import { ToastHost } from "./ui/ToastHost";
 
 /** The three faces of an open project: the graph editor, the barn monitor,
  *  and the tasks board. */
@@ -314,6 +335,7 @@ function CompileSplitButton({
 
 function TopBar({
   onCompile,
+  onRun,
   onSettings,
   onPresets,
   onHandoff,
@@ -325,6 +347,7 @@ function TopBar({
   onViewChange,
 }: {
   onCompile: (lockedTarget?: CompileTarget) => void;
+  onRun: () => void;
   onSettings: () => void;
   onPresets: () => void;
   onHandoff: () => void;
@@ -338,6 +361,10 @@ function TopBar({
   const { root, openProject } = useProjectStore();
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const managerMode = useSettingsStore((s) => s.managerMode);
+  // F3 — same MAX_SESSIONS/atCap idiom as RosterBar's now-removed launch
+  // button and RunSessionDialog's own gate; kept in sync deliberately.
+  const aliveSessionCount = useSessionsStore((s) => s.sessions.filter((x) => x.alive).length);
+  const atCap = aliveSessionCount >= MAX_SESSIONS;
   return (
     <header className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle bg-surface-1 px-4">
       <PixelLogo />
@@ -375,6 +402,21 @@ function TopBar({
       {root !== null && <SaveIndicator />}
       {root !== null && <UndoRedoButtons />}
       {root !== null && <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />}
+      {/* WO12 F3 — Run. The pipeline reads Compile -> Run left to right; Run
+          is the bar's only accent-filled control (blue = user-initiated,
+          per the two-accent law). Opens RunSessionDialog prefilled from
+          current context (selected agent, task, cwd, ceiling). */}
+      {root !== null && (
+        <button
+          onClick={onRun}
+          disabled={atCap}
+          title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Run — launch a Claude session"}
+          className="flex h-control flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
+        >
+          <Play size={14} strokeWidth={1.5} />
+          Run
+        </button>
+      )}
       {/* WO10 (INPUT_PROMPT 08/19 item 10) — the project's own properties.
           Written by the title-screen wizard, edited here; they compile into
           the pinned context/project.md Memory Node. */}
@@ -689,6 +731,85 @@ function isEditableTarget(el: Element | null): boolean {
   return el.closest(".cm-editor") !== null;
 }
 
+/** WO13 N-F/E-F — one-time strip shown the first time a project's
+ *  `graph.json` is loaded on an older schema version. Accent (blue), not
+ *  amber: this is Cowtext's own one-shot upgrade, not a live agent action or
+ *  a warning — "blue is you" per the design idiom, and the migration was the
+ *  app acting on the user's behalf, not something to be wary of. Dismissal
+ *  persists per-project ({@link useProjectStore}'s `dismissMigrationBanner`
+ *  keys off `root`, so it stays dismissed across restarts).
+ *
+ *  `nodesNeedingReview` beyond zero also renders a `Review` button —
+ *  clicking it is the "one action" §N-F/E-F acceptance requires; the
+ *  file-rail chip below is the SECOND entry point that survives dismissal. */
+function MigrationBanner({ onNavigate }: { onNavigate: () => void }) {
+  const migration = useProjectStore((s) => s.migration);
+  const dismissed = useProjectStore((s) => s.migrationBannerDismissed);
+  const dismiss = useProjectStore((s) => s.dismissMigrationBanner);
+  const focusNeedsReview = useProjectStore((s) => s.focusNeedsReview);
+  const [expanded, setExpanded] = useState(false);
+
+  if (migration === null || migration === undefined || dismissed) return null;
+
+  const breakdown = [
+    ...Object.entries(migration.byRoleChange).map(([k, n]) => `${n}× ${k}`),
+    ...Object.entries(migration.byEdgeChange).map(([k, n]) => `${n}× ${k}`),
+  ];
+
+  return (
+    <div className="flex flex-col flex-none border-b border-border-subtle bg-accent-surface">
+      <div className="flex h-[31px] flex-none items-center gap-2 px-4">
+        <Info size={13} strokeWidth={1.5} className="flex-none text-accent-text" />
+        <span className="truncate font-mono text-xs text-accent-text">
+          {migration.totalNodes} node{migration.totalNodes === 1 ? "" : "s"} migrated to the new
+          format
+          {migration.nodesNeedingReview > 0 &&
+            ` · ${migration.nodesNeedingReview} need${migration.nodesNeedingReview === 1 ? "s" : ""} review`}
+        </span>
+        <div className="flex-1" />
+        {breakdown.length > 0 && (
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="flex h-control-sm items-center gap-1 rounded border border-accent-border bg-surface-1 px-2 text-xs text-accent-text transition-colors duration-fast hover:bg-surface-2"
+          >
+            Details
+            {expanded ? (
+              <ChevronUp size={11} strokeWidth={1.5} />
+            ) : (
+              <ChevronDown size={11} strokeWidth={1.5} />
+            )}
+          </button>
+        )}
+        {migration.nodesNeedingReview > 0 && (
+          <button
+            onClick={() => {
+              focusNeedsReview();
+              onNavigate();
+            }}
+            className="flex h-control-sm items-center rounded border border-accent-border bg-surface-1 px-2 text-xs font-medium text-accent-text transition-colors duration-fast hover:bg-surface-2"
+          >
+            Review {migration.nodesNeedingReview}
+          </button>
+        )}
+        <button
+          onClick={dismiss}
+          title="Dismiss"
+          className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-accent-text transition-colors duration-fast hover:bg-surface-2"
+        >
+          <X size={12} strokeWidth={1.5} />
+        </button>
+      </div>
+      {expanded && (
+        <div className="border-t border-accent-border px-4 py-1.5 font-mono text-2xs text-accent-text">
+          {breakdown.join(" · ")}
+          {migration.edgesDropped > 0 &&
+            ` · ${migration.edgesDropped} edge${migration.edgesDropped === 1 ? "" : "s"} collapsed`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Disk-change review strip (WO01 Block C §T4) — amber-surface because this
  *  is the agent/warning channel (something outside Cowtext touched a
  *  managed file), never the blue user-action accent. Dismiss all is armed
@@ -802,11 +923,13 @@ function Workspace({
   view,
   onEditProject,
   onOpenGit,
+  onNeedsReview,
 }: {
   root: string;
   view: View;
   onEditProject: () => void;
   onOpenGit: () => void;
+  onNeedsReview: () => void;
 }) {
   const loaded = useGraphStore((s) => s.loaded);
   const loadError = useGraphStore((s) => s.loadError);
@@ -842,7 +965,12 @@ function Workspace({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <FileRail root={root} onEditProject={onEditProject} onOpenGit={onOpenGit} />
+      <FileRail
+        root={root}
+        onEditProject={onEditProject}
+        onOpenGit={onOpenGit}
+        onNeedsReview={onNeedsReview}
+      />
       {!leftPanelCollapsed && (
         <ResizeHandle
           value={leftPanelWidth}
@@ -911,7 +1039,7 @@ function Workspace({
             label="Resize inspector panel"
           />
           <Suspense fallback={<div style={{ width: rightPanelWidth }} className="flex-none bg-surface-1" />}>
-            <Inspector root={root} />
+            <Inspector root={root} onOpenGit={onOpenGit} />
           </Suspense>
         </>
       )}
@@ -922,6 +1050,8 @@ function Workspace({
 export default function App() {
   const { root, scanning, error } = useProjectStore();
   const loadGraph = useGraphStore((s) => s.loadGraph);
+  // WO12 F5 tail gate — see pendingStarterAdoptRoot below.
+  const graphLoaded = useGraphStore((s) => s.loaded);
   const reviewing = useReviewStore((s) => s.reviewing !== null);
   const [compileOpen, setCompileOpen] = useState(false);
   // N2 split-button: which single target (if any) the modal is locked to.
@@ -939,9 +1069,17 @@ export default function App() {
   // scan lands.
   const [wizardMode, setWizardMode] = useState<ProjectWizardMode | null>(null);
   const [pendingImportRoot, setPendingImportRoot] = useState<string | null>(null);
+  // WO12 F5 tail — starter-node adoption. Same "record intent, act once the
+  // graph load lands" pattern as `pendingImportRoot` just above: checking
+  // node count right after `openProjectAt` resolves would race the loadGraph
+  // effect below (which resets nodes to [] and reloads asynchronously), so
+  // this is compared against `loaded` too, not just `root`.
+  const [pendingStarterAdoptRoot, setPendingStarterAdoptRoot] = useState<string | null>(null);
   const [view, setView] = useState<View>("canvas");
   // WO11 G2 — GitWizard (init + .gitignore composer).
   const [gitWizardOpen, setGitWizardOpen] = useState(false);
+  // WO12 F3 — Run button's launch dialog.
+  const [runOpen, setRunOpen] = useState(false);
   // WO11 G1 — Home's confirm strip. `null` = not showing; a number = the
   // live-session count named in the strip at the moment Home was clicked.
   const [homeConfirmCount, setHomeConfirmCount] = useState<number | null>(null);
@@ -978,6 +1116,26 @@ export default function App() {
     setPendingImportRoot(null);
     setImportOpen(true);
   }, [root, pendingImportRoot]);
+
+  // WO12 F5 tail — starter-node adoption. A brand-new project has zero
+  // graph nodes and an un-adopted context/project.md sitting on disk
+  // (project_init deliberately doesn't write the graph — preset_apply owns
+  // that). Gated on `graphLoaded` as well as `root` so this only fires once
+  // loadGraph's own reset-then-load cycle has actually finished for the
+  // matching root; checking node count any earlier would read stale data
+  // left over from whatever project (if any) was open before. Never fires
+  // for "convert" (openImport case) or "edit" — see onDone below.
+  useEffect(() => {
+    if (pendingStarterAdoptRoot === null || root === null) return;
+    if (root !== pendingStarterAdoptRoot) return;
+    if (!graphLoaded) return;
+    setPendingStarterAdoptRoot(null);
+    if (useGraphStore.getState().nodes.length > 0) return;
+    const hasProjectMd = useProjectStore
+      .getState()
+      .files.some((f) => sameRelPath(f.relPath, "context/project.md"));
+    if (hasProjectMd) useGraphStore.getState().adoptFile("context/project.md");
+  }, [root, pendingStarterAdoptRoot, graphLoaded]);
 
   // Wire barn://event + assemble://status once (idempotent — StrictMode-safe).
   // The listeners live for the app's lifetime; no teardown on re-render.
@@ -1027,8 +1185,10 @@ export default function App() {
       setHandoffOpen(false);
       setImportOpen(false);
       setGitWizardOpen(false);
+      setRunOpen(false);
       setWizardMode(null);
       setPendingImportRoot(null);
+      setPendingStarterAdoptRoot(null);
     });
   };
 
@@ -1048,6 +1208,7 @@ export default function App() {
           setCompileLockedTarget(lockedTarget);
           setCompileOpen(true);
         }}
+        onRun={() => setRunOpen(true)}
         onSettings={() => setSettingsOpen(true)}
         onPresets={() => setPresetsOpen(true)}
         onHandoff={() => setHandoffOpen(true)}
@@ -1082,14 +1243,19 @@ export default function App() {
         )
       ) : (
         <>
+          <MigrationBanner onNavigate={() => setView("canvas")} />
           <ReviewBanner />
           <Workspace
             root={root}
             view={view}
             onEditProject={() => setWizardMode("edit")}
             onOpenGit={() => setGitWizardOpen(true)}
+            onNeedsReview={() => {
+              setView("canvas");
+              useProjectStore.getState().focusNeedsReview();
+            }}
           />
-          <RosterBar root={root} />
+          <RosterBar />
           <ProblemsPanel root={root} onNavigate={() => setView("canvas")} />
           <EventLog root={root} />
           <StatusBar />
@@ -1137,6 +1303,19 @@ export default function App() {
           <GitWizard root={root} onClose={() => setGitWizardOpen(false)} />
         </Suspense>
       )}
+      {runOpen && root !== null && (
+        <Suspense fallback={null}>
+          <RunSessionDialog root={root} onClose={() => setRunOpen(false)} />
+        </Suspense>
+      )}
+      {/* WO12 F7/F2 — zero-prop, self-hiding: both read their own pending
+          state and render null when there's nothing to show. */}
+      <Suspense fallback={null}>
+        <AssembleConfirmModal />
+      </Suspense>
+      <Suspense fallback={null}>
+        <AgentQuestionModal />
+      </Suspense>
       {wizardMode !== null && (
         <ProjectWizard
           mode={wizardMode}
@@ -1151,10 +1330,17 @@ export default function App() {
             // mid-session. A rescan is enough to pick up a refreshed
             // context/project.md.
             if (wasEdit) void useProjectStore.getState().rescan();
-            else void useProjectStore.getState().openProjectAt(picked);
+            else {
+              void useProjectStore.getState().openProjectAt(picked);
+              // WO12 F5 tail — only "new" mode (never "convert", which
+              // already opens ImportReviewModal for the user to choose what
+              // to adopt; firing both would be two modals at once).
+              if (!openImport) setPendingStarterAdoptRoot(picked);
+            }
           }}
         />
       )}
+      <ToastHost />
     </div>
   );
 }

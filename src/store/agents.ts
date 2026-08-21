@@ -58,13 +58,6 @@ export const DEFAULT_META: AgentMeta = {
   defaultTokenCeiling: null,
 };
 
-/** Reserved default agent (TASKBOARD_BATCH §4): always shown first in the
- *  rail (virtual until materialized via createAgent("Producer")); Rust
- *  rejects rename/delete/convert on this file. Tasks with agent === null
- *  belong to Producer. */
-export const PRODUCER_FILE = "producer.md";
-export const PRODUCER_DUTIES = "Coordinates the project; owns unassigned tasks.";
-
 /** Draft = the editable mirror of one doc. `rawContent` is used iff `raw`. */
 export interface DocDraft {
   fields: FmFields;
@@ -114,6 +107,15 @@ export interface AgentsState {
    *  key = 0. */
   reloadNonce: Record<string, number>;
 
+  /** HIGH fix (post-WO13, tester-found) — a reload arrived (assemble wrote
+   *  the file) while `drafts[fileName]` held an edit `reloadAgentFromDisk`
+   *  chose NOT to discard. `true` ⇒ `AgentEditor` shows the same "Reload
+   *  from disk" banner `AgentMarkdownTab`/`FileMarkdownTab` already show,
+   *  instead of the draft ever being silently replaced. Absent/false = no
+   *  banner. Cleared by `dismissStaleAgent` (keep editing) or
+   *  `discardStaleAgentDraft` (adopt the fresh content). */
+  staleAgents: Record<string, boolean>;
+
   loadAgents(root: string): Promise<void>;
   select(sel: Selection | null): void;
   updateDraft(sel: Selection, patch: Partial<DocDraft>): void;
@@ -149,9 +151,51 @@ export interface AgentsState {
   setAvatarImage(fileName: string, sourcePath: string): Promise<string | null>;
   clearAvatarImage(fileName: string): Promise<string | null>;
   /** Seam for a future fs-watcher: bump one file's `reloadNonce` so its open
-   *  CodeMirror editor rebuilds from disk. Not called anywhere yet — no
-   *  watcher pipes per-file external changes into this store today. */
+   *  CodeMirror editor rebuilds from disk. Bumped by `reloadAgentFromDisk`
+   *  below (WO13 defect 6) — no OTHER caller exists yet. */
   bumpAgentReloadNonce(fileName: string): void;
+  /** WO13_CONTRACT.md §2.6/defect 6, agent half. Assemble writes an agent's
+   *  `.md` file directly on disk (`write_atomic` in `assemble.rs`), which
+   *  this store has no other way of learning about — `agent_save`'s queue
+   *  is the assumed sole writer everywhere else, but assemble is a second,
+   *  legitimate one. Re-reads the ONE named agent via a full `agentsScan`
+   *  (the only read primitive `agents/api.ts` offers — there is no
+   *  per-file agent read invoke) and splices just that entry back into
+   *  `agents[]` unconditionally — `doc.fields`/`doc.body` always reflect
+   *  disk truth after this resolves.
+   *
+   *  HIGH fix (tester-found, post-WO13): the draft is NOT always cleared
+   *  any more. Whether `drafts[fileName]` holds a genuine unsaved edit is
+   *  decided synchronously, inside the SAME `set()` call, by comparing it
+   *  against the PRE-reload doc still sitting in the current state at that
+   *  point — the store equivalent of `AgentMarkdownTab`'s pre-reload-
+   *  baseline ref, except the store never needs a ref or a second ordered
+   *  effect: unlike a component, it has the "before" and "after" in hand at
+   *  once, in one atomic update, so there's no render in between where a
+   *  stale comparison could sneak in.
+   *    - Not dirty ⇒ same as before: draft cleared, `reloadNonce` bumped,
+   *      any open CodeMirror instance rebuilds onto the fresh content.
+   *    - Dirty ⇒ the draft is left COMPLETELY untouched (never a second
+   *      writer — `saveAgentRaw`'s queue is still the only thing that ever
+   *      writes an agent path) and `reloadNonce` is NOT bumped (no remount,
+   *      no lost cursor/scroll); `staleAgents[fileName]` is set instead, so
+   *      `AgentEditor` can show the same "Reload from disk" banner the
+   *      Markdown tabs already show.
+   *  Best-effort: a failed rescan leaves the stale content in place rather
+   *  than surfacing a second error path for a rare race. The CALLER (a
+   *  component, never the store itself — contract: "the subscription lives
+   *  in the component") decides WHEN this fires. */
+  reloadAgentFromDisk(fileName: string): Promise<void>;
+  /** The stale banner's "Dismiss" (X) — keep editing, stay on the old
+   *  baseline; the draft is untouched. Same UX as `FileMarkdownTab`'s
+   *  `setStaleNotice(false)`. */
+  dismissStaleAgent(fileName: string): void;
+  /** The stale banner's "Reload from disk" — discards the draft (adopting
+   *  the fresh `doc.fields`/`doc.body` `reloadAgentFromDisk` already
+   *  spliced in), clears the stale flag, and bumps `reloadNonce` so
+   *  CodeMirror remounts onto it. Mirrors `AgentMarkdownTab`'s
+   *  `reloadFromDisk()` exactly (discard → adopt → remount → clear flag). */
+  discardStaleAgentDraft(fileName: string): void;
 }
 
 // Rename fan-out: the GRAPH store keeps agent-backed nodes' filePath/title in
@@ -208,7 +252,13 @@ function sameFields(a: FmFields, b: FmFields): boolean {
   );
 }
 
-export function isDirty(s: AgentsState, sel: Selection): boolean {
+/** Narrowed to exactly what it reads (mirrors `findDoc`'s own `Pick<...>`
+ *  just above) rather than the full `AgentsState` — both call sites already
+ *  pass the whole state, which still satisfies this structurally, and the
+ *  narrower signature is what lets a pure-module Vitest test
+ *  (`agents.test.ts`, §15: "no jsdom, no store/invoke wiring") construct a
+ *  fixture without stubbing every action on the interface. */
+export function isDirty(s: Pick<AgentsState, "agents" | "skills" | "drafts">, sel: Selection): boolean {
   const draft = s.drafts[draftKey(sel)];
   if (draft === undefined) return false;
   const doc = findDoc(s, sel);
@@ -680,6 +730,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   agentSaveErrors: {},
   avatars: {},
   reloadNonce: {},
+  staleAgents: {},
 
   loadAgents: async (root) => {
     clearTimeout(metaSaveTimer);
@@ -704,6 +755,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
       agentSaveErrors: {},
       avatars: {},
       reloadNonce: {},
+      staleAgents: {},
     });
     try {
       const scan: AgentsScan = await agentsScan(root);
@@ -938,7 +990,19 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           delete agentSaveState[sel.key];
           const agentSaveErrors = { ...st.agentSaveErrors };
           delete agentSaveErrors[sel.key];
-          return { agents, drafts, meta, selection: newSel, orphanKeys, avatars, agentSaveState, agentSaveErrors };
+          const staleAgents = { ...st.staleAgents };
+          delete staleAgents[sel.key];
+          return {
+            agents,
+            drafts,
+            meta,
+            selection: newSel,
+            orphanKeys,
+            avatars,
+            agentSaveState,
+            agentSaveErrors,
+            staleAgents,
+          };
         });
         scheduleMetaSave();
         notifyAgentRenamed(sel.key, nextName, newName);
@@ -1017,7 +1081,19 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         delete agentSaveState[fileName];
         const agentSaveErrors = { ...st.agentSaveErrors };
         delete agentSaveErrors[fileName];
-        return { agents, drafts, meta, selection, orphanKeys, avatars, agentSaveState, agentSaveErrors };
+        const staleAgents = { ...st.staleAgents };
+        delete staleAgents[fileName];
+        return {
+          agents,
+          drafts,
+          meta,
+          selection,
+          orphanKeys,
+          avatars,
+          agentSaveState,
+          agentSaveErrors,
+          staleAgents,
+        };
       });
       scheduleMetaSave();
       notifyAgentRenamed(fileName, nextName, newName);
@@ -1098,9 +1174,11 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           delete agentSaveState[sel.key];
           const agentSaveErrors = { ...st.agentSaveErrors };
           delete agentSaveErrors[sel.key];
+          const staleAgents = { ...st.staleAgents };
+          delete staleAgents[sel.key];
           const neighbor = agents[idx] ?? agents[idx - 1];
           const selection: Selection | null = neighbor ? { kind: "agent", key: neighbor.fileName } : null;
-          return { agents, drafts, meta, selection, avatars, agentSaveState, agentSaveErrors };
+          return { agents, drafts, meta, selection, avatars, agentSaveState, agentSaveErrors, staleAgents };
         });
         scheduleMetaSave();
         // WO11_CONTRACT.md §10.3 — after the delete has actually succeeded
@@ -1256,5 +1334,66 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
 
   bumpAgentReloadNonce: (fileName) => {
     set((st) => ({ reloadNonce: { ...st.reloadNonce, [fileName]: (st.reloadNonce[fileName] ?? 0) + 1 } }));
+  },
+
+  reloadAgentFromDisk: async (fileName) => {
+    const s = get();
+    if (s.root === null) return;
+    try {
+      const scan = await agentsScan(s.root);
+      const fresh = scan.agents.find((a) => a.fileName === fileName);
+      if (fresh === undefined) return; // deleted externally mid-flight — nothing to splice back in
+      const sel: Selection = { kind: "agent", key: fileName };
+      let wasDirty = false;
+      set((st) => {
+        // `isDirty(st, sel)` reads `st.agents`/`st.drafts` as they stand
+        // RIGHT NOW, before the line below replaces the entry — this IS the
+        // pre-reload baseline, taken atomically in the same update rather
+        // than across a render boundary (see the interface doc comment for
+        // why that sidesteps the ref/ordered-effect dance `AgentMarkdownTab`
+        // needs). Reusing `isDirty` also means there is exactly one
+        // dirty-comparison implementation for agent drafts, not two that
+        // could quietly drift apart.
+        wasDirty = isDirty(st, sel);
+        const agents = st.agents.map((a) => (a.fileName === fileName ? fresh : a));
+        if (wasDirty) {
+          // Never touch the draft: `saveAgentRaw`'s queue stays the only
+          // writer, and this must not become a second one by discarding
+          // work it never wrote. Flag it instead of clobbering it.
+          return { agents, staleAgents: { ...st.staleAgents, [fileName]: true } };
+        }
+        const drafts = { ...st.drafts };
+        delete drafts[draftKey(sel)];
+        return { agents, drafts };
+      });
+      // Bumping `reloadNonce` remounts CodeMirror (AgentEditor's `docKey`
+      // includes it) — only do that when the buffer is actually about to
+      // show different content. While dirty, the draft is untouched, so a
+      // remount here would cost the user's cursor/scroll position for zero
+      // visible change.
+      if (!wasDirty) get().bumpAgentReloadNonce(fileName);
+    } catch {
+      // Best-effort — see the interface doc comment above.
+    }
+  },
+
+  dismissStaleAgent: (fileName) => {
+    set((st) => {
+      if (st.staleAgents[fileName] !== true) return {};
+      const staleAgents = { ...st.staleAgents };
+      delete staleAgents[fileName];
+      return { staleAgents };
+    });
+  },
+
+  discardStaleAgentDraft: (fileName) => {
+    set((st) => {
+      const drafts = { ...st.drafts };
+      delete drafts[draftKey({ kind: "agent", key: fileName })];
+      const staleAgents = { ...st.staleAgents };
+      delete staleAgents[fileName];
+      return { drafts, staleAgents };
+    });
+    get().bumpAgentReloadNonce(fileName);
   },
 }));

@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, FolderOpen, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, FolderOpen, Plug, X } from "lucide-react";
 import { projectInit, projectMetaRead, projectMetaWrite } from "./api";
 import {
   EMPTY_PROJECT_META,
@@ -31,6 +31,8 @@ import {
   listToLines,
   type ProjectMeta,
 } from "./types";
+import { hooksStatus, type HooksStatus } from "../fs/api";
+import { HooksModal } from "../inspector/HooksModal";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -50,6 +52,30 @@ function FieldLabel({ children }: { children: string }) {
     <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
       {children}
     </label>
+  );
+}
+
+/** 34×19 pill toggle — amber, mirrors NodeWizard's/NewAgentDialog's
+ *  AmberToggle. Installing hooks is a promise about agent behaviour (Claude
+ *  Code will start reporting to the barn), not a user action in itself, so
+ *  amber is correct per the accent law (F4). */
+function AmberToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast ${
+        checked ? "border-amber-border bg-amber-surface" : "border-border-strong bg-surface-2"
+      }`}
+    >
+      <span
+        className={`absolute top-[2px] h-[13px] w-[13px] rounded-pill transition-all duration-fast ${
+          checked ? "left-[16px] bg-amber" : "left-[2px] bg-content-muted"
+        }`}
+      />
+    </button>
   );
 }
 
@@ -182,6 +208,17 @@ export function ProjectWizard({
   const [meta, setMeta] = useState<ProjectMeta>(EMPTY_PROJECT_META);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [installHooks, setInstallHooks] = useState(false);
+  const [hooksOpen, setHooksOpen] = useState(false);
+
+  // D2 fix — `meta` loads asynchronously in edit mode (below), but the
+  // fields keyed on `fieldKey` (ListField's raw-text seed) only re-seed when
+  // `fieldKey` itself changes. `mode`/`root` are both fixed before first
+  // paint, so without this generation counter the async load landing after
+  // ListField has already mounted+seeded-empty is invisible to it — the
+  // textarea stays blank forever while `meta` (and Save) hold the real data.
+  // Bumped once, right after the load lands (never on every keystroke).
+  const [metaGen, setMetaGen] = useState(0);
 
   // A4 — the optional block starts collapsed, except that edit mode must
   // never hide data the user already typed: once the loaded sidecar (or the
@@ -208,8 +245,9 @@ export function ProjectWizard({
   }, [meta, isEdit]);
 
   // A3 — identity for ListField's raw-text seeding: re-seed only when we
-  // switch which project is being edited, never on every keystroke.
-  const fieldKey = `${mode}:${root ?? ""}`;
+  // switch which project is being edited, never on every keystroke. D2 —
+  // `metaGen` also bumps this once the async load (below) actually lands.
+  const fieldKey = `${mode}:${root ?? ""}:${metaGen}`;
 
   const isConvert = mode === "convert";
   const title = isEdit
@@ -232,6 +270,7 @@ export function ProjectWizard({
       .then((existing) => {
         if (!live) return;
         setMeta(existing ?? { ...EMPTY_PROJECT_META, name: basename(openRoot) });
+        setMetaGen((g) => g + 1);
       })
       .catch((e: unknown) => {
         if (live) setError(String(e));
@@ -243,11 +282,33 @@ export function ProjectWizard({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
+      // F4 — HooksModal owns Escape while it's the top layer; the wizard
+      // must not also close underneath it on the same keypress.
+      if (e.key === "Escape" && !busy && !hooksOpen) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, hooksOpen, onClose]);
+
+  // F4 — edit mode's second discoverable entry point: a live status row
+  // instead of the Create-step toggle (there is no Create step to put it
+  // on). Re-read after the modal closes so an install shows up immediately.
+  const [editHooksStatus, setEditHooksStatus] = useState<HooksStatus | null>(null);
+  useEffect(() => {
+    if (!isEdit || root === null) return;
+    let live = true;
+    void hooksStatus(root)
+      .then((s) => {
+        if (live) setEditHooksStatus(s);
+      })
+      .catch(() => {
+        // Passive status probe — a failure here just means the row stays on
+        // "checking", never a hard error in the properties form.
+      });
+    return () => {
+      live = false;
+    };
+  }, [isEdit, root]);
 
   const pickFolder = () => {
     setError(null);
@@ -275,6 +336,15 @@ export function ProjectWizard({
     work
       .then(() => {
         setBusy(false);
+        // F4 — the toggle is a promise to open the trust-boundary modal
+        // next, not a write itself. `.claude/agents` (created by
+        // projectInit, just above) must exist before HooksModal's preview
+        // runs, and `onDone` must wait for the modal's own close so at most
+        // one modal is ever on screen.
+        if (installHooks) {
+          setHooksOpen(true);
+          return;
+        }
         onDone(root, isConvert);
       })
       .catch((e: unknown) => {
@@ -283,14 +353,30 @@ export function ProjectWizard({
       });
   };
 
+  // F4 — single close handler for both entry points (Create-step toggle,
+  // edit-mode status row): edit mode has no `onDone` transition to make, it
+  // just refreshes the row; new/convert mode finishes the wizard exactly as
+  // it would have without the toggle.
+  const closeHooksModal = () => {
+    setHooksOpen(false);
+    if (root === null) return;
+    if (isEdit) {
+      void hooksStatus(root)
+        .then((s) => setEditHooksStatus(s))
+        .catch(() => {});
+    } else {
+      onDone(root, isConvert);
+    }
+  };
+
   const patch = (p: Partial<ProjectMeta>) => setMeta((m) => ({ ...m, ...p }));
-  const canCreate = root !== null && meta.name.trim() !== "" && !busy;
+  const canCreate = root !== null && meta.name.trim() !== "" && !busy && !hooksOpen;
 
   return (
     <div
       className="fixed inset-0 z-modal flex items-center justify-center bg-[var(--scrim)]"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget && !busy && !hooksOpen) onClose();
       }}
     >
       <div
@@ -320,7 +406,7 @@ export function ProjectWizard({
             ))}
           </div>
           <div className="min-w-0 flex-1" />
-          <button onClick={onClose} title="Close" disabled={busy} className={ICON_BTN}>
+          <button onClick={onClose} title="Close" disabled={busy || hooksOpen} className={ICON_BTN}>
             <X size={14} strokeWidth={1.5} />
           </button>
         </div>
@@ -353,6 +439,33 @@ export function ProjectWizard({
 
           {step === 1 && (
             <div className="flex flex-col gap-3">
+              {/* F4 — edit mode skips the Create step entirely, so this is
+                  the feature's second discoverable entry point (contract
+                  item 6): a live status row + button that opens the same
+                  trust-boundary modal used elsewhere in the app. */}
+              {isEdit && (
+                <div className="flex items-center justify-between gap-2 rounded border border-border-subtle bg-surface-inset px-3 py-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <Plug size={12} strokeWidth={1.5} className="flex-none text-content-muted" />
+                    <span className="min-w-0 flex-1 truncate text-xs text-content-secondary">
+                      {editHooksStatus === null
+                        ? "Checking Claude Code hooks…"
+                        : editHooksStatus.installed
+                          ? "Claude Code hooks installed"
+                          : "Claude Code hooks not installed"}
+                    </span>
+                  </div>
+                  {editHooksStatus !== null && !editHooksStatus.installed && (
+                    <button
+                      type="button"
+                      onClick={() => setHooksOpen(true)}
+                      className={SECONDARY_BTN}
+                    >
+                      Install hooks…
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <FieldLabel>Name</FieldLabel>
@@ -487,6 +600,20 @@ export function ProjectWizard({
                   kept and Cowtext just records the properties.
                 </p>
               </div>
+              <div className="flex items-start justify-between gap-3 rounded border border-amber-border bg-amber-surface px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-2xs uppercase tracking-wider text-amber-text">
+                    Install Claude Code hooks
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+                    This edits <span className="break-all font-mono">.claude/settings.json</span>{" "}
+                    in your project so Claude Code reports file activity to Cowtext on{" "}
+                    <span className="font-mono">127.0.0.1:4923</span>. Nothing is written until you
+                    approve the exact diff below.
+                  </p>
+                </div>
+                <AmberToggle checked={installHooks} onChange={setInstallHooks} />
+              </div>
               {isConvert && (
                 <p className="text-sm leading-relaxed text-content-secondary">
                   Afterwards, the importer opens so you can review which of this project&apos;s
@@ -512,7 +639,7 @@ export function ProjectWizard({
               Back
             </button>
           )}
-          <button onClick={onClose} disabled={busy} className={SECONDARY_BTN}>
+          <button onClick={onClose} disabled={busy || hooksOpen} className={SECONDARY_BTN}>
             Cancel
           </button>
           {step < 2 && !isEdit ? (
@@ -530,6 +657,7 @@ export function ProjectWizard({
           )}
         </div>
       </div>
+      {hooksOpen && root !== null && <HooksModal root={root} onClose={closeHooksModal} />}
     </div>
   );
 }

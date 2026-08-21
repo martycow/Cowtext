@@ -15,7 +15,21 @@ import { agentSessionList } from "../sessions/api";
 
 export type { TaskLink, TaskLinks } from "../tasklinks/api";
 
-const EMPTY_LINK = (taskId: string): TaskLink => ({ taskId, nodeIds: [], sessionIds: [] });
+// `linkFor` is used directly as a zustand selector (TaskLinksPanel,
+// TaskContextModal). Zustand v5 has no result cache, so a selector that mints
+// a fresh object on every call gives useSyncExternalStore a new snapshot each
+// render — React then re-renders forever and throws "Maximum update depth
+// exceeded". The empty shape is therefore interned per taskId so an unlinked
+// task returns the SAME reference every time.
+const emptyLinks = new Map<string, TaskLink>();
+
+const EMPTY_LINK = (taskId: string): TaskLink => {
+  const cached = emptyLinks.get(taskId);
+  if (cached !== undefined) return cached;
+  const fresh: TaskLink = { taskId, nodeIds: [], sessionIds: [] };
+  emptyLinks.set(taskId, fresh);
+  return fresh;
+};
 
 interface TaskLinksState {
   root: string | null;

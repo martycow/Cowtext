@@ -1,4 +1,5 @@
-// One verb per wire (WO10 item 5).
+// One verb per wire (WO10 item 5; re-cut for v5's 5 edge kinds and typed
+// `guard`, WO13_CONTRACT.md §7).
 //
 // Before this, an edge could paint up to three chips at once — a condition
 // chip, a numbered step square and a note chip — all anchored at the same
@@ -7,26 +8,17 @@
 // saying what the edge DOES, so the canvas reads as a sentence
 // ("rules → Reads → agent") instead of a pile of metadata.
 //
-// The verbs are operations, not type names. `kind` is still readable from
+// The verbs are operations, not kind names. `kind` is still readable from
 // the line style and marker (DESIGN_SPEC.md: solid = structural, dashed =
 // advisory) — the label is there to say the thing out loud, and a label that
 // just repeated the kind slug would earn none of the space it costs.
 
-import {
-  BookOpen,
-  ChevronsRight,
-  GitBranch,
-  Layers,
-  Link2,
-  ShieldCheck,
-  Zap,
-  type LucideIcon,
-} from "lucide-react";
-import type { EdgeKind } from "../store/graph";
+import { BookOpen, ChevronsRight, Link2, ShieldCheck, Zap, type LucideIcon } from "lucide-react";
+import type { EdgeGuard, EdgeKind } from "../store/graph";
 
 /** Longest label we will paint. Past this the text is clipped with an
  *  ellipsis and the full string moves to the `title` — a chip wide enough to
- *  hold a natural-language condition would cover the node it points at. */
+ *  hold a natural-language guard would cover the node it points at. */
 export const LABEL_MAX = 18;
 
 interface VerbSpec {
@@ -34,30 +26,35 @@ interface VerbSpec {
   icon: LucideIcon;
 }
 
+// v5 (WO13 §7.1): 5 edge kinds. `supersedes` and `conditional` are gone
+// (conditional is now `imports` + a typed `guard`, handled below via
+// `opts.guard` rather than a distinct kind); `conflicts-with` is renamed
+// `contradicts`.
 const VERBS: Record<EdgeKind, VerbSpec> = {
   imports: { verb: "Reads", icon: BookOpen },
   references: { verb: "Refers", icon: Link2 },
   sequence: { verb: "Then", icon: ChevronsRight },
   overrides: { verb: "Controls", icon: ShieldCheck },
-  supersedes: { verb: "Replaces", icon: Layers },
-  "conflicts-with": { verb: "Conflicts", icon: Zap },
-  // Placeholder only — a conditional edge labels itself with its condition
-  // (see `edgeLabel`), and falls back to this bare word when it has none.
-  conditional: { verb: "If", icon: GitBranch },
+  contradicts: { verb: "Conflicts", icon: Zap },
 };
 
 export function verbIcon(kind: EdgeKind): LucideIcon {
   return VERBS[kind].icon;
 }
 
-/** Collapse a condition to something that fits on a wire. Globs keep their
- *  shape (`src/net/**` is already compact and is the common case); prose is
- *  squeezed to one line and clipped. The `if` reads as part of the sentence,
- *  so it is never repeated inside the text. */
-function compactCondition(condition: string): string {
-  const one = condition.trim().replace(/\s+/g, " ");
-  if (one === "") return VERBS.conditional.verb;
-  const body = one.length > LABEL_MAX ? `${one.slice(0, LABEL_MAX - 1)}…` : one;
+/** Collapse a guard to something that fits on a wire. A glob guard's globs
+ *  keep their shape (`src/net/**` is already compact and is the common
+ *  case, joined with commas for a multi-glob guard); a description guard's
+ *  text is squeezed to one line and clipped. The `if` reads as part of the
+ *  sentence, so it is never repeated inside the text. */
+function guardText(guard: EdgeGuard): string {
+  return guard.type === "glob" ? guard.globs.join(",") : guard.text;
+}
+
+function compactGuard(guard: EdgeGuard): string {
+  const raw = guardText(guard).trim().replace(/\s+/g, " ");
+  if (raw === "") return "if";
+  const body = raw.length > LABEL_MAX ? `${raw.slice(0, LABEL_MAX - 1)}…` : raw;
   return `if ${body}`;
 }
 
@@ -76,14 +73,15 @@ export interface EdgeLabel {
 /**
  * The one label an edge paints, in priority order:
  *   1. an author's `note` — they wrote it, it wins;
- *   2. a `conditional` edge's condition, compacted;
+ *   2. a `guard` (legal on `imports`/`references`/`overrides`/`sequence`),
+ *      compacted;
  *   3. the kind's verb.
  * Never returns null: every wire says what it does. A canvas where only
  * *some* edges are labelled reads as broken, not as decluttered.
  */
 export function edgeLabel(
   kind: EdgeKind,
-  opts: { condition?: string; note?: string; step?: number } = {},
+  opts: { guard?: EdgeGuard; note?: string; step?: number } = {},
 ): EdgeLabel {
   const spec = VERBS[kind];
   const step = kind === "sequence" ? opts.step : undefined;
@@ -98,10 +96,14 @@ export function edgeLabel(
     };
   }
 
-  if (kind === "conditional") {
-    const raw = opts.condition?.trim() ?? "";
-    const text = compactCondition(raw);
-    return { text, title: raw === "" ? spec.verb : `if ${raw}`, icon: spec.icon, step };
+  if (opts.guard !== undefined) {
+    const raw = guardText(opts.guard);
+    return {
+      text: compactGuard(opts.guard),
+      title: raw === "" ? spec.verb : `if ${raw}`,
+      icon: spec.icon,
+      step,
+    };
   }
 
   return { text: spec.verb, title: spec.verb, icon: spec.icon, step };

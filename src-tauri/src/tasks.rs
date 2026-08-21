@@ -68,6 +68,11 @@ pub struct TaskItem {
     pub tags: Vec<String>,
     pub priority: Option<String>,
     pub phase: Option<String>,
+    /// Header-driven "Task Type" cell (F6 §6): recognized synonyms `Task
+    /// Type`|`Type`|`Kind`, mapped exactly like `phase` — table-only,
+    /// `None` for checklist tasks and for tables whose header doesn't map
+    /// one. Never invented, never normalized — the raw trimmed cell text.
+    pub task_type: Option<String>,
     pub agent: Option<String>,
     pub done: bool,
     /// Normalized status bucket: `"new"` | `"in-production"` |
@@ -153,6 +158,8 @@ pub struct TaskPatch {
     pub tags: Option<Vec<String>>,
     pub priority: Option<String>,
     pub phase: Option<String>,
+    /// See [`TaskItem::task_type`] — same table-only, no-normalization field.
+    pub task_type: Option<String>,
     pub agent: Option<String>,
     pub status: Option<String>,
     pub done: Option<bool>,
@@ -434,6 +441,9 @@ struct ColumnMap {
     priority: Option<usize>,
     description: Option<usize>,
     phase: Option<usize>,
+    /// F6 §6: `"task type"` | `"type"` | `"kind"`. Distinct from `phase` —
+    /// this is the shipped skill's own column, not a WO02-era one.
+    task_type: Option<usize>,
     agent: Option<usize>,
     status: Option<usize>,
 }
@@ -447,6 +457,9 @@ fn map_columns(cells: &[String]) -> ColumnMap {
         let lower = cell.trim().to_ascii_lowercase();
         match lower.as_str() {
             "name" | "task" | "title" if map.name.is_none() => map.name = Some(idx),
+            // F6 §6: the whole trimmed cell must equal one of these three —
+            // "task" alone (bare) still maps to NAME above, never here.
+            "task type" | "type" | "kind" if map.task_type.is_none() => map.task_type = Some(idx),
             "tags" if map.tags.is_none() => map.tags = Some(idx),
             "priority" | "prio" if map.priority.is_none() => map.priority = Some(idx),
             "description" | "desc" | "details" if map.description.is_none() => {
@@ -587,6 +600,7 @@ fn build_table_task(
         tags,
         priority,
         phase: cell_at(cells, map.phase),
+        task_type: cell_at(cells, map.task_type),
         agent: cell_at(cells, map.agent),
         done: bucket == "done",
         status: Some(bucket.to_string()),
@@ -773,6 +787,7 @@ fn parse_checklist_line(
         tags,
         priority,
         phase: None,
+        task_type: None,
         agent,
         done,
         status: Some(status_bucket.to_string()),
@@ -1044,6 +1059,7 @@ fn regenerate_table_row(
     set_cell(&mut cells, map.tags, tags_joined.as_deref());
     set_cell(&mut cells, map.priority, priority_value.as_deref());
     set_cell(&mut cells, map.phase, patch.phase.as_deref());
+    set_cell(&mut cells, map.task_type, patch.task_type.as_deref());
     set_cell(&mut cells, map.agent, patch.agent.as_deref());
     set_cell(&mut cells, map.status, Some(bucket));
 
@@ -1196,6 +1212,7 @@ fn build_table_append_row(
     agent: Option<&str>,
     priority: Option<&str>,
     status: &str,
+    task_type: Option<&str>,
 ) -> String {
     let mut cells = vec![" ".to_string(); cell_count];
     let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
@@ -1205,6 +1222,7 @@ fn build_table_append_row(
     set_cell(&mut cells, map.agent, agent);
     set_cell(&mut cells, map.priority, priority);
     set_cell(&mut cells, map.status, Some(status));
+    set_cell(&mut cells, map.task_type, task_type);
 
     let mut out = String::new();
     if leading {
@@ -1255,6 +1273,10 @@ fn write_task_text(existing: &str, rel_path_for_header: &str, text: &str) -> (St
             agent.as_deref(),
             priority.as_deref(),
             "new",
+            // F6: free text has no established Task Type token grammar —
+            // `task_append` never invents one, mirroring the "no auto-mint"
+            // rule already documented above for ids/deps.
+            None,
         );
         let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
         let insert_at = anchor + 1;
@@ -1327,7 +1349,9 @@ fn compose_checklist_text(
 /// own bucket (not hardcoded `"new"` — a moved `done` row must arrive
 /// `done`), and `task_id`/`depends_on` are re-composed into the tags ahead
 /// of `tags` in every branch (§3.1 R4 — otherwise moving a linked task
-/// silently orphans its tasklinks entry).
+/// silently orphans its tasklinks entry). **F6**: `task_type` follows the
+/// same rule — the source item's own value, so moving a task between two
+/// Task-Type-columned tables preserves it, same as `agent`/`priority`.
 #[allow(clippy::too_many_arguments)]
 fn write_task_fields(
     existing: &str,
@@ -1340,12 +1364,14 @@ fn write_task_fields(
     status: &str,
     task_id: Option<&str>,
     depends_on: &[String],
+    task_type: Option<&str>,
 ) -> (String, usize) {
     let composed_tags = compose_reserved_and_user_tags(task_id, depends_on, tags);
     let lines: Vec<&str> = existing.split('\n').collect();
     if let Some((map, anchor, leading, trailing, cell_count)) = last_named_table(&lines) {
         let row = build_table_append_row(
             &map, leading, trailing, cell_count, name, description, &composed_tags, agent, priority, status,
+            task_type,
         );
         let mut new_lines: Vec<String> = existing.split('\n').map(|s| s.to_string()).collect();
         let insert_at = anchor + 1;
@@ -1928,6 +1954,7 @@ pub fn task_move(
         item.status.as_deref().unwrap_or("new"),
         item.task_id.as_deref(),
         &item.depends_on,
+        item.task_type.as_deref(),
     );
 
     // Write target first.

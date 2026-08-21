@@ -1,0 +1,242 @@
+{
+  "version": 5,
+  "projectName": "Fixture",
+  "nodes": [
+    {
+      "id": "n01-x",
+      "title": "Fleet lead",
+      "role": "agent",
+      "brief": "The agent that owns dispatch.",
+      "filePath": "context/fleet-lead.md",
+      "readOrder": 1,
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "n02-x",
+      "title": "House rules",
+      "role": "rule",
+      "brief": "Hard constraints the agent must never break.",
+      "filePath": "context/house-rules.md",
+      "readOrder": 2,
+      "rootLoad": "always",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "id": "n03-x",
+      "title": "System shape",
+      "role": "architecture",
+      "brief": "How the modules fit together.",
+      "filePath": "context/system-shape.md",
+      "readOrder": 3,
+      "position": {
+        "x": 520,
+        "y": 0
+      },
+      "scenePos": {
+        "tx": 2,
+        "ty": 3
+      },
+      "lastVerified": "2026-01-15"
+    },
+    {
+      "id": "n04-x",
+      "title": "Release process",
+      "role": "workflow",
+      "brief": "The steps to cut a release.",
+      "filePath": "context/release-process.md",
+      "readOrder": 4,
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "id": "n05-x",
+      "title": "Ship v2",
+      "role": "workflow",
+      "brief": "Work with a finish line.",
+      "filePath": "context/ship-v2.md",
+      "readOrder": 5,
+      "position": {
+        "x": 1040,
+        "y": 0
+      },
+      "needsReview": true
+    },
+    {
+      "id": "n06-x",
+      "title": "Wire protocol notes",
+      "role": "architecture",
+      "brief": "Lookup material for the wire format.",
+      "filePath": "context/wire-protocol.md",
+      "readOrder": 6,
+      "position": {
+        "x": 0,
+        "y": 220
+      },
+      "tags": [
+        "protocol",
+        "reference"
+      ],
+      "needsReview": true
+    },
+    {
+      "id": "n07-x",
+      "title": "Domain words",
+      "role": "glossary",
+      "brief": "The exact words this project uses.",
+      "filePath": "context/domain-words.md",
+      "readOrder": 7,
+      "position": {
+        "x": 260,
+        "y": 220
+      }
+    },
+    {
+      "id": "n08-x",
+      "title": "Run the suite",
+      "role": "command",
+      "brief": "How to run every test.",
+      "filePath": "context/run-the-suite.md",
+      "readOrder": 8,
+      "position": {
+        "x": 520,
+        "y": 220
+      }
+    },
+    {
+      "id": "n09-x",
+      "title": "Timestamps are UTC",
+      "role": "invariant",
+      "brief": "A property that must always hold.",
+      "filePath": "context/timestamps-utc.md",
+      "readOrder": 9,
+      "rootLoad": "always",
+      "position": {
+        "x": 780,
+        "y": 220
+      },
+      "owner": "marty"
+    },
+    {
+      "id": "n10-x",
+      "title": "Flaky test trap",
+      "role": "trap",
+      "brief": "A gotcha we hit before.",
+      "filePath": "context/flaky-test-trap.md",
+      "readOrder": 10,
+      "position": {
+        "x": 1040,
+        "y": 220
+      }
+    },
+    {
+      "id": "n11-x",
+      "title": "Bisecting a regression",
+      "role": "skill",
+      "brief": "A reusable technique.",
+      "filePath": "context/bisecting.md",
+      "readOrder": 11,
+      "position": {
+        "x": 0,
+        "y": 440
+      }
+    },
+    {
+      "id": "n12-x",
+      "title": "Old error handler",
+      "role": "example",
+      "brief": "A reusable fragment, now out of date.",
+      "filePath": "context/old-error-handler.md",
+      "readOrder": 12,
+      "position": {
+        "x": 260,
+        "y": 440
+      },
+      "deprecated": {
+        "replacedBy": "n03-x"
+      },
+      "needsReview": true,
+      "meta": {
+        "source": "legacy"
+      }
+    },
+    {
+      "id": "n13-x",
+      "title": "API voice",
+      "role": "style",
+      "brief": "How API prose should read.",
+      "filePath": "context/api-voice.md",
+      "readOrder": 13,
+      "position": {
+        "x": 520,
+        "y": 440
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e01-x",
+      "source": "n02-x",
+      "target": "n03-x",
+      "kind": "imports"
+    },
+    {
+      "id": "e02-x",
+      "source": "n04-x",
+      "target": "n06-x",
+      "kind": "references",
+      "note": "read for context"
+    },
+    {
+      "id": "e03-x",
+      "source": "n02-x",
+      "target": "n13-x",
+      "kind": "imports",
+      "guard": {
+        "type": "glob",
+        "globs": [
+          "src/api/**"
+        ]
+      }
+    },
+    {
+      "id": "e04-x",
+      "source": "n02-x",
+      "target": "n10-x",
+      "kind": "imports",
+      "guard": {
+        "type": "description",
+        "text": "you are debugging a flaky test"
+      }
+    },
+    {
+      "id": "e05-x",
+      "source": "n04-x",
+      "target": "n05-x",
+      "kind": "sequence"
+    },
+    {
+      "id": "e06-x",
+      "source": "n09-x",
+      "target": "n02-x",
+      "kind": "overrides",
+      "color": "amber"
+    },
+    {
+      "id": "e08-x",
+      "source": "n07-x",
+      "target": "n11-x",
+      "kind": "contradicts"
+    }
+  ],
+  "compileTargets": [
+    "claude"
+  ]
+}

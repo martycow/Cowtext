@@ -1,0 +1,409 @@
+{
+  "note": "WO13 frozen corpus for resolveLoad (WO13_CONTRACT.md 8.2, as amended by Amendment 1). Read by BOTH cargo test (src-tauri/src/resolve_load/tests.rs) and Vitest (src/config/resolveLoad.test.ts). Every graph is a complete, valid v5 graph so each side can parse it with its real deserializer. `expected` is total: it names every node in the graph. decidingEdgeId is absent when the resolver must not return one - including for role-command and role-skill, which are decided by role, not by any edge. Optional `mode` selects the entry point: \"apply\" (default) = resolve_load / resolveLoad; \"ignore\" = resolve_load_ignoring_role_lock / resolveLoadIgnoringRoleLock, the emit_cursor-only variant with rules 3 and 4 skipped. Owned by tech-lead; no lane may edit this file.",
+  "cases": [
+    {
+      "name": "root-always seeds a transitive unguarded-imports closure",
+      "graph": {
+        "version": 5,
+        "projectName": "c1",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "glossary", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e2-i", "source": "b", "target": "c", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "always", "reason": "imported", "decidingEdgeId": "e1-i" },
+        "c": { "policy": "always", "reason": "imported", "decidingEdgeId": "e2-i" }
+      }
+    },
+    {
+      "name": "a glob guard stops the always closure dead — the WO13 non-negotiable",
+      "graph": {
+        "version": 5,
+        "projectName": "c2",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "style", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "glossary", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports", "guard": { "type": "glob", "globs": ["src/api/**"] } },
+          { "id": "e2-i", "source": "b", "target": "c", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-glob", "reason": "guarded-import-glob", "decidingEdgeId": "e1-i" },
+        "c": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    },
+    {
+      "name": "imports beats references on the same target",
+      "graph": {
+        "version": 5,
+        "projectName": "c3",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "x", "title": "X", "role": "workflow", "brief": "", "filePath": "context/x.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e2-r", "source": "x", "target": "b", "kind": "references" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "always", "reason": "imported", "decidingEdgeId": "e1-i" },
+        "x": { "policy": "excluded", "reason": "orphan" }
+      }
+    },
+    {
+      "name": "a description guard resolves to on-demand, not on-glob",
+      "graph": {
+        "version": 5,
+        "projectName": "c4",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "trap", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports", "guard": { "type": "description", "text": "you are debugging a flaky test" } }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-demand", "reason": "guarded-import-description", "decidingEdgeId": "e1-i" }
+      }
+    },
+    {
+      "name": "deprecated wins over every edge, and the closure never passes through it",
+      "graph": {
+        "version": 5,
+        "projectName": "c5",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "example", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 }, "deprecated": { "replacedBy": "a" } },
+          { "id": "c", "title": "C", "role": "glossary", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e2-i", "source": "b", "target": "c", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "excluded", "reason": "deprecated" },
+        "c": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    },
+    {
+      "name": "a node with no incoming imports or references is an orphan",
+      "graph": {
+        "version": 5,
+        "projectName": "c6",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "decision", "brief": "", "filePath": "context/a.md", "readOrder": 1, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "excluded", "reason": "orphan" }
+      }
+    },
+    {
+      "name": "references alone resolves to on-demand",
+      "graph": {
+        "version": 5,
+        "projectName": "c7",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-r", "source": "a", "target": "b", "kind": "references" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-demand", "reason": "referenced", "decidingEdgeId": "e1-r" }
+      }
+    },
+    {
+      "name": "decidingEdgeId is the lowest qualifying edge id in byte order",
+      "graph": {
+        "version": 5,
+        "projectName": "c8",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "invariant", "brief": "", "filePath": "context/d.md", "readOrder": 3, "rootLoad": "always", "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e9-i", "source": "d", "target": "b", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "always", "reason": "imported", "decidingEdgeId": "e1-i" },
+        "d": { "policy": "always", "reason": "root-always" }
+      }
+    },
+    {
+      "name": "a deprecated root-always node is still excluded",
+      "graph": {
+        "version": 5,
+        "projectName": "c9",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 }, "deprecated": { "replacedBy": "z", "since": "2026-08-21", "reason": "folded into Z" } },
+          { "id": "z", "title": "Z", "role": "rule", "brief": "", "filePath": "context/z.md", "readOrder": 2, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "excluded", "reason": "deprecated" },
+        "z": { "policy": "excluded", "reason": "orphan" }
+      }
+    },
+    {
+      "name": "rule 1 — a command node is on-invoke regardless of edges, rootLoad, or nothing at all",
+      "graph": {
+        "version": 5,
+        "projectName": "c10",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "command", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "command", "brief": "", "filePath": "context/c.md", "readOrder": 3, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "command", "brief": "", "filePath": "context/d.md", "readOrder": 4, "position": { "x": 0, "y": 0 } },
+          { "id": "e", "title": "E", "role": "glossary", "brief": "", "filePath": "context/e.md", "readOrder": 5, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e2-i", "source": "c", "target": "e", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-invoke", "reason": "role-command" },
+        "c": { "policy": "on-invoke", "reason": "role-command" },
+        "d": { "policy": "on-invoke", "reason": "role-command" },
+        "e": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    },
+    {
+      "name": "rule 1 — a skill node is on-demand regardless of edges, and never propagates always",
+      "graph": {
+        "version": 5,
+        "projectName": "c11",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "skill", "brief": "", "filePath": "context/b.md", "readOrder": 2, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "glossary", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "b", "kind": "imports" },
+          { "id": "e2-i", "source": "b", "target": "c", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-demand", "reason": "role-skill" },
+        "c": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    },
+    {
+      "name": "rule 1 — deprecated outranks the role rules; a deprecated command is never emitted",
+      "graph": {
+        "version": 5,
+        "projectName": "c12",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "command", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 }, "deprecated": { "replacedBy": "b" } },
+          { "id": "b", "title": "B", "role": "skill", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 }, "deprecated": { "replacedBy": "a" } }
+        ],
+        "edges": [],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "excluded", "reason": "deprecated" },
+        "b": { "policy": "excluded", "reason": "deprecated" }
+      }
+    },
+    {
+      "name": "ignore-role-lock mode: the emit_cursor entry point resolves command and skill by edges, exactly as before Amendment 1",
+      "mode": "ignore",
+      "graph": {
+        "version": 5,
+        "projectName": "c13",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "command", "brief": "", "filePath": "context/b.md", "readOrder": 2, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "skill", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "command", "brief": "", "filePath": "context/d.md", "readOrder": 4, "position": { "x": 0, "y": 0 } },
+          { "id": "e", "title": "E", "role": "glossary", "brief": "", "filePath": "context/e.md", "readOrder": 5, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "c", "kind": "imports" },
+          { "id": "e2-i", "source": "a", "target": "d", "kind": "imports", "guard": { "type": "glob", "globs": ["src/api/**"] } },
+          { "id": "e3-i", "source": "b", "target": "e", "kind": "imports" }
+        ],
+        "compileTargets": ["claude", "cursor"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "always", "reason": "root-always" },
+        "c": { "policy": "always", "reason": "imported", "decidingEdgeId": "e1-i" },
+        "d": { "policy": "on-glob", "reason": "guarded-import-glob", "decidingEdgeId": "e2-i" },
+        "e": { "policy": "always", "reason": "imported", "decidingEdgeId": "e3-i" }
+      }
+    },
+    {
+      "name": "the same graph in apply mode: rule 1 fires and the closure no longer passes through the command node",
+      "mode": "apply",
+      "graph": {
+        "version": 5,
+        "projectName": "c13b",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "command", "brief": "", "filePath": "context/b.md", "readOrder": 2, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "skill", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "command", "brief": "", "filePath": "context/d.md", "readOrder": 4, "position": { "x": 0, "y": 0 } },
+          { "id": "e", "title": "E", "role": "glossary", "brief": "", "filePath": "context/e.md", "readOrder": 5, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "a", "target": "c", "kind": "imports" },
+          { "id": "e2-i", "source": "a", "target": "d", "kind": "imports", "guard": { "type": "glob", "globs": ["src/api/**"] } },
+          { "id": "e3-i", "source": "b", "target": "e", "kind": "imports" }
+        ],
+        "compileTargets": ["claude", "cursor"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "on-invoke", "reason": "role-command" },
+        "c": { "policy": "on-demand", "reason": "role-skill" },
+        "d": { "policy": "on-invoke", "reason": "role-command" },
+        "e": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    }
+    ,
+    {
+      "name": "D5 regression — role_lock must exclude a command/skill SEED from the closure, not just traversal targets",
+      "mode": "apply",
+      "graph": {
+        "version": 5,
+        "projectName": "c14",
+        "nodes": [
+          { "id": "cmd", "title": "Cmd", "role": "command", "brief": "", "filePath": "context/cmd.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "architecture", "brief": "", "filePath": "context/d.md", "readOrder": 2, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "cmd", "target": "d", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "cmd": { "policy": "on-invoke", "reason": "role-command" },
+        "d": { "policy": "excluded", "reason": "unreachable-import" }
+      }
+    },
+    {
+      "name": "D5 regression, ignore mode — the SAME graph: with the role lock skipped, the command node IS a valid closure seed",
+      "mode": "ignore",
+      "graph": {
+        "version": 5,
+        "projectName": "c14b",
+        "nodes": [
+          { "id": "cmd", "title": "Cmd", "role": "command", "brief": "", "filePath": "context/cmd.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "d", "title": "D", "role": "architecture", "brief": "", "filePath": "context/d.md", "readOrder": 2, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "cmd", "target": "d", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "cmd": { "policy": "always", "reason": "root-always" },
+        "d": { "policy": "always", "reason": "imported", "decidingEdgeId": "e1-i" }
+      }
+    },
+    {
+      "name": "D10(a) — a dangling edge (source names no node) is excluded before resolution, not treated as a real reference",
+      "graph": {
+        "version": 5,
+        "projectName": "c15",
+        "nodes": [
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 1, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-r", "source": "ghost", "target": "b", "kind": "references" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "b": { "policy": "excluded", "reason": "orphan" }
+      }
+    },
+    {
+      "name": "D10(b) — overrides/sequence/contradicts edges are LoadEdgeKind::Other and never affect load resolution",
+      "graph": {
+        "version": 5,
+        "projectName": "c16",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "b", "title": "B", "role": "architecture", "brief": "", "filePath": "context/b.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "c", "title": "C", "role": "workflow", "brief": "", "filePath": "context/c.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-o", "source": "a", "target": "b", "kind": "overrides" },
+          { "id": "e2-s", "source": "a", "target": "c", "kind": "sequence" },
+          { "id": "e3-c", "source": "b", "target": "c", "kind": "contradicts" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "b": { "policy": "excluded", "reason": "orphan" },
+        "c": { "policy": "excluded", "reason": "orphan" }
+      }
+    },
+    {
+      "name": "D10(c) — rule 6's decidingEdgeId is the lowest UNGUARDED-IMPORTS edge whose SOURCE IS IN THE CLOSURE, not merely the lowest id overall",
+      "graph": {
+        "version": 5,
+        "projectName": "c17",
+        "nodes": [
+          { "id": "a", "title": "A", "role": "rule", "brief": "", "filePath": "context/a.md", "readOrder": 1, "rootLoad": "always", "position": { "x": 0, "y": 0 } },
+          { "id": "x", "title": "X", "role": "architecture", "brief": "", "filePath": "context/x.md", "readOrder": 2, "position": { "x": 0, "y": 0 } },
+          { "id": "t", "title": "T", "role": "glossary", "brief": "", "filePath": "context/t.md", "readOrder": 3, "position": { "x": 0, "y": 0 } }
+        ],
+        "edges": [
+          { "id": "e1-i", "source": "x", "target": "t", "kind": "imports" },
+          { "id": "e9-i", "source": "a", "target": "t", "kind": "imports" }
+        ],
+        "compileTargets": ["claude"]
+      },
+      "expected": {
+        "a": { "policy": "always", "reason": "root-always" },
+        "x": { "policy": "excluded", "reason": "orphan" },
+        "t": { "policy": "always", "reason": "imported", "decidingEdgeId": "e9-i" }
+      }
+    }
+  ]
+}

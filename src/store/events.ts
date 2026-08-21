@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useGraphStore, type AssembleStatus } from "./graph";
+import { useGraphStore, type AssembleStatus, type AssemblePhase } from "./graph";
 import { useProjectStore, type FsChange } from "./project";
 import { useReviewStore } from "./review";
 import { onTaskFileChange } from "./tasks";
@@ -155,9 +155,30 @@ const ASSEMBLE_STATUSES: readonly AssembleStatus[] = [
   "error",
 ];
 
+/** Mirrors `graph.ts`'s `AssemblePhase` (WO13_CONTRACT.md §3.3). Validated
+ *  the same way `status` is, just below: an unknown phase from a future
+ *  backend is silently ignored — never thrown, never left to corrupt the
+ *  store. */
+const ASSEMBLE_PHASES: readonly AssemblePhase[] = [
+  "queued",
+  "starting",
+  "running",
+  "writing",
+  "done",
+  "error",
+];
+
+/** Mirrors src-tauri `AssembleProgress` 1:1 (WO13_CONTRACT.md §3.3):
+ *  `status` stays authoritative for `setAssembleStatus`; `phase`/`startedAt`
+ *  are additive telemetry, forwarded to `setAssemblePhase` so the canvas
+ *  card's 3-step stepper has live data instead of blinking over nothing.
+ *  `startedAt` is `null` on the wire (not omitted) for the initial "queued"
+ *  event only — every later event of the same job carries a value. */
 interface AssembleStatusPayload {
   nodeId: string;
   status: string;
+  phase: string;
+  startedAt: number | null;
   error: string | null;
 }
 
@@ -177,12 +198,22 @@ export function initEventListener(): Promise<() => void> {
     );
     unlistens.push(
       await listen<AssembleStatusPayload>("assemble://status", (ev) => {
-        const { nodeId, status, error } = ev.payload;
-        const known = ASSEMBLE_STATUSES.find((s) => s === status);
-        if (known === undefined) return; // unknown status — ignore, never crash
-        useGraphStore
-          .getState()
-          .setAssembleStatus(nodeId, known, error ?? undefined);
+        const { nodeId, status, phase, startedAt, error } = ev.payload;
+        // `status` and `phase` are validated and applied independently — an
+        // unrecognized value in one must not suppress a valid update to the
+        // other (each is its own optional-store-action guard, same idiom).
+        const knownStatus = ASSEMBLE_STATUSES.find((s) => s === status);
+        if (knownStatus !== undefined) {
+          useGraphStore
+            .getState()
+            .setAssembleStatus(nodeId, knownStatus, error ?? undefined);
+        }
+        const knownPhase = ASSEMBLE_PHASES.find((p) => p === phase);
+        if (knownPhase !== undefined) {
+          useGraphStore
+            .getState()
+            .setAssemblePhase(nodeId, knownPhase, startedAt ?? undefined);
+        }
       }),
     );
     unlistens.push(

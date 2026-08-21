@@ -345,3 +345,145 @@ fn scalar_needing_quotes_but_containing_a_double_quote_is_rejected() {
     let err = patch(content, Some(&f), None).unwrap_err();
     assert!(err.contains("cannot be safely quoted"));
 }
+
+// ---- WO13 §14.4 / §18.3: five new known keys ------------------------------
+//
+// A fixture carrying all five NEW known keys (`disallowedTools`,
+// `permissionMode`, `maxTurns`, `memory`, `color`) AND all six still-
+// backlogged keys (`mcpServers`, `hooks`, `background`, `effort`,
+// `isolation`, `initialPrompt`) at once — the exact combination §18.3
+// requires: `emit(parse(c)) == c`, and a no-op `patch` leaves it byte-
+// identical, for a file that already has every one of these keys before
+// promotion touches anything.
+
+const FULL_AGENT: &str = "---\nname: full-agent\ndescription: Exercises every WO13 frontmatter key at once.\nmodel: opus\ntools: [Read, Write]\nskills: [cowtext-terminology]\ndisallowedTools: [Bash, mcp__github__*]\npermissionMode: acceptEdits\nmaxTurns: 50\nmemory: project\ncolor: blue\nmcpServers: {\"github\": {\"command\": \"npx\"}}\nhooks: {\"PreToolUse\": []}\nbackground: true\neffort: high\nisolation: sandbox\ninitialPrompt: Get started on the task.\n---\n\n# full-agent\n\nBody text.\n";
+
+#[test]
+fn round_trip_byte_identical_with_all_five_new_keys_and_all_six_backlogged_keys() {
+    assert_eq!(emit(&parse(FULL_AGENT)), FULL_AGENT);
+}
+
+#[test]
+fn no_op_patch_on_full_agent_is_byte_identical() {
+    let f = parse(FULL_AGENT).fields();
+    // Round-trips the SAME values back in — a no-op by construction, per
+    // §18.3's "no field changed" requirement.
+    assert_eq!(patch(FULL_AGENT, Some(&f), None).unwrap(), FULL_AGENT);
+}
+
+#[test]
+fn full_agent_fields_extract_all_five_new_keys_correctly() {
+    let f = parse(FULL_AGENT).fields();
+    assert_eq!(f.disallowed_tools, vec!["Bash".to_string(), "mcp__github__*".to_string()]);
+    assert_eq!(f.permission_mode.as_deref(), Some("acceptEdits"));
+    assert_eq!(f.max_turns.as_deref(), Some("50"));
+    assert_eq!(f.memory.as_deref(), Some("project"));
+    assert_eq!(f.color.as_deref(), Some("blue"));
+}
+
+#[test]
+fn full_agent_backlogged_keys_survive_as_extra_after_a_real_patch() {
+    // Not a no-op this time: change `color`, then confirm every backlogged
+    // key (mcpServers/hooks/background/effort/isolation/initialPrompt)
+    // still round-trips byte-for-byte, in position, unaffected by a
+    // completely unrelated field changing on the same save — the same
+    // "resend the whole FmFields object" shape `agent_save` always uses.
+    let mut f = parse(FULL_AGENT).fields();
+    f.color = Some("green".to_string());
+    let patched = patch(FULL_AGENT, Some(&f), None).unwrap();
+
+    assert!(patched.contains("\ncolor: green\n"));
+    assert!(patched.contains("\nmcpServers: {\"github\": {\"command\": \"npx\"}}\n"));
+    assert!(patched.contains("\nhooks: {\"PreToolUse\": []}\n"));
+    assert!(patched.contains("\nbackground: true\n"));
+    assert!(patched.contains("\neffort: high\n"));
+    assert!(patched.contains("\nisolation: sandbox\n"));
+    assert!(patched.contains("\ninitialPrompt: Get started on the task.\n"));
+    assert_eq!(
+        patched.lines().count(),
+        FULL_AGENT.lines().count(),
+        "no lines added or removed, only color's text changed"
+    );
+}
+
+#[test]
+fn max_turns_renders_unquoted_and_round_trips() {
+    let content = "---\nname: a\n---\nbody\n";
+    let mut f = parse(content).fields();
+    f.name = Some("a".to_string());
+    f.max_turns = Some("30".to_string());
+    let patched = patch(content, Some(&f), None).unwrap();
+    assert!(patched.contains("\nmaxTurns: 30\n"), "got: {patched:?}");
+    assert!(!patched.contains("\"30\""));
+
+    // And it round-trips: re-parsing + a no-op patch is byte-identical.
+    let f2 = parse(&patched).fields();
+    assert_eq!(f2.max_turns.as_deref(), Some("30"));
+    assert_eq!(patch(&patched, Some(&f2), None).unwrap(), patched);
+}
+
+#[test]
+fn disallowed_tools_preserves_bracket_and_comma_list_forms_on_patch() {
+    let comma_doc = "---\nname: a\ndisallowedTools: Bash, Write\n---\nbody\n";
+    let mut f = parse(comma_doc).fields();
+    f.name = Some("b".to_string());
+    let patched = patch(comma_doc, Some(&f), None).unwrap();
+    assert!(patched.contains("disallowedTools: Bash, Write\n"));
+
+    let bracket_doc = "---\nname: a\ndisallowedTools: [Bash, Write]\n---\nbody\n";
+    let mut f2 = parse(bracket_doc).fields();
+    f2.name = Some("b".to_string());
+    let patched2 = patch(bracket_doc, Some(&f2), None).unwrap();
+    assert!(patched2.contains("disallowedTools: [Bash, Write]\n"));
+}
+
+#[test]
+fn permission_mode_memory_color_each_round_trip_individually() {
+    // One key at a time — the per-key fixture the contract asks for before
+    // promoting each key, so a defect in one key's plumbing can't hide
+    // behind another key's correctness.
+    type Extractor = fn(&FmFields) -> Option<String>;
+    let cases: [(&str, Extractor); 3] = [
+        ("permissionMode: plan", |f: &FmFields| f.permission_mode.clone()),
+        ("memory: local", |f: &FmFields| f.memory.clone()),
+        ("color: cyan", |f: &FmFields| f.color.clone()),
+    ];
+    for (key_line, extractor) in cases {
+        let content = format!("---\nname: a\n{key_line}\n---\nbody\n");
+        let doc = parse(&content);
+        assert!(!doc.raw, "{key_line} must parse as known frontmatter");
+        let f = doc.fields();
+        let value = key_line.split_once(": ").unwrap().1;
+        assert_eq!(extractor(&f).as_deref(), Some(value), "{key_line}");
+        // No-op patch is byte-identical.
+        assert_eq!(patch(&content, Some(&f), None).unwrap(), content);
+    }
+}
+
+#[test]
+fn cleared_new_field_deletes_its_line_rest_untouched() {
+    let mut f = parse(FULL_AGENT).fields();
+    f.permission_mode = None;
+    let patched = patch(FULL_AGENT, Some(&f), None).unwrap();
+    assert!(!patched.contains("permissionMode:"));
+    assert!(patched.contains("\ncolor: blue\n"));
+    assert!(patched.contains("\nmaxTurns: 50\n"));
+}
+
+#[test]
+fn new_known_key_appended_in_canonical_order_after_skills() {
+    // A document with none of the five new keys yet — adding one must land
+    // in KnownKey::ORDER's position (right after skills, before the
+    // closing fence when nothing else follows).
+    let content = "---\nname: a\nskills: [x]\n---\nbody\n";
+    let mut f = parse(content).fields();
+    f.disallowed_tools = vec!["Bash".to_string()];
+    let patched = patch(content, Some(&f), None).unwrap();
+    let new_line = "disallowedTools: [Bash]\n";
+    let at = patched.find(new_line).unwrap();
+    let after = &patched[at + new_line.len()..];
+    assert!(
+        after.starts_with("---\n"),
+        "disallowedTools must land immediately before the closing fence here, got: {after:?}"
+    );
+}

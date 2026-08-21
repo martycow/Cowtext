@@ -4,13 +4,12 @@
 // working. A distinct lifecycle from EventLog's hook/telemetry feed — never
 // merged into it.
 
-import { useState } from "react";
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
+import type { JSX } from "react";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { selectReducedMotion, useSettingsStore } from "../store/settings";
-import { MAX_SESSIONS, useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
+import { useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
 import { ctxPercent } from "../store/tokens";
-import { AddAgentDialog } from "./AddAgentDialog";
 import { BudgetStrip } from "./BudgetGauge";
 import { budgetPct } from "./budget";
 
@@ -118,25 +117,13 @@ function RosterCard({
   );
 }
 
-export function RosterBar({ root }: { root: string }) {
+export function RosterBar(): JSX.Element {
   const sessions = useSessionsStore((s) => s.sessions);
   const selectedId = useSessionsStore((s) => s.selectedId);
   const reducedMotion = useSettingsStore(selectReducedMotion);
-  const [addOpen, setAddOpen] = useState(false);
-  const aliveCount = sessions.filter((s) => s.alive).length;
-  const atCap = aliveCount >= MAX_SESSIONS;
 
   return (
     <div className="flex h-[38px] flex-none items-center gap-2 border-t border-border-subtle bg-surface-1 px-3">
-      <button
-        onClick={() => setAddOpen(true)}
-        disabled={atCap}
-        title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Spawn a session"}
-        className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-2 font-mono text-2xs text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text disabled:text-content-disabled disabled:hover:border-border disabled:hover:text-content-secondary"
-      >
-        <Plus size={12} strokeWidth={1.5} />
-        Spawn agent
-      </button>
       {sessions.length === 0 ? (
         <span className="font-mono text-2xs text-content-disabled">no agents running</span>
       ) : (
@@ -146,7 +133,6 @@ export function RosterBar({ root }: { root: string }) {
           ))}
         </div>
       )}
-      {addOpen && <AddAgentDialog root={root} onClose={() => setAddOpen(false)} />}
     </div>
   );
 }

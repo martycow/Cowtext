@@ -19,6 +19,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { presetExport, presetRead } from "../preset/api";
 import { NODE_ROLES, type NodeRole } from "../store/graph";
 import { joinDirFile, normalizeDir, slugForFile } from "./paths";
+import { isWizardRole, toWizardRole } from "./roles";
 
 export interface WizardPresetFields {
   name: string;
@@ -28,6 +29,17 @@ export interface WizardPresetFields {
   pinned: boolean;
   brief: string;
   content: string;
+}
+
+/** What Import hands back. D3a (WO12): a preset file is untrusted input —
+ *  hand-edited, or exported from an agent-tagged node in an older session —
+ *  so its `role` goes through the same gate as the picker. `fields.role` is
+ *  always a role the wizard may create; `blockedRole` names what the file
+ *  actually asked for when the gate had to intervene, so the wizard can say
+ *  so out loud instead of silently changing the user's data. */
+export interface WizardPresetImport {
+  fields: WizardPresetFields;
+  blockedRole: NodeRole | null;
 }
 
 function buildEnvelope(fields: WizardPresetFields): string {
@@ -45,7 +57,7 @@ function buildEnvelope(fields: WizardPresetFields): string {
         brief: fields.brief,
         filePath,
         readOrder: 1,
-        pinned: fields.pinned,
+        ...(fields.pinned ? { rootLoad: "always" as const } : {}),
         position: { x: 0, y: 0 },
         // Extra field beyond the graph-preset node shape — this manifest's
         // whole reason to exist. See file header.
@@ -58,7 +70,7 @@ function buildEnvelope(fields: WizardPresetFields): string {
   return `${JSON.stringify(envelope, null, 2)}\n`;
 }
 
-function parseEnvelope(json: string): WizardPresetFields {
+function parseEnvelope(json: string): WizardPresetImport {
   const raw: unknown = JSON.parse(json);
   if (typeof raw !== "object" || raw === null) throw new Error("Not a node-preset file");
   const p = raw as Record<string, unknown>;
@@ -78,16 +90,27 @@ function parseEnvelope(json: string): WizardPresetFields {
   const slash = filePath.lastIndexOf("/");
   const dir = slash >= 0 ? normalizeDir(filePath.slice(0, slash)) : "";
   const fileName = slash >= 0 ? filePath.slice(slash + 1) : filePath;
-  const role = NODE_ROLES.find((r) => r === n.role) ?? "reference";
+  const rawRole = NODE_ROLES.find((r) => r === n.role) ?? "architecture";
+  // D3a (WO12) — the wizard's role exclusion is enforced HERE too, not only
+  // at the picker. `NODE_ROLES` still contains "agent" (the Inspector needs
+  // it for adopted agent nodes), so a preset naming `"role": "agent"` used to
+  // validate cleanly and ride straight through Confirm into a context/*.md
+  // tagged `agent` — the exact state the wizard's picker was filtered to make
+  // impossible. Coerce, and report what was coerced.
+  const role = toWizardRole(rawRole);
+  const blockedRole = isWizardRole(rawRole) ? null : rawRole;
   const name = typeof n.title === "string" && n.title !== "" ? n.title : String(p.name ?? "");
   return {
-    name,
-    role,
-    dir,
-    fileName: fileName === "" ? `${slugForFile(name)}.md` : fileName,
-    pinned: n.pinned === true,
-    brief: typeof n.brief === "string" ? n.brief : "",
-    content: n.content,
+    fields: {
+      name,
+      role,
+      dir,
+      fileName: fileName === "" ? `${slugForFile(name)}.md` : fileName,
+      pinned: n.rootLoad === "always",
+      brief: typeof n.brief === "string" ? n.brief : "",
+      content: n.content,
+    },
+    blockedRole,
   };
 }
 
@@ -104,8 +127,9 @@ export async function exportWizardPreset(fields: WizardPresetFields): Promise<bo
 }
 
 /** Opens an open dialog and reads back a manifest. Resolves null when the
- *  user cancels the dialog. */
-export async function importWizardPreset(): Promise<WizardPresetFields | null> {
+ *  user cancels the dialog. The returned `fields.role` has already passed the
+ *  wizard's role gate (D3a). */
+export async function importWizardPreset(): Promise<WizardPresetImport | null> {
   const picked = await open({ filters: [{ name: "Cowtext node preset", extensions: ["json"] }] });
   if (typeof picked !== "string") return null;
   const json = await presetRead(picked);

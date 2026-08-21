@@ -33,9 +33,9 @@
 //!   A hand-written `CLAUDE.md` adopted as a node would be replaced by
 //!   Compile's own generated index on the very next Compile run. Every
 //!   [`ImportProposedNode`] is flagged `compileOwned` when its `filePath`
-//!   is one of those shapes ([`is_compile_output_path`], a re-derivation
-//!   of `compile.rs`'s private `classify_output` — see that function's doc
-//!   for the reconciliation note), and [`import_apply`] independently
+//!   is one of those shapes ([`is_compile_output_path`], which now calls
+//!   `compile.rs`'s `classify_output` directly — WO13_AUDIT.md D9 deleted
+//!   the re-derivation this used to carry), and [`import_apply`] independently
 //!   refuses (counted in `skipped`, never a hard error) any approved node
 //!   with such a path regardless of what the client sent. The file's own
 //!   `@`/link edges are still extracted and proposed either way — only the
@@ -63,7 +63,8 @@ mod tests;
 use crate::compile::GENERATED_HEADER;
 use crate::project::{
     checked_root, migrate_graph, read_graph, resolve_within_root, serialize_graph, write_graph,
-    BarnGraph, CompileTarget, EdgeKind, MemoryEdge, MemoryNode, NodeRole, Position, GRAPH_VERSION,
+    BarnGraph, CompileTarget, EdgeGuard, EdgeKind, MemoryEdge, MemoryNode, NodeRole, Position,
+    RootLoad, GRAPH_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -110,10 +111,13 @@ pub struct ImportProposedNode {
     /// so the review UI can render it disabled — see `ImportReviewModal`.
     pub already_managed: bool,
     /// DELTA from `src/import/types.ts`'s placeholder: `.mdc` frontmatter's
-    /// `alwaysApply: true` maps to this. The contract explicitly asks for
-    /// "alwaysApply ... maps to pinned ... semantics" (WO03_CONTRACT.md);
-    /// the placeholder (written before this module existed) had no field
-    /// for it. Always `false` for every non-`.mdc` source.
+    /// `alwaysApply: true` maps to this. The contract originally asked for
+    /// "alwaysApply ... maps to pinned ... semantics" (WO03_CONTRACT.md); the
+    /// v5 taxonomy (WO13) replaces `MemoryNode.pinned: bool` with
+    /// `rootLoad?: "always"`, but this field stays a plain proposal-local
+    /// boolean (never itself a `MemoryNode` field) — [`apply_inner`] maps
+    /// `true` to `root_load: Some(RootLoad::Always)` when the node is
+    /// adopted. Always `false` for every non-`.mdc` source.
     #[serde(default)]
     pub pinned: bool,
     /// NEW FIELD (WO03 audit D2 fix): true when `filePath` is a path
@@ -145,14 +149,14 @@ pub struct ImportProposedEdge {
     pub source: String,
     pub target: String,
     pub kind: EdgeKind,
-    /// DELTA from the placeholder: carries a `conditional` edge's glob
-    /// pattern (from `.mdc` frontmatter's `globs`) through to
-    /// [`import_apply`]. Without it a `conditional` edge would apply with
-    /// no condition at all — the contract's "globs ... maps to ...
-    /// conditional semantics" would be silently lost. `None` for every
-    /// `imports`/`references` edge.
+    /// WO13 v5: the old `conditional` edge kind is gone — a `.mdc`'s
+    /// frontmatter `globs` now proposes an `imports` edge carrying a typed
+    /// [`EdgeGuard::Glob`] instead (Cursor's `globs:` value is comma-joined
+    /// and split back into the guard's `globs` list, same join direction
+    /// `compile.rs::emit_cursor` uses). `None` for every edge this importer
+    /// never anchors a glob to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub condition: Option<String>,
+    pub guard: Option<EdgeGuard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -222,7 +226,6 @@ struct PendingRef {
     source_id: String,
     target_rel: String,
     kind: EdgeKind,
-    condition: Option<String>,
 }
 
 fn scan_inner(root: &Path) -> ImportChangeset {
@@ -257,7 +260,6 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::Imports,
-                        condition: None,
                     });
                 }
                 for t in pf.link_targets {
@@ -265,7 +267,6 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::References,
-                        condition: None,
                     });
                 }
                 nodes.push(pf.node);
@@ -297,7 +298,6 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::Imports,
-                        condition: None,
                     });
                 }
                 for t in pf.link_targets {
@@ -305,7 +305,6 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::References,
-                        condition: None,
                     });
                 }
                 nodes.push(pf.node);
@@ -337,7 +336,6 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::Imports,
-                        condition: None,
                     });
                 }
                 for t in pf.link_targets.iter().cloned() {
@@ -345,28 +343,39 @@ fn scan_inner(root: &Path) -> ImportChangeset {
                         source_id: pf.node.id.clone(),
                         target_rel: t,
                         kind: EdgeKind::References,
-                        condition: None,
                     });
                 }
-                // WO03 audit D8: a globs condition with no CLAUDE.md/root
-                // AGENTS.md scanned to anchor it (an entirely ordinary
-                // shape for a Cursor-only project) must not be silently
-                // dropped — report it so the user knows the node can still
-                // be adopted, just without a conditional edge attached.
+                // WO03 audit D8, updated for WO13 v5: a globs condition with
+                // no CLAUDE.md/root AGENTS.md scanned to anchor it must not
+                // be silently dropped — report it so the node can still be
+                // adopted, just without a guarded `imports` edge attached.
+                // Cursor's `globs:` value is comma-joined; split back into
+                // the guard's `globs` vector here.
                 match (&anchor_id, condition) {
                     (Some(anchor), Some(cond)) => {
-                        push_edge(
-                            &mut edges,
-                            &mut seen_edge_keys,
-                            anchor.clone(),
-                            pf.node.id.clone(),
-                            EdgeKind::Conditional,
-                            Some(cond),
-                        );
+                        let globs: Vec<String> = cond
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if globs.is_empty() {
+                            warnings.push(format!(
+                                "{rel} has an empty globs list — glob condition dropped (the node itself can still be adopted)"
+                            ));
+                        } else {
+                            push_edge(
+                                &mut edges,
+                                &mut seen_edge_keys,
+                                anchor.clone(),
+                                pf.node.id.clone(),
+                                EdgeKind::Imports,
+                                Some(EdgeGuard::Glob { globs }),
+                            );
+                        }
                     }
                     (None, Some(cond)) => {
                         warnings.push(format!(
-                            "{rel} has globs ({cond}) but no CLAUDE.md/AGENTS.md was found to anchor a conditional edge to — glob condition dropped (the node itself can still be adopted)"
+                            "{rel} has globs ({cond}) but no CLAUDE.md/AGENTS.md was found to anchor a guarded imports edge to — glob condition dropped (the node itself can still be adopted)"
                         ));
                     }
                     (_, None) => {}
@@ -408,14 +417,7 @@ fn scan_inner(root: &Path) -> ImportChangeset {
             nodes.push(node);
             node_id
         };
-        push_edge(
-            &mut edges,
-            &mut seen_edge_keys,
-            p.source_id,
-            target_id,
-            p.kind,
-            p.condition,
-        );
+        push_edge(&mut edges, &mut seen_edge_keys, p.source_id, target_id, p.kind, None);
     }
 
     ImportChangeset {
@@ -431,7 +433,7 @@ fn push_edge(
     source: String,
     target: String,
     kind: EdgeKind,
-    condition: Option<String>,
+    guard: Option<EdgeGuard>,
 ) {
     let slug = edge_kind_slug(kind);
     if !seen.insert((source.clone(), target.clone(), slug)) {
@@ -443,7 +445,7 @@ fn push_edge(
         source,
         target,
         kind,
-        condition,
+        guard,
     });
 }
 
@@ -746,44 +748,24 @@ fn has_generated_header(content: &str) -> bool {
 // ── Compile-output-path detection (WO03 audit D2 fix) ───────────────
 
 /// True for every path shape `compile.rs`'s write allowlist
-/// (`classify_output`, private there) accepts: `CLAUDE.md`, any path
-/// ending in `AGENTS.md`, one component under `.cursor/rules/` with an
-/// `.mdc` extension, `.github/copilot-instructions.md`, `GEMINI.md` at the
-/// project root, or one `.md` component directly under `.claude/agents/`.
+/// (`classify_output`) accepts — `CLAUDE.md`, any path ending in
+/// `AGENTS.md`, one component under `.cursor/rules/` with an `.mdc`
+/// extension, `.github/copilot-instructions.md`, `GEMINI.md` at the project
+/// root, one `.md` component directly under `.claude/agents/`, or
+/// (WO13 Amendment 1, §10.5) one `.md` component directly under
+/// `.claude/commands/`.
 ///
-/// This is a **deliberate, flagged re-derivation**, not a shared call:
-/// `compile.rs::classify_output` is private and `compile.rs` is outside
-/// this lane's file zone (append-only `lib.rs` + `import.rs` only), so it
-/// cannot be made `pub(crate)` from here. Same tradeoff `lint.rs` already
-/// made for its own cycle detector (WO03 audit D9, ratified) — logic that
-/// must track another module's shape gets re-derived at the module
-/// boundary rather than reached into. **Reconciliation ask, flagged in the
-/// lane report:** if `compile::classify_output` is ever made `pub(crate)`,
-/// this copy should be deleted in favor of calling it directly (it would
-/// need a boolean-collapsing wrapper, since that function's `Some(true)`
-/// vs `Some(false)` distinguishes the agent-context surgical-edit family
-/// from a fully-generated file — a distinction this check does not need,
-/// since both are equally "compile owns this path").
+/// WO13_AUDIT.md D9 (fix-round Stage 0): calls the ONE `classify_output`
+/// (`compile.rs`, now `pub(crate)`) directly instead of the flagged
+/// re-derivation this function used to carry. That copy was **stale**: it
+/// predated R1's `.claude/commands/` arm, so a changeset naming
+/// `.claude/commands/deploy.md` passed this check and was admitted by
+/// `import_apply` — the WO03-D2 guard this whole module exists to enforce
+/// had a hole. `.is_some()` collapses `classify_output`'s `Some(true)` vs
+/// `Some(false)` (surgical-edit vs fully-generated) distinction, which this
+/// check never needed — both are equally "compile owns this path."
 fn is_compile_output_path(rel: &str) -> bool {
-    let norm = rel.replace('\\', "/");
-    let parts: Vec<&str> = norm
-        .split('/')
-        .filter(|p| !p.is_empty() && *p != ".")
-        .collect();
-    match parts.as_slice() {
-        [.., "AGENTS.md"] => true,
-        ["CLAUDE.md"] => true,
-        ["GEMINI.md"] => true,
-        [".github", "copilot-instructions.md"] => true,
-        [".cursor", "rules", name] => name
-            .strip_suffix(".mdc")
-            .is_some_and(|stem| !stem.is_empty()),
-        [".claude", "agents", name] => name
-            .to_ascii_lowercase()
-            .strip_suffix(".md")
-            .is_some_and(|stem| !stem.is_empty()),
-        _ => false,
-    }
+    crate::compile::classify_output(rel).is_some()
 }
 
 // ── .mdc frontmatter (hand-rolled, scoped to this module) ──────────────
@@ -858,22 +840,28 @@ fn first_prose_line(body: &str) -> String {
 /// Priority-ordered keyword → role table (first match in `haystack` wins).
 /// Deliberately checked against headings/filenames/descriptions only, never
 /// full body prose — scanning prose would false-positive constantly (any
-/// paragraph that happens to mention "task" in passing). `Reference` is the
-/// catch-all default — the "Doc-ref → reference" mapping `project.rs`'s own
-/// module doc names as the deck's default too.
+/// paragraph that happens to mention "task" in passing). `Architecture` is
+/// the catch-all default (WO13_CONTRACT.md §17 "known required edits": the
+/// v5 role set drops `reference`, whose old fallback slot this now fills —
+/// `project.rs::migrate_graph`'s own unknown-role fallback made the same
+/// change, pass 5 of its migration table).
 fn infer_role(haystack: &str) -> NodeRole {
     const TABLE: &[(&[&str], NodeRole)] = &[
         (&["hard rule", "invariant", "must not"], NodeRole::Invariant),
-        (&["rule"], NodeRole::Rules),
+        (&["rule"], NodeRole::Rule),
         (&["architecture"], NodeRole::Architecture),
         (&["workflow"], NodeRole::Workflow),
         (&["command"], NodeRole::Command),
-        (&["task"], NodeRole::Task),
+        // v5: `task` no longer exists as a role — migration's own v4->v5
+        // table maps it to `workflow` (§6.2), so the importer's heuristic
+        // follows the same target.
+        (&["task"], NodeRole::Workflow),
         (&["glossary", "terminology"], NodeRole::Glossary),
         (&["persona", "agent"], NodeRole::Agent),
         (&["trap", "gotcha", "pitfall", "footgun"], NodeRole::Trap),
         (&["skill"], NodeRole::Skill),
-        (&["snippet", "example"], NodeRole::Snippet),
+        // v5: `snippet` is renamed `example` (§6.2).
+        (&["snippet", "example"], NodeRole::Example),
         (&["style", "convention", "format"], NodeRole::Style),
     ];
     let h = haystack.to_lowercase();
@@ -882,7 +870,7 @@ fn infer_role(haystack: &str) -> NodeRole {
             return role;
         }
     }
-    NodeRole::Reference
+    NodeRole::Architecture
 }
 
 fn humanize(stem: &str) -> String {
@@ -1058,11 +1046,9 @@ fn edge_kind_slug(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Imports => "imports",
         EdgeKind::References => "references",
-        EdgeKind::Conditional => "conditional",
-        EdgeKind::Sequence => "sequence",
         EdgeKind::Overrides => "overrides",
-        EdgeKind::Supersedes => "supersedes",
-        EdgeKind::ConflictsWith => "conflicts-with",
+        EdgeKind::Sequence => "sequence",
+        EdgeKind::Contradicts => "contradicts",
     }
 }
 
@@ -1150,12 +1136,14 @@ fn apply_inner(root: String, changeset: ImportApproved) -> Result<ImportApplyRes
             brief: n.brief.clone(),
             file_path: n.file_path.clone(),
             read_order: 0,
-            pinned: n.pinned,
+            root_load: if n.pinned { Some(RootLoad::Always) } else { None },
             position: Position::default(),
             scene_pos: None,
             last_verified: None,
             tags: Vec::new(),
             owner: None,
+            deprecated: None,
+            needs_review: false,
             meta: None,
         });
         nodes_added += 1;
@@ -1184,7 +1172,7 @@ fn apply_inner(root: String, changeset: ImportApproved) -> Result<ImportApplyRes
             source,
             target,
             kind: e.kind,
-            condition: e.condition.clone(),
+            guard: e.guard.clone(),
             note: None,
             color: None,
             waypoints: Vec::new(),

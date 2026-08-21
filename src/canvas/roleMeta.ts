@@ -1,41 +1,51 @@
-// Role popup copy (contract §7.5) — UI text only; the store keeps owning
-// NODE_ROLES. Copy is canon from DESIGN_SPEC's "Meaning" column: do not
-// reword the first clause (applies to the original 7; the WO03 six are new
-// and have no DESIGN_SPEC entry yet — G lane closes that gap).
+// Role popup copy — THIN RE-EXPORT over `src/config/nodeTypes.ts`, the v5
+// single source of truth (WO13_CONTRACT.md §6.3, §17 "Contested files":
+// "It becomes a derived view of nodeTypes.ts. Owning the source and the
+// shim in one lane is the only way they cannot drift."). Existing
+// consumers (NodeWizard.tsx, the Inspector's RolePopup) keep reading
+// `ROLE_DESCRIPTIONS`/`ROLE_GROUPS` from here unchanged; nothing about a
+// role's meaning is authored in this file anymore.
 
+import { NODE_TYPES, type NodeGroup } from "../config/nodeTypes";
 import type { NodeRole } from "../store/graph";
 
-export const ROLE_DESCRIPTIONS: Record<NodeRole, string> = {
-  agent: "An agent: identity, duties, tools — may be backed by a real .claude/agents file.",
-  rules: "Hard constraints the agent must never break.",
-  architecture: "How the system fits together: modules, boundaries, data flow.",
-  workflow: "Ordered processes — the steps to follow for a recurring job.",
-  task: "Work with a finish line: scoped, checkable, done and gone.",
-  reference: "Lookup material, read on demand rather than always in context.",
-  glossary: "Vocabulary: the exact words this project uses, and what they mean.",
-  // v3 (WO03) — six more roles.
-  command: "A runnable command or procedure — meant to be executed, not just read.",
-  invariant: "A fact that must always hold — data or state the agent should never contradict.",
-  trap: "A known gotcha — a mistake made here before, flagged so it isn't repeated.",
-  skill: "A learned capability — a reusable technique, not a one-off task.",
-  snippet: "A reusable fragment of code or text, meant to be copied in verbatim.",
-  style: "Voice and formatting conventions — how output should look, not what it contains.",
-};
+/** Derived from `NODE_TYPES[*].hint` — kept as its own export (rather than
+ *  inlining `NODE_TYPE_BY_ROLE[role].hint` at every call site) so existing
+ *  importers of this exact name keep working unchanged. */
+export const ROLE_DESCRIPTIONS: Record<NodeRole, string> = Object.fromEntries(
+  NODE_TYPES.map((t) => [t.role, t.hint]),
+) as Record<NodeRole, string>;
 
-/** Grouping for the 13-role picker (contract WO03 §"F — frontend": "the
- *  picker must stay usable at 13 options, not just technically correct" —
- *  a flat list stopped scanning well past ~7, so this is the taxonomy both
- *  NodeWizard's step-1 grid and the Inspector's RoleField popup render
- *  sections from. Every NODE_ROLES value appears in exactly one group;
- *  the four group counts (1+3+5+4) must sum to NODE_ROLES.length. */
+/** Grouping for the 14-role picker — the taxonomy both NodeWizard's step-1
+ *  grid and the Inspector's RoleField popup render sections from. Every
+ *  `NodeRole` value appears in exactly one group; the five group counts
+ *  (1+3+2+5+3) sum to `NODE_ROLES.length` (14), asserted by
+ *  `src/config/nodeTypes.test.ts`. Declaration order mirrors
+ *  `NodeGroup`'s own order (identity, constraints, structure, process,
+ *  knowledge) and, within each group, `NODE_TYPES`' declaration order —
+ *  which is itself the contract's §6.1 enumeration order. */
 export interface RoleGroup {
   label: string;
   roles: readonly NodeRole[];
 }
 
-export const ROLE_GROUPS: readonly RoleGroup[] = [
-  { label: "Identity", roles: ["agent"] },
-  { label: "Constraints", roles: ["rules", "invariant", "trap"] },
-  { label: "Process", roles: ["architecture", "workflow", "task", "command", "skill"] },
-  { label: "Knowledge", roles: ["reference", "glossary", "snippet", "style"] },
+const GROUP_LABELS: Record<NodeGroup, string> = {
+  identity: "Identity",
+  constraints: "Constraints",
+  structure: "Structure",
+  process: "Process",
+  knowledge: "Knowledge",
+};
+
+const GROUP_ORDER: readonly NodeGroup[] = [
+  "identity",
+  "constraints",
+  "structure",
+  "process",
+  "knowledge",
 ];
+
+export const ROLE_GROUPS: readonly RoleGroup[] = GROUP_ORDER.map((group) => ({
+  label: GROUP_LABELS[group],
+  roles: NODE_TYPES.filter((t) => t.group === group).map((t) => t.role),
+}));

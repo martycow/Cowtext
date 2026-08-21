@@ -1,36 +1,45 @@
 //! Compile: one graph snapshot → generated agent-context files (plan §5).
 //! The webview sends the same serialized `graph.json` bytes that hit disk;
-//! everything here is a pure function of that snapshot plus the node files.
+//! everything here is a pure function of that snapshot plus the node files
+//! (plus an optional in-memory `overlay`, §10.1).
 //!
 //! Invariants this module owns:
 //! - **Errors XOR files**: `compile_preview` returns validation errors or
 //!   preview files, never both. Graph problems are data (`Ok` with errors);
 //!   `Err` is reserved for infrastructure failure.
 //! - **Deterministic output**: node order is Kahn's algorithm over the
-//!   `imports`/`sequence`/`overrides` constraint graph (WO03: `overrides` is
-//!   structural, exactly like `imports` — see [`EdgeKindIn::is_structural`],
-//!   which delegates to [`crate::project::EdgeKind::is_structural`] rather
-//!   than re-deriving the split) with `(readOrder, id)` as the ready-set
-//!   tie-break, so the same graph always compiles to the same bytes.
-//!   `references`/`conditional`/`supersedes`/`conflicts-with` never
-//!   participate in ordering or cycle detection.
-//! - **Five compile targets** (WO03): `claude` → `CLAUDE.md`, `agents` →
-//!   root/nested `AGENTS.md`, `cursor` → `.cursor/rules/*.mdc`, `copilot` →
+//!   `imports`/`sequence`/`overrides` constraint graph, but only for the
+//!   UNGUARDED subset — [`crate::project::edge_participates_in_order`]
+//!   (WO13_CONTRACT.md §9) is the single predicate deciding participation,
+//!   with `(readOrder, id)` as the ready-set tie-break, so the same graph
+//!   always compiles to the same bytes. `references`/`contradicts`, and any
+//!   GUARDED structural edge, never participate in ordering or cycle
+//!   detection.
+//! - **Five compile targets** (WO03): `claude` → `CLAUDE.md` (+
+//!   `.claude/commands/*.md`, WO13 Amendment 1), `agents` → root/nested
+//!   `AGENTS.md`, `cursor` → `.cursor/rules/*.mdc`, `copilot` →
 //!   `.github/copilot-instructions.md`, `gemini` → `GEMINI.md`. All five
 //!   share the same Kahn ordering and GENERATED header requirement; `claude`
 //!   and `gemini` render `@path` inline imports, `agents` and `copilot`
 //!   render plain markdown links (see [`LinkStyle`]).
+//! - **`resolveLoad` is the only decider of load policy** (WO13_CONTRACT.md
+//!   §8): every adapter below keys off [`crate::resolve_load::resolve_load`]
+//!   (or, for `.cursor/rules` only, [`crate::resolve_load::resolve_load_ignoring_role_lock`]
+//!   — §10.5, F11: Cursor has no invoke mechanism, so Amendment 1's
+//!   destination lock must not reach it). `compile.rs` no longer computes
+//!   its own pinned-closure; the old `effective_pinned` is gone.
 //! - **Write allowlist**: `compile_write` only accepts the compile output
 //!   shapes (`CLAUDE.md`, root or nested `AGENTS.md`, `.cursor/rules/*.mdc`,
 //!   `.github/copilot-instructions.md`, `GEMINI.md`, one `.md` component
-//!   under `.claude/agents/`) and only content carrying the GENERATED header
+//!   under `.claude/agents/`, one `.md` component under
+//!   `.claude/commands/`) and only content carrying the GENERATED header
 //!   (agent files: the Cowtext context block markers instead — see below) —
 //!   it must never become a general write primitive, even inside the path
 //!   guard.
 //! - **Agent context blocks**: independent of `compile_targets` and of the
-//!   claude/agents/cursor adapters. Any node with role `agent` (v1 legacy:
-//!   `persona`) whose own file lives under `.claude/agents/` and has at
-//!   least one outgoing `imports`/`references` edge gets a managed
+//!   claude/agents/cursor adapters. Any node with role `agent` whose own
+//!   file lives under `.claude/agents/` and has at least one outgoing
+//!   `imports`/`references` edge gets a managed
 //!   `<!-- COWTEXT CONTEXT START -->...<!-- COWTEXT CONTEXT END -->` block
 //!   surgically written into (or appended onto) its own hand-written file —
 //!   every other byte of that file is preserved. This is a ratified
@@ -38,22 +47,21 @@
 //!   generated artifact is the block, not the file, so `handwritten` is
 //!   always `false` and the write-allowlist accepts them without requiring
 //!   `GENERATED_HEADER`.
-//!
-//! `graph.json`'s `version` is not itself gated here: `GraphIn` simply
-//! ignores fields it doesn't model (including `version`), so both v1 and v2
-//! graphs compile identically — the only version-sensitive concept, the
-//! `persona`→`agent` role rename, is handled by [`RoleIn`] accepting both
-//! spellings.
+//! - **Deprecated nodes are excluded from all compiled output** (§10.3):
+//!   filtered at emission, never at ordering (a `sequence` edge through a
+//!   deprecated node must not silently reorder the rest).
 
 use crate::project::{checked_root, resolve_within_root, write_atomic};
+use crate::resolve_load::{self, EdgeFacts, GuardKind, LoadEdgeKind, LoadRole, NodeFacts};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// First line of every generated file (`.mdc` carries it right after the
-/// frontmatter instead — Cursor requires `---` as the first bytes).
+/// First line of every generated file (`.mdc` and `.claude/commands/*.md`
+/// carry it right after the frontmatter instead — both require `---` as
+/// the first bytes).
 pub const GENERATED_HEADER: &str =
     "<!-- GENERATED BY COWTEXT — edit the graph or context/*.md, not this file -->";
 
@@ -63,7 +71,7 @@ pub const AGENT_BLOCK_START: &str =
     "<!-- COWTEXT CONTEXT START — generated from the graph; edit the graph, not this block -->";
 pub const AGENT_BLOCK_END: &str = "<!-- COWTEXT CONTEXT END -->";
 
-// ── Input model (tolerant subset of graph.json, plan §4) ──────────────
+// ── Input model (tolerant subset of graph.json, v5, WO13_CONTRACT.md §4) ──
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,22 +94,38 @@ struct NodeIn {
     file_path: String,
     #[serde(default)]
     read_order: i64,
+    /// v5: replaces `pinned: bool`. Absent ⇒ on-demand.
     #[serde(default)]
-    pinned: bool,
+    root_load: Option<RootLoadIn>,
     #[serde(default)]
     role: RoleIn,
+    /// Presence only matters — §10.3 excludes a deprecated node from every
+    /// adapter regardless of what `replacedBy`/`since`/`reason` say.
+    #[serde(default)]
+    deprecated: Option<serde::de::IgnoredAny>,
 }
 
-/// Only the `agent` role (and its v1 name, `persona`) matters to compile;
-/// every other role (rules, architecture, workflow, task, reference,
-/// glossary) and any future role parses fine and is simply not an agent.
+impl NodeIn {
+    fn is_deprecated(&self) -> bool {
+        self.deprecated.is_some()
+    }
+}
+
+#[derive(Deserialize, PartialEq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum RootLoadIn {
+    Always,
+}
+
+/// Only the roles compile cares about (§8.3's `LoadRole` split): `agent`
+/// (context blocks), `command`/`skill` (Amendment 1's destination lock, via
+/// [`crate::resolve_load`]); every other role parses fine as `Other`.
 #[derive(Deserialize, PartialEq, Clone, Copy, Default)]
 #[serde(rename_all = "lowercase")]
 enum RoleIn {
     Agent,
-    /// v1 legacy name for the agent role (Marty, 2026-08-18 pivot); same
-    /// semantics as `Agent`.
-    Persona,
+    Command,
+    Skill,
     #[serde(other)]
     #[default]
     Other,
@@ -109,7 +133,15 @@ enum RoleIn {
 
 impl RoleIn {
     fn is_agent(self) -> bool {
-        matches!(self, RoleIn::Agent | RoleIn::Persona)
+        matches!(self, RoleIn::Agent)
+    }
+
+    fn to_load_role(self) -> LoadRole {
+        match self {
+            RoleIn::Command => LoadRole::Command,
+            RoleIn::Skill => LoadRole::Skill,
+            RoleIn::Agent | RoleIn::Other => LoadRole::Other,
+        }
     }
 }
 
@@ -120,29 +152,26 @@ struct EdgeIn {
     source: String,
     target: String,
     kind: EdgeKindIn,
+    /// v5: replaces `condition: Option<String>`.
     #[serde(default)]
-    condition: Option<String>,
+    guard: Option<GuardIn>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum GuardIn {
+    Glob { globs: Vec<String> },
+    Description { text: String },
 }
 
 #[derive(Deserialize, PartialEq, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 enum EdgeKindIn {
     Imports,
     References,
-    Conditional,
-    Sequence,
-    /// WO03: structural, exactly like `imports` — see [`EdgeKindIn::is_structural`].
     Overrides,
-    /// WO03: non-structural, linter-only (`lint.rs`); parses fine here and
-    /// contributes nothing to ordering.
-    Supersedes,
-    /// WO03: non-structural, linter-only; wire spelling is kebab-case
-    /// (mirrors `crate::project::EdgeKind::ConflictsWith`'s
-    /// `rename_all = "kebab-case"`), so this variant needs an explicit
-    /// rename — `#[serde(rename_all = "lowercase")]` alone would produce
-    /// `"conflictswith"`.
-    #[serde(rename = "conflicts-with")]
-    ConflictsWith,
+    Sequence,
+    Contradicts,
     /// Future edge kinds parse fine and contribute nothing to compile.
     #[serde(other)]
     Unknown,
@@ -153,35 +182,13 @@ impl EdgeKindIn {
         match self {
             EdgeKindIn::Imports => "imports",
             EdgeKindIn::References => "references",
-            EdgeKindIn::Conditional => "conditional",
-            EdgeKindIn::Sequence => "sequence",
             EdgeKindIn::Overrides => "overrides",
-            EdgeKindIn::Supersedes => "supersedes",
-            EdgeKindIn::ConflictsWith => "conflicts-with",
+            EdgeKindIn::Sequence => "sequence",
+            EdgeKindIn::Contradicts => "contradicts",
             EdgeKindIn::Unknown => "unknown",
         }
     }
 
-    /// Whether this edge kind participates in Kahn's algorithm / cycle
-    /// validation / topological ordering. Delegates to
-    /// [`crate::project::EdgeKind::is_structural`] per kind rather than
-    /// re-deriving the structural/non-structural split (WO03 contract) —
-    /// `Unknown` (a forward-compat edge kind this tolerant parser doesn't
-    /// recognize) has no `project::EdgeKind` counterpart and is never
-    /// structural.
-    fn is_structural(self) -> bool {
-        use crate::project::EdgeKind;
-        match self {
-            EdgeKindIn::Imports => EdgeKind::Imports.is_structural(),
-            EdgeKindIn::References => EdgeKind::References.is_structural(),
-            EdgeKindIn::Conditional => EdgeKind::Conditional.is_structural(),
-            EdgeKindIn::Sequence => EdgeKind::Sequence.is_structural(),
-            EdgeKindIn::Overrides => EdgeKind::Overrides.is_structural(),
-            EdgeKindIn::Supersedes => EdgeKind::Supersedes.is_structural(),
-            EdgeKindIn::ConflictsWith => EdgeKind::ConflictsWith.is_structural(),
-            EdgeKindIn::Unknown => false,
-        }
-    }
 }
 
 #[derive(Deserialize, PartialEq, Clone, Copy)]
@@ -218,7 +225,7 @@ pub struct PreviewFile {
     pub rel_path: String,
     /// "claude" | "agents" | "cursor" | "copilot" | "gemini" | "agent"
     pub target: String,
-    /// None = file does not exist on disk yet.
+    /// None = file does not exist on disk yet (overlay never affects this — §10.1).
     pub old_content: Option<String>,
     pub new_content: String,
     /// Existing non-empty file lacking the GENERATED header — the UI must
@@ -256,7 +263,7 @@ pub enum ValidationError {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovedFile {
     pub rel_path: String,
@@ -268,8 +275,18 @@ pub struct ApprovedFile {
 /// Validate the graph and render every requested target in memory.
 /// `Err` only for infrastructure failure (bad root, unparseable JSON,
 /// unreadable existing file); all graph problems come back as `errors`.
+///
+/// `overlay` (§10.1, WO13): in-memory `(relPath, content)` pairs that stand
+/// in for files not yet on disk (or not yet saved with new content) — the
+/// missing-file pass and every body-reading adapter consult it before disk.
+/// `old_content`/`unchanged`/`handwritten` are NEVER affected: those compare
+/// against on-disk truth only, which is the whole point of the step-4 diff.
 #[tauri::command]
-pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePreview, String> {
+pub fn compile_preview(
+    root: String,
+    graph_json: String,
+    overlay: Vec<ApprovedFile>,
+) -> Result<CompilePreview, String> {
     let root_path = checked_root(&root)?;
     let graph: GraphIn =
         serde_json::from_str(&graph_json).map_err(|e| format!("graph.json: {e}"))?;
@@ -280,6 +297,22 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         .enumerate()
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
+
+    // Overlay lookup keyed by resolved PathBuf (§10.1: "path equality is
+    // decided by resolve_within_root(root, rel) returning equal PathBufs").
+    let mut overlay_by_path: HashMap<PathBuf, &str> = HashMap::new();
+    for f in &overlay {
+        if let Ok(p) = resolve_within_root(&root_path, &f.rel_path) {
+            overlay_by_path.insert(p, f.content.as_str());
+        }
+    }
+    let read_file = |rel: &str| -> Result<String, String> {
+        let p = resolve_within_root(&root_path, rel)?;
+        if let Some(content) = overlay_by_path.get(&p) {
+            return Ok((*content).to_string());
+        }
+        fs::read_to_string(&p).map_err(|e| format!("{rel}: {e}"))
+    };
 
     let mut errors: Vec<ValidationError> = Vec::new();
 
@@ -303,12 +336,13 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         }
     }
 
-    // Missing files, reported in (readOrder, id) order.
+    // Missing files, reported in (readOrder, id) order. A node whose path
+    // resolves to an overlay entry counts as present (§10.1).
     let mut by_read_order: Vec<&NodeIn> = graph.nodes.iter().collect();
     by_read_order.sort_by(|a, b| (a.read_order, &a.id).cmp(&(b.read_order, &b.id)));
     for n in by_read_order {
         let missing = match resolve_within_root(&root_path, &n.file_path) {
-            Ok(p) => !p.is_file(),
+            Ok(p) => !p.is_file() && !overlay_by_path.contains_key(&p),
             Err(_) => true,
         };
         if missing {
@@ -341,8 +375,21 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
     for (rank, &i) in order.iter().enumerate() {
         pos[i] = rank;
     }
-    let pinned_set = effective_pinned(&graph.nodes, &live_edges, &id_to_idx);
-    let pinned: Vec<usize> = order.iter().copied().filter(|&i| pinned_set[i]).collect();
+
+    // §8: resolveLoad is the only decider. Build projected facts once and
+    // resolve every node's Apply-mode policy up front — `emit_cursor` is the
+    // ONLY caller of the Ignore-mode entry point (§8.3, §18.4 gate).
+    let (node_facts, edge_facts) = to_load_facts(&graph.nodes, &live_edges);
+    let loads: Vec<resolve_load::LoadResult> = graph
+        .nodes
+        .iter()
+        .map(|n| resolve_load::resolve_load(&n.id, &node_facts, &edge_facts))
+        .collect();
+    let pinned: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&i| loads[i].policy == resolve_load::ResolvedLoad::Always)
+        .collect();
 
     let project_name = if graph.project_name.is_empty() {
         root_path
@@ -358,7 +405,9 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         nodes: &graph.nodes,
         pos,
         pinned,
-        pinned_set,
+        loads,
+        node_facts,
+        edge_facts,
         live_edges,
         id_to_idx,
         order,
@@ -373,6 +422,15 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
             "claude",
             ctx.emit_root(LinkStyle::AtImport),
         ));
+        // §10.5, Amendment 1: `.claude/commands/*.md`, gated on `claude`
+        // being a requested target — creating `.claude/` scaffolding in a
+        // Cursor-only or Copilot-only project is exactly the unasked-for
+        // write this app exists not to do.
+        let mut commands = ctx.emit_commands(&read_file)?;
+        commands.sort_by(|a, b| a.0.cmp(&b.0));
+        for (rel, content) in commands {
+            produced.push((rel, "claude", content));
+        }
     }
     if wants(TargetIn::Agents) {
         produced.push((
@@ -387,10 +445,6 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         }
     }
     if wants(TargetIn::Cursor) {
-        let read_file = |rel: &str| -> Result<String, String> {
-            let p = resolve_within_root(&root_path, rel)?;
-            fs::read_to_string(&p).map_err(|e| format!("{rel}: {e}"))
-        };
         let mut mdc = ctx.emit_cursor(&read_file)?;
         mdc.sort_by(|a, b| a.0.cmp(&b.0));
         for (rel, content) in mdc {
@@ -436,18 +490,20 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
     }
 
     // Agent context blocks (module doc): independent of `compile_targets`.
-    // Every node's file was already proven to exist above (the missing-file
-    // pass walks all of `graph.nodes`), so reading it here can only fail on
-    // a genuine infrastructure problem (permissions, a mid-run deletion).
+    // Every non-deprecated node's file was already proven to exist above
+    // (the missing-file pass walks all of `graph.nodes`), so reading it
+    // here can only fail on a genuine infrastructure problem (permissions,
+    // a mid-run deletion).
     for &i in &ctx.order {
         let n = &ctx.nodes[i];
-        if !n.role.is_agent() || !is_agent_node_file(&n.file_path) {
+        if n.is_deprecated() || !n.role.is_agent() || !is_agent_node_file(&n.file_path) {
             continue;
         }
         let mut target_ids: Vec<&str> = Vec::new();
         for e in &ctx.live_edges {
             if e.source == n.id
                 && matches!(e.kind, EdgeKindIn::Imports | EdgeKindIn::References)
+                && !ctx.node(&e.target).is_deprecated()
                 && !target_ids.contains(&e.target.as_str())
             {
                 target_ids.push(e.target.as_str());
@@ -460,15 +516,19 @@ pub fn compile_preview(root: String, graph_json: String) -> Result<CompilePrevie
         targets.sort_by(|a, b| (a.read_order, &a.id).cmp(&(b.read_order, &b.id)));
         let lines: Vec<String> = targets.iter().map(|t| format!("@{}", t.file_path)).collect();
 
+        let raw = read_file(&n.file_path)?;
+        let new_content = merge_agent_block(&raw, &lines);
+        // `old_content` for the diff is always the real on-disk bytes
+        // (§10.1 — overlay never affects it), independent of what
+        // `read_file` (overlay-aware) returned for the merge input above.
         let path = resolve_within_root(&root_path, &n.file_path)?;
-        let old_content =
+        let disk_content =
             fs::read_to_string(&path).map_err(|e| format!("{}: {e}", n.file_path))?;
-        let new_content = merge_agent_block(&old_content, &lines);
-        let unchanged = old_content == new_content;
+        let unchanged = disk_content == new_content;
         files.push(PreviewFile {
             rel_path: n.file_path.clone(),
             target: "agent".to_string(),
-            old_content: Some(old_content),
+            old_content: Some(disk_content),
             new_content,
             handwritten: false,
             unchanged,
@@ -566,14 +626,15 @@ pub fn compile_write(root: String, files: Vec<ApprovedFile>) -> Result<Vec<Strin
 // ── Ordering + validation helpers ─────────────────────────────────────
 
 /// Kahn's algorithm over the constraint graph: `sequence` says source
-/// before target; `imports` and `overrides` (WO03: structural exactly like
+/// before target; `imports` and `overrides` (structural exactly like
 /// `imports` — same direction, per contract) say target before source.
-/// Participation is decided by [`EdgeKindIn::is_structural`], never
-/// re-derived inline — `references`/`conditional`/`supersedes`/
-/// `conflicts-with` never reach the `if` body. The ready set pops by
-/// `(readOrder, id)`, making manual order the tie-break inside what
-/// topology allows. `Err` carries one concrete cycle path, first node
-/// repeated as the last element.
+/// Participation is decided by [`crate::project::edge_participates_in_order`]
+/// (WO13_CONTRACT.md §9: `kind.is_structural() && guard.is_none()`), never
+/// re-derived inline — a GUARDED structural edge is conditional content,
+/// exactly as the old `conditional` kind was, and must not enter ordering.
+/// The ready set pops by `(readOrder, id)`, making manual order the
+/// tie-break inside what topology allows. `Err` carries one concrete cycle
+/// path, first node repeated as the last element.
 fn total_order(
     nodes: &[NodeIn],
     edges: &[&EdgeIn],
@@ -584,13 +645,16 @@ fn total_order(
     let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut pred: Vec<Vec<usize>> = vec![Vec::new(); n];
     for e in edges {
-        if !e.kind.is_structural() {
+        if !crate::project::edge_participates_in_order(
+            to_project_kind(e.kind),
+            e.guard.is_some(),
+        ) {
             continue;
         }
         let s = id_to_idx[e.source.as_str()];
         let t = id_to_idx[e.target.as_str()];
-        // `is_structural()` narrows `e.kind` to {Sequence, Imports,
-        // Overrides}; Sequence is source-before-target, the other two are
+        // Participation narrows `e.kind` to {Sequence, Imports, Overrides};
+        // Sequence is source-before-target, the other two are
         // target-before-source.
         let (u, v) = if e.kind == EdgeKindIn::Sequence {
             (s, t)
@@ -623,6 +687,62 @@ fn total_order(
     } else {
         Err(find_cycle(nodes, &pred, &order))
     }
+}
+
+/// Maps this module's tolerant `EdgeKindIn` onto `project::EdgeKind` for
+/// [`crate::project::edge_participates_in_order`]. `Unknown` has no
+/// counterpart and is mapped to `References` — harmless, since
+/// `is_structural()` is `false` for both, so the guard check never matters
+/// for that arm.
+fn to_project_kind(kind: EdgeKindIn) -> crate::project::EdgeKind {
+    use crate::project::EdgeKind;
+    match kind {
+        EdgeKindIn::Imports => EdgeKind::Imports,
+        EdgeKindIn::References | EdgeKindIn::Unknown => EdgeKind::References,
+        EdgeKindIn::Overrides => EdgeKind::Overrides,
+        EdgeKindIn::Sequence => EdgeKind::Sequence,
+        EdgeKindIn::Contradicts => EdgeKind::Contradicts,
+    }
+}
+
+/// The production projection from this module's tolerant `NodeIn`/`EdgeIn`
+/// onto `resolve_load`'s decoupled `NodeFacts`/`EdgeFacts` (§8.3). Pulled
+/// out to a standalone, independently testable function (audit D10:
+/// "there are four hand-written projections... and a slip mapping
+/// `overrides` → `Imports` in any of [them] would change compiled output
+/// and pass the whole [resolve_load] corpus green" — that corpus only ever
+/// exercised the test file's OWN parser, never this one). `edges` must
+/// already be the dangling-filtered `live_edges` list; this function does
+/// not re-check edge validity.
+fn to_load_facts(nodes: &[NodeIn], edges: &[&EdgeIn]) -> (Vec<NodeFacts>, Vec<EdgeFacts>) {
+    let node_facts = nodes
+        .iter()
+        .map(|n| NodeFacts {
+            id: n.id.clone(),
+            role: n.role.to_load_role(),
+            root_always: n.root_load == Some(RootLoadIn::Always),
+            deprecated: n.is_deprecated(),
+        })
+        .collect();
+    let edge_facts = edges
+        .iter()
+        .map(|e| EdgeFacts {
+            id: e.id.clone(),
+            source: e.source.clone(),
+            target: e.target.clone(),
+            kind: match e.kind {
+                EdgeKindIn::Imports => LoadEdgeKind::Imports,
+                EdgeKindIn::References => LoadEdgeKind::References,
+                _ => LoadEdgeKind::Other,
+            },
+            guard: match &e.guard {
+                None => GuardKind::None,
+                Some(GuardIn::Glob { .. }) => GuardKind::Glob,
+                Some(GuardIn::Description { .. }) => GuardKind::Description,
+            },
+        })
+        .collect();
+    (node_facts, edge_facts)
 }
 
 /// Recover one concrete cycle from the residual constraint graph. Every
@@ -664,40 +784,6 @@ fn find_cycle(nodes: &[NodeIn], pred: &[Vec<usize>], done: &[usize]) -> Vec<Node
     }
 }
 
-/// Effective-pinned set: `pinned: true` nodes plus the transitive closure
-/// of `imports` targets reachable from them — an imported node is always
-/// in context even when its own flag is false.
-fn effective_pinned(
-    nodes: &[NodeIn],
-    edges: &[&EdgeIn],
-    id_to_idx: &HashMap<&str, usize>,
-) -> Vec<bool> {
-    let mut imports: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for e in edges {
-        if e.kind == EdgeKindIn::Imports {
-            imports[id_to_idx[e.source.as_str()]].push(id_to_idx[e.target.as_str()]);
-        }
-    }
-    let mut set: Vec<bool> = nodes.iter().map(|n| n.pinned).collect();
-    let mut queue: Vec<usize> = (0..nodes.len()).filter(|&i| set[i]).collect();
-    while let Some(i) = queue.pop() {
-        for &t in &imports[i] {
-            if !set[t] {
-                set[t] = true;
-                queue.push(t);
-            }
-        }
-    }
-    set
-}
-
-/// A condition is a glob iff it has no whitespace and at least one of
-/// `*`, `?`, `[`, `/`; otherwise it is natural language.
-fn is_glob(condition: &str) -> bool {
-    !condition.chars().any(char::is_whitespace)
-        && condition.chars().any(|c| matches!(c, '*' | '?' | '[' | '/'))
-}
-
 /// A clean folder glob is exactly `<dir>/**` where every `/`-separated
 /// segment of `<dir>` is a plain path component: non-empty, not `.` or
 /// `..`, and free of glob metacharacters, backslashes, and drive colons
@@ -720,12 +806,13 @@ fn clean_glob_dir(condition: &str) -> Option<&str> {
     clean.then_some(dir)
 }
 
-/// Render a string as a YAML scalar for `.mdc` frontmatter. Values that are
-/// safe as plain scalars (the common case — keeps output byte-identical to
-/// the spec goldens) pass through untouched; anything that would break or
-/// change meaning in plain style (`: `, leading indicator chars, newlines,
-/// `null`/booleans, number-like strings — titles come from hand-editable
-/// graph.json) is emitted as a double-quoted scalar with escapes.
+/// Render a string as a YAML scalar for `.mdc`/command-file frontmatter.
+/// Values that are safe as plain scalars (the common case — keeps output
+/// byte-identical to the spec goldens) pass through untouched; anything that
+/// would break or change meaning in plain style (`: `, leading indicator
+/// chars, newlines, `null`/booleans, number-like strings — titles come from
+/// hand-editable graph.json) is emitted as a double-quoted scalar with
+/// escapes.
 fn yaml_scalar(value: &str) -> String {
     const RESERVED: &[&str] = &[
         "~", "null", "Null", "NULL", "true", "True", "TRUE", "false", "False", "FALSE", "yes",
@@ -761,7 +848,7 @@ fn yaml_scalar(value: &str) -> String {
 }
 
 /// True when one of the first 10 trimmed lines equals the GENERATED header
-/// (10 because `.mdc` carries it after the frontmatter).
+/// (10 because `.mdc`/command files carry it after the frontmatter).
 fn has_header(content: &str) -> bool {
     content.lines().take(10).any(|l| l.trim() == GENERATED_HEADER)
 }
@@ -770,14 +857,25 @@ fn has_header(content: &str) -> bool {
 /// agent-context surgical edit (`Some(true)`) vs a normal fully-generated
 /// file (`Some(false)`) — `None` means refuse. Exactly `CLAUDE.md`, any path
 /// ending in `AGENTS.md`, one component under `.cursor/rules/` with an
-/// `.mdc` extension, `.github/copilot-instructions.md` (WO03, that exact
-/// path only — no nested variant), `GEMINI.md` at the project root only
-/// (WO03, no nested variant), or one `.md` component directly under
-/// `.claude/agents/` (no nested subdirectory — `.claude/agents/sub/x.md` is
-/// refused). A strict allowlist, never a general write primitive — every
-/// new shape is an exact-path or exact-shape match, not a prefix/extension
-/// rule that could accidentally admit a near-miss.
-fn classify_output(rel: &str) -> Option<bool> {
+/// `.mdc` extension, `.github/copilot-instructions.md` (that exact path
+/// only — no nested variant), `GEMINI.md` at the project root only (no
+/// nested variant), one `.md` component directly under `.claude/agents/`
+/// (no nested subdirectory), or one `.md` component directly under
+/// `.claude/commands/` (WO13 Amendment 1, §10.5 — same exact-shape rule, and
+/// FULLY GENERATED, not surgical: a command file has no hand-authored
+/// region to preserve). A strict allowlist, never a general write primitive
+/// — every new shape is an exact-path or exact-shape match, not a
+/// prefix/extension rule that could accidentally admit a near-miss.
+/// **`.claude/skills/` is deliberately absent** (§10.6): that path is
+/// CRUD-managed by `agents.rs` and compile must never write there.
+///
+/// WO13_AUDIT.md D9 (fix-round Stage 0): the ONE write allowlist — `pub(crate)`
+/// so `import.rs` (the WO03-D2 importer guard) and `fsbatch.rs`
+/// (`fs_apply_batch`'s one-writer guard, §12.1 rule 2/3) call this directly
+/// instead of re-deriving their own copies. Do not let a third copy grow;
+/// callers needing only "is this a compile-output shape at all" use
+/// `classify_output(rel).is_some()`.
+pub(crate) fn classify_output(rel: &str) -> Option<bool> {
     let norm = rel.replace('\\', "/");
     let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
     match parts.as_slice() {
@@ -794,6 +892,11 @@ fn classify_output(rel: &str) -> Option<bool> {
             .strip_suffix(".md")
             .is_some_and(|stem| !stem.is_empty())
             .then_some(true),
+        [".claude", "commands", name] => name
+            .to_ascii_lowercase()
+            .strip_suffix(".md")
+            .is_some_and(|stem| !stem.is_empty())
+            .then_some(false),
         _ => None,
     }
 }
@@ -801,13 +904,10 @@ fn classify_output(rel: &str) -> Option<bool> {
 // ── Adapters ──────────────────────────────────────────────────────────
 
 /// The two link syntaxes shared by [`Ctx::emit_root`]'s four root-file
-/// adapters (WO03 widens this from a `bool` to name the two families):
-/// `claude` and `gemini` both understand the `@path` inline-import syntax
-/// (Claude Code and Gemini CLI share that context-file protocol); `agents`
-/// and `copilot` are plain markdown with no import mechanism, so they get
-/// ordinary links instead. Adding a `claude`/`gemini`-shaped adapter or an
-/// `agents`/`copilot`-shaped one in the future only needs a new call site,
-/// never a new formatting branch.
+/// adapters: `claude` and `gemini` both understand the `@path` inline-import
+/// syntax (Claude Code and Gemini CLI share that context-file protocol);
+/// `agents` and `copilot` are plain markdown with no import mechanism, so
+/// they get ordinary links instead.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LinkStyle {
     AtImport,
@@ -841,9 +941,14 @@ struct Ctx<'a> {
     order: Vec<usize>,
     /// node index → rank in `order`.
     pos: Vec<usize>,
-    /// Effective-pinned node indices, in total order.
+    /// Node indices whose Apply-mode resolved policy is `Always`, in total order.
     pinned: Vec<usize>,
-    pinned_set: Vec<bool>,
+    /// node index → Apply-mode `resolveLoad` result (§8, computed once).
+    loads: Vec<resolve_load::LoadResult>,
+    /// Projected facts, kept around so `emit_cursor` can call the
+    /// Ignore-mode entry point (its one sanctioned call site, §8.3).
+    node_facts: Vec<NodeFacts>,
+    edge_facts: Vec<EdgeFacts>,
     live_edges: Vec<&'a EdgeIn>,
     id_to_idx: HashMap<&'a str, usize>,
 }
@@ -853,27 +958,66 @@ impl Ctx<'_> {
         &self.nodes[self.id_to_idx[id]]
     }
 
-    /// On-demand bullets from `references` and `conditional` edges, sorted
-    /// by (compiled order of the target, edge id).
+    fn always(&self, idx: usize) -> bool {
+        self.loads[idx].policy == resolve_load::ResolvedLoad::Always
+    }
+
+    /// Generated precedence markers (§10.4, E-C) for every `overrides` edge
+    /// sourced at `source_idx` whose target is co-resident (both resolve to
+    /// `always` — §11.1's definition, reused here). Sorted by edge id so
+    /// output stays deterministic; recompiling twice reproduces the same
+    /// bytes by construction (the whole root file is regenerated from
+    /// scratch on every compile — no accumulation possible).
+    fn precedence_markers(&self, source_idx: usize) -> Vec<String> {
+        if !self.always(source_idx) {
+            return Vec::new();
+        }
+        let source_id = self.nodes[source_idx].id.as_str();
+        let mut markers: Vec<(&str, String)> = Vec::new();
+        for e in &self.live_edges {
+            if e.kind != EdgeKindIn::Overrides || e.source != source_id {
+                continue;
+            }
+            let target_idx = self.id_to_idx[e.target.as_str()];
+            if self.always(target_idx) {
+                let target_title = &self.nodes[target_idx].title;
+                markers.push((
+                    e.id.as_str(),
+                    format!(
+                        "<!-- cowtext:precedence -->Takes precedence over \"{target_title}\" below."
+                    ),
+                ));
+            }
+        }
+        markers.sort_by(|a, b| a.0.cmp(b.0));
+        markers.into_iter().map(|(_, m)| m).collect()
+    }
+
+    /// On-demand bullets: `references` edges, and `imports` edges carrying a
+    /// guard (glob or description — WO13 §10.2, the byte-identical
+    /// replacement for the old `conditional` kind). Edge-driven, sorted by
+    /// (compiled order of the target, edge id) — unaffected by Amendment 1's
+    /// destination lock (§10.5: "rule 1 never suppresses an edge-driven
+    /// bullet"). A deprecated target is skipped (§10.3: never appears in an
+    /// on-demand bullet).
     fn on_demand_bullets(&self, link: &dyn Fn(&NodeIn) -> String) -> Vec<String> {
         let mut items: Vec<(usize, &str, String)> = Vec::new();
         for e in &self.live_edges {
             let target = self.node(&e.target);
-            let text = match e.kind {
-                EdgeKindIn::References => {
-                    format!(
-                        "- When working on **{}**, read {}.",
-                        self.node(&e.source).title,
-                        link(target)
-                    )
+            if target.is_deprecated() {
+                continue;
+            }
+            let text = match (e.kind, &e.guard) {
+                (EdgeKindIn::References, _) => format!(
+                    "- When working on **{}**, read {}.",
+                    self.node(&e.source).title,
+                    link(target)
+                ),
+                (EdgeKindIn::Imports, Some(GuardIn::Glob { globs })) => {
+                    format!("- When touching `{}`, read {}.", globs.join(","), link(target))
                 }
-                EdgeKindIn::Conditional => {
-                    let condition = e.condition.as_deref().unwrap_or("");
-                    if is_glob(condition) {
-                        format!("- When touching `{condition}`, read {}.", link(target))
-                    } else {
-                        format!("- When {condition}, read {}.", link(target))
-                    }
+                (EdgeKindIn::Imports, Some(GuardIn::Description { text })) => {
+                    format!("- When {text}, read {}.", link(target))
                 }
                 _ => continue,
             };
@@ -885,7 +1029,8 @@ impl Ctx<'_> {
 
     /// Root `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md` /
     /// `GEMINI.md` — identical structure across all four targets, differing
-    /// only in link syntax (`style`, see [`LinkStyle`]).
+    /// only in link syntax (`style`, see [`LinkStyle`]). Each pinned entry
+    /// may be preceded by generated `overrides` precedence markers (§10.4).
     fn emit_root(&self, style: LinkStyle) -> String {
         let mut lines: Vec<String> = vec![
             GENERATED_HEADER.to_string(),
@@ -897,6 +1042,7 @@ impl Ctx<'_> {
             lines.push("## Always read".to_string());
             lines.push(String::new());
             for &i in &self.pinned {
+                lines.extend(self.precedence_markers(i));
                 lines.push(style.pinned_line(&self.nodes[i]));
             }
         }
@@ -912,25 +1058,31 @@ impl Ctx<'_> {
         out
     }
 
-    /// One `{dir}/AGENTS.md` per clean-folder-glob conditional, merged per
-    /// dir, links prefixed with one `../` per path segment. These are an
-    /// addition to the root bullets, not a move.
+    /// One `{dir}/AGENTS.md` per clean-folder-glob `imports` guard, one
+    /// entry per glob string in each guard's `globs` array (§10.2: "one
+    /// nested {dir}/AGENTS.md per clean folder glob, iterating each entry of
+    /// a glob guard's globs"). These are an addition to the root bullets,
+    /// not a move. A deprecated target is skipped (§10.3).
     fn emit_nested_agents(&self) -> Vec<(String, String)> {
-        let mut by_dir: BTreeMap<&str, Vec<&EdgeIn>> = BTreeMap::new();
+        let mut by_dir: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
         for e in &self.live_edges {
-            if e.kind != EdgeKindIn::Conditional {
+            if e.kind != EdgeKindIn::Imports || self.node(&e.target).is_deprecated() {
                 continue;
             }
-            if let Some(dir) = e.condition.as_deref().and_then(clean_glob_dir) {
-                by_dir.entry(dir).or_default().push(e);
+            let Some(GuardIn::Glob { globs }) = &e.guard else {
+                continue;
+            };
+            for g in globs {
+                if let Some(dir) = clean_glob_dir(g) {
+                    by_dir.entry(dir).or_default().push((e.id.as_str(), e.target.as_str()));
+                }
             }
         }
         by_dir
             .into_iter()
-            .map(|(dir, mut edges)| {
-                edges.sort_by(|a, b| {
-                    (self.pos[self.id_to_idx[a.target.as_str()]], &a.id)
-                        .cmp(&(self.pos[self.id_to_idx[b.target.as_str()]], &b.id))
+            .map(|(dir, mut entries)| {
+                entries.sort_by(|a, b| {
+                    (self.pos[self.id_to_idx[a.1]], a.0).cmp(&(self.pos[self.id_to_idx[b.1]], b.0))
                 });
                 let prefix = "../".repeat(dir.split('/').count());
                 let mut lines: Vec<String> = vec![
@@ -939,8 +1091,8 @@ impl Ctx<'_> {
                     format!("# {} — context for {}", self.project_name, dir),
                     String::new(),
                 ];
-                for e in edges {
-                    let n = self.node(&e.target);
+                for (_, target_id) in entries {
+                    let n = self.node(target_id);
                     lines.push(format!("- Read [{}]({}{}).", n.title, prefix, n.file_path));
                 }
                 let mut content = lines.join("\n");
@@ -950,30 +1102,74 @@ impl Ctx<'_> {
             .collect()
     }
 
-    /// `.cursor/rules/*.mdc` — one per node in (effective-pinned ∪ targets
-    /// of conditional-glob edges), in total order. Pinned wins over globs.
-    /// Stale `.mdc` from earlier compiles are not deleted (out of scope for
-    /// Phase 2).
+    /// `.claude/commands/*.md` (§10.5, Amendment 1): one file per node whose
+    /// Apply-mode `resolveLoad` policy is `OnInvoke` — Amendment 1's rule 1,
+    /// regardless of edges. Fully generated (not surgical): a command file
+    /// has no hand-authored region owned by anything else, so an existing
+    /// file lacking the GENERATED header is simply flagged `handwritten` by
+    /// the existing trust boundary. `body` goes through the SAME
+    /// overlay-aware `read_file` closure `emit_cursor` uses.
+    fn emit_commands(
+        &self,
+        read_file: &dyn Fn(&str) -> Result<String, String>,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut stem_counts: HashMap<String, u32> = HashMap::new();
+        let mut out = Vec::new();
+        for &i in &self.order {
+            let n = &self.nodes[i];
+            if n.is_deprecated() {
+                continue;
+            }
+            if self.loads[i].policy != resolve_load::ResolvedLoad::OnInvoke {
+                continue;
+            }
+            let name = stem_for(&n.file_path, &n.id, &mut stem_counts);
+            let raw = read_file(&n.file_path)?;
+            let body = raw.replace("\r\n", "\n").replace('\r', "\n");
+            let body = body.trim_end_matches('\n');
+            let mut content = format!(
+                "---\ndescription: {}\n---\n{}\n",
+                yaml_scalar(&n.title),
+                GENERATED_HEADER
+            );
+            if !body.is_empty() {
+                content.push('\n');
+                content.push_str(body);
+                content.push('\n');
+            }
+            out.push((format!(".claude/commands/{name}.md"), content));
+        }
+        Ok(out)
+    }
+
+    /// `.cursor/rules/*.mdc` — one per node whose IGNORE-mode `resolveLoad`
+    /// policy is `always` or `on-glob` (§10.5, F11: rule 1's destination
+    /// lock does not reach Cursor — this is the one sanctioned call site for
+    /// [`crate::resolve_load::resolve_load_ignoring_role_lock`]), in total
+    /// order. `alwaysApply` wins over `globs`. Stale `.mdc` from earlier
+    /// compiles are not deleted (out of scope). A deprecated node is
+    /// skipped entirely.
     fn emit_cursor(
         &self,
         read_file: &dyn Fn(&str) -> Result<String, String>,
     ) -> Result<Vec<(String, String)>, String> {
-        // node index → glob conditions, in edge-id order.
+        // node index → (edge_id, glob) pairs, in (edge_id, array-index) order.
         let mut globs: HashMap<usize, Vec<(&str, &str)>> = HashMap::new();
         for e in &self.live_edges {
-            if e.kind != EdgeKindIn::Conditional {
+            if e.kind != EdgeKindIn::Imports {
                 continue;
             }
-            let condition = e.condition.as_deref().unwrap_or("");
-            if !is_glob(condition) {
+            let Some(GuardIn::Glob { globs: gs }) = &e.guard else {
                 continue;
+            };
+            let t = self.id_to_idx[e.target.as_str()];
+            for g in gs {
+                globs.entry(t).or_default().push((e.id.as_str(), g.as_str()));
             }
-            globs
-                .entry(self.id_to_idx[e.target.as_str()])
-                .or_default()
-                .push((e.id.as_str(), condition));
         }
         for list in globs.values_mut() {
+            // Stable sort by edge id only preserves each edge's own glob
+            // array order among ties — exactly "(edge_id, index)".
             list.sort_by(|a, b| a.0.cmp(b.0));
         }
 
@@ -981,31 +1177,27 @@ impl Ctx<'_> {
         let mut out = Vec::new();
         for &i in &self.order {
             let n = &self.nodes[i];
-            let pinned = self.pinned_set[i];
-            let node_globs = globs.get(&i);
-            if !pinned && node_globs.is_none() {
+            if n.is_deprecated() {
                 continue;
             }
-            let stem = Path::new(&n.file_path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_lowercase())
-                .unwrap_or_else(|| n.id.to_lowercase());
-            let count = stem_counts
-                .entry(stem.clone())
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
-            let name = if *count == 1 {
-                stem
-            } else {
-                format!("{stem}-{count}")
-            };
-            let rule_line = if pinned {
+            let load = resolve_load::resolve_load_ignoring_role_lock(
+                &n.id,
+                &self.node_facts,
+                &self.edge_facts,
+            );
+            let always = load.policy == resolve_load::ResolvedLoad::Always;
+            let node_globs = globs.get(&i);
+            if !always && node_globs.is_none() {
+                continue;
+            }
+            let name = stem_for(&n.file_path, &n.id, &mut stem_counts);
+            let rule_line = if always {
                 "alwaysApply: true".to_string()
             } else {
                 let joined = node_globs
-                    .expect("non-pinned nodes reach here only as glob targets")
+                    .expect("non-always nodes reach here only as glob targets")
                     .iter()
-                    .map(|(_, c)| *c)
+                    .map(|(_, g)| *g)
                     .collect::<Vec<_>>()
                     .join(",");
                 format!("globs: {}", yaml_scalar(&joined))
@@ -1027,5 +1219,22 @@ impl Ctx<'_> {
             out.push((format!(".cursor/rules/{name}.mdc"), content));
         }
         Ok(out)
+    }
+}
+
+/// Shared stem-collision idiom for `emit_cursor`/`emit_commands` — but
+/// **each caller passes its OWN `stem_counts` map** (F9: sharing one would
+/// renumber unrelated nodes' `.mdc`/command-file names, a silent output
+/// change §18.1 Part B row 5 exists to catch).
+fn stem_for(file_path: &str, id: &str, stem_counts: &mut HashMap<String, u32>) -> String {
+    let stem = Path::new(file_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| id.to_lowercase());
+    let count = stem_counts.entry(stem.clone()).and_modify(|c| *c += 1).or_insert(1);
+    if *count == 1 {
+        stem
+    } else {
+        format!("{stem}-{count}")
     }
 }

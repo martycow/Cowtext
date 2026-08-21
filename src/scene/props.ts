@@ -57,7 +57,7 @@ export interface PropView {
   setOpened: (b: boolean) => void;
 }
 
-/** Filing cabinet — rules / agent nodes. Slate metal, drawer seams. */
+/** Filing cabinet — rule / invariant / trap / agent nodes. Slate metal, drawer seams. */
 export function makeCabinet(role: string): PropView {
   const c = new Container();
   c.addChild(makeShadow(26));
@@ -85,7 +85,8 @@ export function makeCabinet(role: string): PropView {
   };
 }
 
-/** Bookshelf — architecture / reference nodes. Wood, role-hued spines. */
+/** Bookshelf — architecture / decision / glossary / skill / style / example /
+ *  tool nodes. Wood, role-hued spines. */
 export function makeBookshelf(): PropView {
   const c = new Container();
   c.addChild(makeShadow(30));
@@ -114,7 +115,7 @@ export function makeBookshelf(): PropView {
   };
 }
 
-/** Crate of papers — task / workflow nodes (floor variant of the corkboard). */
+/** Crate of papers — workflow / command / env nodes (floor variant of the corkboard). */
 export function makeCrate(): PropView {
   const c = new Container();
   c.addChild(makeShadow(24));

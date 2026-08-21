@@ -35,22 +35,37 @@ export const PALETTE = {
 } as const;
 
 /** Role-hue accents (contents only, never structure — ART_DIRECTION rule).
- *  Only `rules`/`agent`/`invariant`/`trap` are actually consulted today —
- *  they're the four roles `propForRole` (sceneGraph.ts) routes to
- *  `makeCabinet`, the one maker that varies by `ROLE_ACCENT[role]`.
- *  `makeBookshelf`/`makeCrate` ignore role entirely, so the other entries
- *  below are declared for completeness but currently dead code (WO03
- *  tradeoff, see tech-barn agent-memory `wo03-role-schema-v3-props`). */
+ *  TWO independent consumers, TWO different role vocabularies — do not
+ *  reconcile them into one:
+ *
+ *  1. `makeCabinet` (props.ts, called from sceneGraph.ts's `propForRole`)
+ *     reads v5 `NodeRole`. Only `rule`/`agent`/`invariant`/`trap` ever reach
+ *     it — the four cabinet-routed roles (WO13 §14.6). `makeBookshelf`/
+ *     `makeCrate` ignore role entirely, so no other v5 role needs an entry
+ *     here for props.
+ *  2. `makeCalf` (calf.ts, write-forbidden §16) reads `identity.ts`'s
+ *     frozen, deliberately un-synced 7-member `Role` — still the PRE-WO13
+ *     vocabulary (`rules`/`architecture`/`workflow`/`task`/`reference`/
+ *     `glossary`, plus `agent`). `identity.ts`'s header says changing its
+ *     arithmetic rotates every existing user's calf look; that ban extends
+ *     transitively to deleting the palette keys it looks up, even though
+ *     this file is not the forbidden one. **Do not remove or rename the six
+ *     legacy keys below** — they are dead for props (WO03 tradeoff, see
+ *     tech-barn agent-memory `wo03-role-schema-v3-props`) but live for
+ *     calves. `rule` is added alongside `rules` for the v5 cabinet path;
+ *     both resolve to the same straw the `?? PALETTE.straw` fallback would
+ *     give anyway, so adding it changes no pixel — it just stops the v5 name
+ *     from silently depending on the fallback. */
 export const ROLE_ACCENT: Record<string, number> = {
+  rule: PALETTE.straw,
   rules: PALETTE.straw,
   agent: PALETTE.clay,
   // WO06 B1 fix — invariant/trap previously fell back to PALETTE.straw
-  // (rules' colour) via `ROLE_ACCENT[role] ?? PALETTE.straw`, making three
+  // (rule's colour) via `ROLE_ACCENT[role] ?? PALETTE.straw`, making three
   // cabinet-routed roles visually identical. Reuse two of the palette's
   // already-established decorative "book spine" hues (iris/orchid) rather
   // than add a 30th Barnlight colour — both are otherwise dead entries
-  // below (task/workflow/reference), so this creates no on-screen clash:
-  // nothing currently renders those dead keys.
+  // below (task/workflow), so this creates no on-screen clash.
   invariant: PALETTE.iris,
   trap: PALETTE.orchid,
   architecture: PALETTE.screen,

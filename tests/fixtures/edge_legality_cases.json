@@ -1,0 +1,221 @@
+{
+  "note": "WO13 frozen corpus for legalityFor / legality_for (WO13_CONTRACT.md §7.3, as amended by Amendment 3 — WO13_AUDIT.md D15). Read by BOTH cargo test (src-tauri/src/lint/tests.rs) and Vitest (src/config/edgeRules.test.ts). Each case is a flat (sourceRole, kind, targetRole, targetDeprecated) input against the production function directly — no graph needed, since legalityFor/legality_for take these four values, not a BarnGraph. `expected` is `{ legality, reason }`; `reason` is checked byte-exact for every non-allow legality (allow rules always carry an empty reason). Cases 1-12 assert the Amendment 3 precondition: EVERY one of the 11 production rules that used to outrank the (now-removed) `@deprecated` table row must lose to it, plus a target matching no rule at all. Cases 13-25 assert every rule's own non-deprecated behaviour is UNCHANGED by the amendment. The tie-break rule (later entry wins on an equal specificity score) has no natural collision in this production table and is instead exercised locally, in each language's own test suite, over a small synthetic table — not part of this shared corpus (see edgeRules.test.ts's own 'later entry wins on an exact score tie' test and lint.rs's mirror). Owned by tech-lead; no lane may edit this file.",
+  "cases": [
+    {
+      "name": "deprecated target beats: * imports command (deny, wrong reason before Amendment 3)",
+      "sourceRole": "architecture",
+      "kind": "imports",
+      "targetRole": "command",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: * imports skill (deny, wrong reason before Amendment 3)",
+      "sourceRole": "workflow",
+      "kind": "imports",
+      "targetRole": "skill",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: * imports architecture — the exact case R2 found (was warn before Amendment 3)",
+      "sourceRole": "rule",
+      "kind": "imports",
+      "targetRole": "architecture",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: glossary overrides * (deny, wrong reason before Amendment 3)",
+      "sourceRole": "glossary",
+      "kind": "overrides",
+      "targetRole": "rule",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: example overrides * (deny, wrong reason before Amendment 3)",
+      "sourceRole": "example",
+      "kind": "overrides",
+      "targetRole": "workflow",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: workflow references command (was silently allow before Amendment 3)",
+      "sourceRole": "workflow",
+      "kind": "references",
+      "targetRole": "command",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: example references rule (was silently allow before Amendment 3)",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "rule",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: example references invariant (was silently allow before Amendment 3)",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "invariant",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: example references style (was silently allow before Amendment 3)",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "style",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: decision contradicts decision (was silently allow before Amendment 3)",
+      "sourceRole": "decision",
+      "kind": "contradicts",
+      "targetRole": "decision",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target beats: cross-group overrides warn (was warn before Amendment 3)",
+      "sourceRole": "rule",
+      "kind": "overrides",
+      "targetRole": "workflow",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "deprecated target matching no other rule at all still denies (this was the ONE case the pre-Amendment-3 table already got right, by default)",
+      "sourceRole": "env",
+      "kind": "references",
+      "targetRole": "tool",
+      "targetDeprecated": true,
+      "expected": { "legality": "deny", "reason": "That node is marked out of date and won't reach the agent." }
+    },
+    {
+      "name": "non-deprecated, unchanged: * imports command denies",
+      "sourceRole": "architecture",
+      "kind": "imports",
+      "targetRole": "command",
+      "targetDeprecated": false,
+      "expected": { "legality": "deny", "reason": "Commands run when you call them — inlining one removes the point of it. Use references." }
+    },
+    {
+      "name": "non-deprecated, unchanged: * imports skill denies",
+      "sourceRole": "workflow",
+      "kind": "imports",
+      "targetRole": "skill",
+      "targetDeprecated": false,
+      "expected": { "legality": "deny", "reason": "Skills load themselves when relevant. Use references." }
+    },
+    {
+      "name": "non-deprecated, unchanged: * imports architecture warns",
+      "sourceRole": "rule",
+      "kind": "imports",
+      "targetRole": "architecture",
+      "targetDeprecated": false,
+      "expected": { "legality": "warn", "reason": "Architecture notes are usually long. Inlining puts this in every request." }
+    },
+    {
+      "name": "non-deprecated, unchanged: glossary overrides * denies",
+      "sourceRole": "glossary",
+      "kind": "overrides",
+      "targetRole": "rule",
+      "targetDeprecated": false,
+      "expected": { "legality": "deny", "reason": "A glossary defines words; it doesn't outrank rules." }
+    },
+    {
+      "name": "non-deprecated, unchanged: example overrides * denies",
+      "sourceRole": "example",
+      "kind": "overrides",
+      "targetRole": "workflow",
+      "targetDeprecated": false,
+      "expected": { "legality": "deny", "reason": "An example illustrates a rule; it doesn't outrank one." }
+    },
+    {
+      "name": "non-deprecated, unchanged: workflow references command allows",
+      "sourceRole": "workflow",
+      "kind": "references",
+      "targetRole": "command",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "non-deprecated, unchanged: example references rule allows",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "rule",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "non-deprecated, unchanged: example references invariant allows",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "invariant",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "non-deprecated, unchanged: example references style allows",
+      "sourceRole": "example",
+      "kind": "references",
+      "targetRole": "style",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "non-deprecated, unchanged: decision contradicts decision allows",
+      "sourceRole": "decision",
+      "kind": "contradicts",
+      "targetRole": "decision",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "non-deprecated, unchanged: cross-group overrides warns, direction A (constraints source -> process target)",
+      "sourceRole": "rule",
+      "kind": "overrides",
+      "targetRole": "workflow",
+      "targetDeprecated": false,
+      "expected": { "legality": "warn", "reason": "These two aren't in the same plane — check this is what you mean." }
+    },
+    {
+      "name": "non-deprecated, unchanged: cross-group overrides warns, direction B (process source -> constraints target, the reverse)",
+      "sourceRole": "workflow",
+      "kind": "overrides",
+      "targetRole": "rule",
+      "targetDeprecated": false,
+      "expected": { "legality": "warn", "reason": "These two aren't in the same plane — check this is what you mean." }
+    },
+    {
+      "name": "non-deprecated, unchanged: same-group overrides does not trip the cross-group warning",
+      "sourceRole": "rule",
+      "kind": "overrides",
+      "targetRole": "invariant",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "*-fallback default: nothing matches, non-deprecated",
+      "sourceRole": "architecture",
+      "kind": "sequence",
+      "targetRole": "workflow",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    },
+    {
+      "name": "*-fallback default: agent source, references kind, tool target — nothing matches",
+      "sourceRole": "agent",
+      "kind": "references",
+      "targetRole": "tool",
+      "targetDeprecated": false,
+      "expected": { "legality": "allow", "reason": "" }
+    }
+  ]
+}

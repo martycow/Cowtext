@@ -1,4 +1,5 @@
 use super::*;
+use crate::project::{Deprecated, EdgeGuard};
 use std::fs;
 
 fn temp_project(tag: &str) -> PathBuf {
@@ -23,7 +24,7 @@ fn approved_node(id: &str, file_path: &str) -> ImportProposedNode {
     ImportProposedNode {
         id: id.to_string(),
         title: id.to_string(),
-        role: NodeRole::Reference,
+        role: NodeRole::Architecture,
         file_path: file_path.to_string(),
         brief: String::new(),
         source_file: file_path.to_string(),
@@ -31,6 +32,33 @@ fn approved_node(id: &str, file_path: &str) -> ImportProposedNode {
         pinned: false,
         compile_owned: false,
     }
+}
+
+/// A v5 `MemoryNode` fixture with every field explicit, so a schema change
+/// breaks this test file at compile time rather than silently mismatching.
+fn memory_node(id: &str, title: &str, file_path: &str) -> MemoryNode {
+    MemoryNode {
+        id: id.to_string(),
+        title: title.to_string(),
+        role: NodeRole::Architecture,
+        brief: String::new(),
+        file_path: file_path.to_string(),
+        read_order: 0,
+        root_load: None,
+        position: Position::default(),
+        scene_pos: None,
+        last_verified: None,
+        tags: Vec::new(),
+        owner: None,
+        deprecated: None,
+        needs_review: false,
+        meta: None,
+    }
+}
+
+fn always(mut n: MemoryNode) -> MemoryNode {
+    n.root_load = Some(RootLoad::Always);
+    n
 }
 
 // ── import_scan: errors XOR changeset ───────────────────────────────
@@ -128,6 +156,7 @@ fn scan_realistic_claude_md() {
         .find(|e| e.source == claude.id && e.target == arch.id)
         .expect("imports edge for @docs/architecture.md");
     assert_eq!(imports_edge.kind, EdgeKind::Imports);
+    assert!(imports_edge.guard.is_none(), "a plain @import carries no guard");
 
     let refs_edge = cs
         .edges
@@ -185,10 +214,10 @@ fn scan_nested_agents_md() {
     );
 }
 
-// ── .mdc frontmatter: globs -> conditional edge with condition ─────────
+// ── .mdc frontmatter: globs -> guarded imports edge ─────────────────────
 
 #[test]
-fn scan_mdc_globs_maps_to_conditional_edge() {
+fn scan_mdc_globs_maps_to_guarded_imports_edge() {
     let dir = temp_project("mdc-globs");
     touch(&dir.join("CLAUDE.md"), "# CLAUDE.md\n\nRoot context.\n");
     touch(
@@ -210,19 +239,51 @@ fn scan_mdc_globs_maps_to_conditional_edge() {
         .expect(".mdc node");
     assert_eq!(net.title, "How the app talks to external services.");
     assert!(!net.pinned);
-    assert_eq!(net.role, NodeRole::Reference);
+    assert_eq!(net.role, NodeRole::Architecture);
     assert!(
         net.compile_owned,
         ".cursor/rules/*.mdc is a compile-output shape"
     );
 
-    let cond_edge = cs
+    let guarded_edge = cs
         .edges
         .iter()
         .find(|e| e.source == claude.id && e.target == net.id)
-        .expect("conditional edge anchored at CLAUDE.md");
-    assert_eq!(cond_edge.kind, EdgeKind::Conditional);
-    assert_eq!(cond_edge.condition.as_deref(), Some("src/net/**"));
+        .expect("guarded imports edge anchored at CLAUDE.md");
+    assert_eq!(guarded_edge.kind, EdgeKind::Imports);
+    assert_eq!(
+        guarded_edge.guard,
+        Some(EdgeGuard::Glob { globs: vec!["src/net/**".to_string()] })
+    );
+}
+
+#[test]
+fn scan_mdc_multiple_globs_split_on_comma() {
+    let dir = temp_project("mdc-globs-multi");
+    touch(&dir.join("CLAUDE.md"), "# CLAUDE.md\n\nRoot context.\n");
+    touch(
+        &dir.join(".cursor/rules/net.mdc"),
+        "---\ndescription: Networking\nglobs: src/net/**, src/api/**\n---\nBody.\n",
+    );
+
+    let cs = import_scan(dir.to_string_lossy().into_owned()).unwrap();
+    let claude = cs.nodes.iter().find(|n| n.file_path == "CLAUDE.md").unwrap();
+    let net = cs
+        .nodes
+        .iter()
+        .find(|n| n.file_path == ".cursor/rules/net.mdc")
+        .unwrap();
+    let guarded_edge = cs
+        .edges
+        .iter()
+        .find(|e| e.source == claude.id && e.target == net.id)
+        .expect("guarded imports edge");
+    assert_eq!(
+        guarded_edge.guard,
+        Some(EdgeGuard::Glob {
+            globs: vec!["src/net/**".to_string(), "src/api/**".to_string()]
+        })
+    );
 }
 
 // ── .mdc frontmatter: alwaysApply -> pinned ─────────────────────────────
@@ -243,9 +304,9 @@ fn scan_mdc_always_apply_maps_to_pinned() {
         .expect(".mdc node");
     assert!(base.pinned);
     assert!(base.compile_owned);
-    // No CLAUDE.md/AGENTS.md anchor in this fixture, so no conditional edge
+    // No CLAUDE.md/AGENTS.md anchor in this fixture, so no guarded edge
     // exists at all — and alwaysApply never produces one anyway.
-    assert!(cs.edges.iter().all(|e| e.kind != EdgeKind::Conditional));
+    assert!(cs.edges.iter().all(|e| e.guard.is_none()));
 }
 
 #[test]
@@ -303,23 +364,13 @@ fn scan_round_trip_generated_project_proposes_no_duplicates() {
     write_graph_json(
         &dir,
         &BarnGraph {
-            version: 3,
+            version: GRAPH_VERSION,
             project_name: "RoundTrip".to_string(),
-            nodes: vec![MemoryNode {
-                id: "architecture".to_string(),
-                title: "Architecture".to_string(),
-                role: NodeRole::Architecture,
-                brief: String::new(),
-                file_path: "context/architecture.md".to_string(),
-                read_order: 0,
-                pinned: true,
-                position: Position::default(),
-                scene_pos: None,
-                last_verified: None,
-                tags: Vec::new(),
-                owner: None,
-                meta: None,
-            }],
+            nodes: vec![always(memory_node(
+                "architecture",
+                "Architecture",
+                "context/architecture.md",
+            ))],
             edges: Vec::new(),
             compile_targets: vec![CompileTarget::Claude],
         },
@@ -397,6 +448,23 @@ fn apply_creates_graph_json_from_scratch() {
     assert_eq!(graph.nodes[0].file_path, "notes.md");
 }
 
+#[test]
+fn apply_maps_pinned_proposal_to_root_load_always() {
+    let dir = temp_project("apply-pinned-maps-root-load");
+    touch(&dir.join("notes.md"), "# Notes\n\nHello.\n");
+    let mut n = approved_node("n1", "notes.md");
+    n.pinned = true;
+    let changeset = ImportApproved {
+        nodes: vec![n],
+        edges: vec![],
+    };
+    import_apply(dir.to_string_lossy().into_owned(), changeset).unwrap();
+
+    let raw = fs::read_to_string(dir.join(".cowtext/graph.json")).unwrap();
+    let graph = migrate_graph(&raw).unwrap();
+    assert_eq!(graph.nodes[0].root_load, Some(RootLoad::Always));
+}
+
 // ── import_apply: never-clobber (existing node at the same filePath) ───
 
 #[test]
@@ -406,23 +474,9 @@ fn apply_never_clobbers_existing_node_at_same_file_path() {
     write_graph_json(
         &dir,
         &BarnGraph {
-            version: 3,
+            version: GRAPH_VERSION,
             project_name: String::new(),
-            nodes: vec![MemoryNode {
-                id: "existing-notes".to_string(),
-                title: "Existing".to_string(),
-                role: NodeRole::Reference,
-                brief: String::new(),
-                file_path: "notes.md".to_string(),
-                read_order: 0,
-                pinned: false,
-                position: Position::default(),
-                scene_pos: None,
-                last_verified: None,
-                tags: Vec::new(),
-                owner: None,
-                meta: None,
-            }],
+            nodes: vec![memory_node("existing-notes", "Existing", "notes.md")],
             edges: Vec::new(),
             compile_targets: vec![CompileTarget::Claude],
         },
@@ -460,13 +514,39 @@ fn apply_edge_needs_both_endpoints_in_the_approved_set() {
             source: "n1".to_string(),
             target: "not-in-approved-set".to_string(),
             kind: EdgeKind::Imports,
-            condition: None,
+            guard: None,
         }],
     };
     let result = import_apply(dir.to_string_lossy().into_owned(), changeset).unwrap();
     assert_eq!(result.nodes_added, 1);
     assert_eq!(result.edges_added, 0);
     assert_eq!(result.skipped, 1);
+}
+
+#[test]
+fn apply_carries_the_guard_through_onto_the_graph_edge() {
+    let dir = temp_project("apply-guard-carries");
+    touch(&dir.join("a.md"), "a");
+    touch(&dir.join("b.md"), "b");
+    let changeset = ImportApproved {
+        nodes: vec![approved_node("n1", "a.md"), approved_node("n2", "b.md")],
+        edges: vec![ImportProposedEdge {
+            id: "e1".to_string(),
+            source: "n1".to_string(),
+            target: "n2".to_string(),
+            kind: EdgeKind::Imports,
+            guard: Some(EdgeGuard::Glob { globs: vec!["src/**".to_string()] }),
+        }],
+    };
+    let result = import_apply(dir.to_string_lossy().into_owned(), changeset).unwrap();
+    assert_eq!(result.edges_added, 1);
+
+    let raw = fs::read_to_string(dir.join(".cowtext/graph.json")).unwrap();
+    let graph = migrate_graph(&raw).unwrap();
+    assert_eq!(
+        graph.edges[0].guard,
+        Some(EdgeGuard::Glob { globs: vec!["src/**".to_string()] })
+    );
 }
 
 // ── import_apply: refuses compile-output paths (WO03 audit D2) ─────────
@@ -493,6 +573,68 @@ fn apply_refuses_compile_output_path_and_counts_it_skipped() {
     // No graph.json at all should have been created for a wholly-refused
     // request — nothing else was added either.
     assert!(!dir.join(".cowtext/graph.json").exists());
+}
+
+/// WO13_AUDIT.md D9: the WO03-D2 guard's stale re-derivation did not know
+/// about `.claude/commands/` (R1's Amendment 1 arm), so a changeset naming
+/// one used to be admitted here — the last line stopping `import_apply`
+/// from creating a node whose file compile owns and will silently
+/// overwrite (wrapped in a `description:` fence and a GENERATED header,
+/// every subsequent compile). Calling `compile.rs::classify_output`
+/// directly (rather than a copy that can go stale) closes the hole.
+#[test]
+fn apply_refuses_claude_commands_compile_output_path() {
+    let dir = temp_project("apply-refuses-claude-commands");
+    touch(
+        &dir.join(".claude/commands/deploy.md"),
+        "---\ndescription: Deploy\n---\nRun the deploy script.\n",
+    );
+    touch(&dir.join("notes.md"), "# Notes\n\nOrdinary file.\n");
+    let changeset = ImportApproved {
+        nodes: vec![
+            approved_node("n1", ".claude/commands/deploy.md"),
+            approved_node("n2", "notes.md"),
+        ],
+        edges: vec![],
+    };
+    let result = import_apply(dir.to_string_lossy().into_owned(), changeset).unwrap();
+    assert_eq!(
+        result.nodes_added, 1,
+        "only notes.md is a legitimate node — .claude/commands/deploy.md must never become one"
+    );
+    assert_eq!(result.skipped, 1);
+
+    let raw = fs::read_to_string(dir.join(".cowtext/graph.json")).unwrap();
+    let graph = migrate_graph(&raw).unwrap();
+    assert_eq!(graph.nodes.len(), 1);
+    assert_eq!(graph.nodes[0].file_path, "notes.md");
+}
+
+/// The scan side of the same guard: a `.claude/commands/*.md` file
+/// discovered via a markdown link from CLAUDE.md is proposed as a node
+/// (`scan_inner` only walks the three primary families plus their linked
+/// targets — nothing walks `.claude/commands/` proactively, so a link is
+/// how it becomes reachable here) and PROPOSED with `compileOwned: true`,
+/// so the review UI defaults it to not-adopted (same contract
+/// `compile_owned` already carries for `CLAUDE.md`/`.mdc`/agent files).
+#[test]
+fn scan_flags_claude_commands_file_as_compile_owned() {
+    let dir = temp_project("scan-flags-claude-commands");
+    touch(
+        &dir.join("CLAUDE.md"),
+        "# CLAUDE.md\n\nSee [deploy command](.claude/commands/deploy.md).\n",
+    );
+    touch(
+        &dir.join(".claude/commands/deploy.md"),
+        "---\ndescription: Deploy\n---\nRun the deploy script.\n",
+    );
+    let cs = import_scan(dir.to_string_lossy().into_owned()).unwrap();
+    let node = cs
+        .nodes
+        .iter()
+        .find(|n| n.file_path == ".claude/commands/deploy.md")
+        .expect(".claude/commands/deploy.md node, linked from CLAUDE.md");
+    assert!(node.compile_owned);
 }
 
 #[test]
@@ -570,7 +712,7 @@ fn scan_mdc_globs_without_anchor_warns_instead_of_silently_dropping() {
     );
 
     let cs = import_scan(dir.to_string_lossy().into_owned()).unwrap();
-    assert!(cs.edges.iter().all(|e| e.kind != EdgeKind::Conditional));
+    assert!(cs.edges.iter().all(|e| e.guard.is_none()));
     assert!(
         cs.warnings
             .iter()
@@ -578,8 +720,8 @@ fn scan_mdc_globs_without_anchor_warns_instead_of_silently_dropping() {
         "the dropped glob condition must be reported, not silently discarded: {:?}",
         cs.warnings
     );
-    // The node itself is still proposed and adoptable — only the
-    // conditional edge is lost, not the node.
+    // The node itself is still proposed and adoptable — only the guarded
+    // edge is lost, not the node.
     assert!(cs
         .nodes
         .iter()
@@ -747,6 +889,17 @@ fn apply_bad_root_is_err() {
     assert!(result.is_err());
 }
 
+// ── deprecated-node fixture sanity (v5 field, exercised elsewhere) ──────
+
+#[test]
+fn memory_node_fixture_helper_carries_no_deprecation_by_default() {
+    let n = memory_node("a", "Alpha", "context/a.md");
+    assert!(n.deprecated.is_none());
+    assert!(!n.needs_review);
+    let dep = Deprecated { replaced_by: "b".to_string(), since: None, reason: None };
+    assert_eq!(dep.replaced_by, "b");
+}
+
 // ── small internal-helper unit tests ────────────────────────────────
 
 #[test]
@@ -768,13 +921,19 @@ fn helper_normalize_rel_rejects_escaping_root() {
 }
 
 #[test]
-fn helper_infer_role_defaults_to_reference() {
-    assert_eq!(infer_role("Setup and testing notes"), NodeRole::Reference);
+fn helper_infer_role_defaults_to_architecture() {
+    assert_eq!(infer_role("Setup and testing notes"), NodeRole::Architecture);
 }
 
 #[test]
 fn helper_infer_role_matches_invariant_before_generic_rule() {
     assert_eq!(infer_role("Hard rules"), NodeRole::Invariant);
+}
+
+#[test]
+fn helper_infer_role_maps_task_to_workflow_and_snippet_to_example() {
+    assert_eq!(infer_role("A task list"), NodeRole::Workflow);
+    assert_eq!(infer_role("A code snippet"), NodeRole::Example);
 }
 
 #[test]
@@ -798,6 +957,12 @@ fn helper_is_compile_output_path_matches_every_compile_write_shape() {
     assert!(is_compile_output_path(".github/copilot-instructions.md"));
     assert!(is_compile_output_path("GEMINI.md"));
     assert!(is_compile_output_path(".claude/agents/tech-lead.md"));
+    // WO13_AUDIT.md D9: this shape (R1's Amendment 1 arm) was missing from
+    // the old re-derivation, so this test's own name asserted a claim that
+    // was false and passed anyway — it enumerated only six of seven
+    // `classify_output` shapes. Now calling `classify_output` directly, so
+    // a future compile.rs arm can never desync this test again.
+    assert!(is_compile_output_path(".claude/commands/deploy.md"));
 }
 
 #[test]
@@ -819,4 +984,12 @@ fn helper_is_compile_output_path_rejects_everything_else() {
         "one component only"
     );
     assert!(!is_compile_output_path(".github/copilot-instructions.txt"));
+    assert!(
+        !is_compile_output_path(".claude/commands/sub/deploy.md"),
+        "one component only, matches compile.rs's classify_output"
+    );
+    assert!(
+        !is_compile_output_path(".claude/skills/demo/SKILL.md"),
+        "skills are agents.rs's, never compile's"
+    );
 }

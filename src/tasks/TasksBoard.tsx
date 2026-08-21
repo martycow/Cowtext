@@ -27,7 +27,7 @@ import {
   type TaskStatus,
 } from "../store/tasks";
 import type { TaskFileInfo, TaskItem } from "../tasks/api";
-import { PRODUCER_FILE, seedFor, type AgentMeta, useAgentsStore } from "../store/agents";
+import { seedFor, type AgentMeta, useAgentsStore } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { useGraphStore } from "../store/graph";
@@ -53,11 +53,9 @@ type DepsActions = {
 
 const STATUS_ORDER = TASK_STATUSES;
 
-/** The tasks store's own agentFilter sentinel for "Producer" (its comment:
- *  `null` = all agents; `"producer"` additionally matches `agent === null`)
- *  — distinct from PRODUCER_FILE ("producer.md"), which identifies the real
- *  agent file when one exists. */
-const PRODUCER_FILTER = "producer";
+/** The tasks store's own agentFilter sentinel for tasks with no agent
+ *  (`null` = all agents; `"<unassigned>"` matches `agent === null`). */
+const UNASSIGNED_FILTER = "<unassigned>";
 
 const CHIP =
   "flex-none rounded-sm border border-border bg-surface-2 px-1 font-mono text-micro text-content-secondary";
@@ -185,7 +183,7 @@ function AgentChip({
   meta: Record<string, AgentMeta>;
 }) {
   if (agentRaw === null) {
-    return <span className={CHIP}>Producer</span>;
+    return <span className={CHIP}>Unassigned</span>;
   }
   const doc = agents.find((a) => agentKeyMatches(agentRaw, a.fileName, a.fields.name));
   if (doc === undefined) {
@@ -316,6 +314,10 @@ function StatusCard({
       <div className="flex flex-wrap items-center gap-1">
         <PriorityBadge priority={task.priority} />
         {task.phase !== null && task.phase !== "" && <span className={CHIP}>{task.phase}</span>}
+        {/* F6: metadata, not a state — same muted chip idiom as phase, never
+            a status/priority color. Hidden when the row's table has no
+            Task Type column (or the cell is blank). */}
+        {task.taskType !== null && task.taskType !== "" && <span className={CHIP}>{task.taskType}</span>}
         {task.tags.map((t) => (
           <span key={t} className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-muted">
             #{t}
@@ -607,9 +609,8 @@ function FilterBar({
         className="h-control-sm rounded border border-border bg-surface-2 px-2 text-xs text-content focus:border-accent"
       >
         <option value="<all>">All agents</option>
-        <option value={PRODUCER_FILTER}>Producer</option>
+        <option value={UNASSIGNED_FILTER}>Unassigned</option>
         {agents
-          .filter((a) => a.fileName !== PRODUCER_FILE)
           .map((a) => (
             <option key={a.fileName} value={a.fileName}>
               {a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName}
@@ -699,9 +700,8 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
 
   const matches = (t: TaskItem): boolean => {
     if (effectiveFilter !== null && effectiveFilter !== undefined) {
-      if (effectiveFilter === PRODUCER_FILTER) {
-        const isProducer = t.agent === null || agentKeyMatches(t.agent, PRODUCER_FILE, "Producer");
-        if (!isProducer) return false;
+      if (effectiveFilter === UNASSIGNED_FILTER) {
+        if (t.agent !== null) return false;
       } else {
         const doc = agents.find((a) => a.fileName === effectiveFilter);
         if (!agentKeyMatches(t.agent, effectiveFilter, doc?.fields.name ?? null)) return false;

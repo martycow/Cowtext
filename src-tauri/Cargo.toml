@@ -23,6 +23,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "cowtext-cli"
 path = "src/bin/cowtext_cli.rs"
 
+# F8: MCP stdio server. Same rule as cowtext-cli — never constructs
+# `tauri::Builder`; calls only plain, non-Tauri-context lib functions.
+[[bin]]
+name = "cowtext-mcp"
+path = "src/bin/cowtext_mcp.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

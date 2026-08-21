@@ -1,0 +1,122 @@
+{
+  "version": 4,
+  "projectName": "Rule1",
+  "nodes": [
+    {
+      "id": "r01-x",
+      "title": "House rules",
+      "role": "rules",
+      "brief": "Control node — must not move.",
+      "filePath": "context/r01-house-rules.md",
+      "readOrder": 1,
+      "pinned": true,
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "r02-x",
+      "title": "Ship it",
+      "role": "command",
+      "brief": "Pinned command — exception rows 1, 2, 4.",
+      "filePath": "context/r02-ship-it.md",
+      "readOrder": 2,
+      "pinned": true,
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "id": "r03-x",
+      "title": "Bisecting a regression",
+      "role": "skill",
+      "brief": "Pinned skill — exception rows 1, 2, 5.",
+      "filePath": "context/r03-bisecting.md",
+      "readOrder": 3,
+      "pinned": true,
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "id": "r04-x",
+      "title": "Regenerate the API client",
+      "role": "command",
+      "brief": "Glob-conditional command — exception rows 3, 4, 6.",
+      "filePath": "context/r04-regen-client.md",
+      "readOrder": 4,
+      "pinned": false,
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "id": "r05-x",
+      "title": "Rotate the signing key",
+      "role": "command",
+      "brief": "Orphan command — exception row 4 alone.",
+      "filePath": "context/r05-rotate-key.md",
+      "readOrder": 5,
+      "pinned": false,
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "id": "r06-x",
+      "title": "Cut the release",
+      "role": "command",
+      "brief": "Pinned command that unguarded-imports r07-x — audit D2, row 6: r07-x was effective-pinned pre-WO13 via the old all-imports closure and is unreachable-import post-WO13, since AlwaysClosure no longer seeds from (or propagates through) a command node.",
+      "filePath": "context/r06-cut-release.md",
+      "readOrder": 6,
+      "pinned": true,
+      "position": {
+        "x": 0,
+        "y": 260
+      }
+    },
+    {
+      "id": "r07-x",
+      "title": "Release checklist",
+      "role": "architecture",
+      "brief": "Row 6 alone: reachable only via r06-x's unguarded imports edge.",
+      "filePath": "context/r07-release-checklist.md",
+      "readOrder": 7,
+      "pinned": false,
+      "position": {
+        "x": 260,
+        "y": 260
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "f01-x",
+      "source": "r01-x",
+      "target": "r04-x",
+      "kind": "conditional",
+      "condition": "src/api/**"
+    },
+    {
+      "id": "f02-x",
+      "source": "r01-x",
+      "target": "r03-x",
+      "kind": "references"
+    },
+    {
+      "id": "f03-x",
+      "source": "r06-x",
+      "target": "r07-x",
+      "kind": "imports"
+    }
+  ],
+  "compileTargets": [
+    "claude",
+    "cursor"
+  ]
+}

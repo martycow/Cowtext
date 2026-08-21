@@ -8,3 +8,8 @@
 - [WO11 temp-stub verification](feedback_wo11_temp_stub_verification.md) — write throwaway stub files matching a frozen cross-lane contract, tsc --noEmit, delete — turns "should match" into a verified claim.
 - [Bash/python double-escaping](feedback_bash_python_double_escaping.md) — python3 -c "..." double-quoted double-processes \n escapes and corrupts JS/TS source; use the Edit tool for escape-heavy text surgery.
 - [WO11 UI-D agent properties](project_wo11_ui_d_agent_properties.md) — B2 UNPROVEN (ruled out zone), debounced-autosave queue/promise pattern (no lost keystroke, no interleaving), reloadNonce-vs-caret-jump fix, cross-lane gaps flagged for UI-C/App.tsx.
+- [WO12 canvas-loop D3b/D6](project_wo12_canvas_loop_d3b_d6.md) — React Flow StoreUpdater update-depth crash: inline onSelectionChange + fieldsToTrack reference-churn, fix pattern for GraphCanvas.tsx.
+- [WO12 run-button-sessions](project_wo12_run_button_sessions.md) — F3: three spawn buttons → one context-prefilled RunSessionDialog; literal-grep acceptance forced renaming internal vars, not just UI text.
+- [WO12 app-shell wave3](project_wo12_app_shell_wave3.md) — Run button + 4 mounts in App.tsx; the openProjectAt-resolves-before-loadGraph-effect race and its pendingXRoot+loaded-gate fix pattern.
+- [WO13 U4 Inspector/migration/E3](project_wo13_u4_inspector_migration.md) — migration banner+review-filter design (raw-diff against the real migrateGraph, never a 2nd migrator), E3 edge-inspector shape, defect 1/6 fixes.
+- [WO13 build-against-unlanded-lane](feedback_wo13_build_against_unlanded_lane.md) — write imports against a contract's frozen signature even when the file doesn't exist yet; scope tsc checks to your own zone, not the whole red tree.

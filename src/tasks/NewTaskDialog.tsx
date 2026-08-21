@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
+  fullPatch,
   PRIORITY_LABELS,
   STATUS_LABELS,
   TASK_FILE_NAMES,
@@ -17,8 +18,7 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from "../store/tasks";
-import type { TaskFileInfo } from "../tasks/api";
-import { PRODUCER_FILE } from "../store/agents";
+import type { TaskFileInfo, TaskPatch } from "../tasks/api";
 import type { AgentDoc } from "../agents/types";
 import { FieldLabel } from "../agents/AgentEditor";
 import { TagPicker } from "./TagPicker";
@@ -101,6 +101,10 @@ export function NewTaskDialog({
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [priority, setPriority] = useState<TaskPriority | null>(null);
+  // F6: free text (`composeLine`) has no token grammar for Task Type, so
+  // this rides a follow-up `update()` call after append — same mechanism
+  // the Status field below already uses.
+  const [taskType, setTaskType] = useState("");
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState<TaskStatus>("new");
   const [busy, setBusy] = useState(false);
@@ -134,15 +138,26 @@ export function NewTaskDialog({
     setBusy(true);
     setError(null);
     const text = composeLine(name, description, tags, agent, priority);
+    const trimmedTaskType = taskType.trim();
     void (async () => {
       const err = await append(relPath, text);
       if (err !== null) throw new Error(err);
-      if (file === "TASKS.md" && status !== "new") {
+      const wantsStatus = file === "TASKS.md" && status !== "new";
+      if (wantsStatus || trimmedTaskType !== "") {
         const fresh = useTasksStore
           .getState()
           .tasks.find((t) => t.relPath === relPath && t.name === name.trim());
         if (fresh !== undefined) {
-          const err2 = await update(fresh, { status });
+          // task_update replaces every mapped cell from the patch — an
+          // omitted key clears it (see `fullPatch` in store/tasks.ts, which
+          // seeds every mapped column from `fresh`'s own just-appended value
+          // so only the field(s) this dialog changes are overridden).
+          const patch: TaskPatch = fullPatch(fresh, {
+            status: wantsStatus ? status : fresh.status,
+            done: wantsStatus ? status === "done" : fresh.done,
+            taskType: trimmedTaskType === "" ? fresh.taskType : trimmedTaskType,
+          });
+          const err2 = await update(fresh, patch);
           if (err2 !== null) throw new Error(err2);
         }
       }
@@ -214,6 +229,23 @@ export function NewTaskDialog({
             <FieldLabel>Tags</FieldLabel>
             <TagPicker items={tags} disabled={false} onChange={setTags} />
           </div>
+          <div>
+            <FieldLabel>Task Type</FieldLabel>
+            <input
+              list="new-task-type-suggestions"
+              value={taskType}
+              onChange={(e) => setTaskType(e.target.value)}
+              placeholder="e.g. bug, feature, chore"
+              className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
+            />
+            <datalist id="new-task-type-suggestions">
+              <option value="bug" />
+              <option value="feature" />
+              <option value="chore" />
+              <option value="spike" />
+              <option value="docs" />
+            </datalist>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <FieldLabel>Priority</FieldLabel>
@@ -231,9 +263,8 @@ export function NewTaskDialog({
                 onChange={(e) => setAgent(e.target.value)}
                 className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
               >
-                <option value="">Producer</option>
+                <option value="">Unassigned</option>
                 {agents
-                  .filter((a) => a.fileName !== PRODUCER_FILE)
                   .map((a) => {
                     const label = a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName;
                     return (

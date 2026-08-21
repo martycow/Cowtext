@@ -62,14 +62,17 @@ fn validate_preset(json: &str) -> Result<PresetMeta, String> {
     // already carry `role: "agent"` nodes; v3 presets (WO03) may carry the
     // widened role/edge-kind vocabularies, `tags`/`owner`/`meta`, edge
     // `color`, and the two new compile targets; v4 presets (WO10) may carry
-    // edge `waypoints`. All four shapes deserialize
-    // the same way downstream (compile.rs's `RoleIn`/`EdgeKindIn`/`TargetIn`
-    // fall back to `Other`/`Unknown` for anything they don't model) — Rust
-    // just gatekeeps here and stores bytes verbatim; the frontend owns the
-    // actual migration and re-save-at-current-version.
+    // edge `waypoints`; v5 presets (WO13_CONTRACT.md §5.7, in lockstep with
+    // graph v5) may carry `rootLoad` (replacing `pinned`), a typed `guard`
+    // (replacing `condition`), and `deprecated`/`needsReview`. All five
+    // shapes deserialize the same way downstream (compile.rs's
+    // `RoleIn`/`EdgeKindIn`/`TargetIn` fall back to `Other`/`Unknown` for
+    // anything they don't model) — Rust just gatekeeps here and stores
+    // bytes verbatim; the frontend owns the actual migration and
+    // re-save-at-current-version (`src/preset/types.ts`'s `parsePreset`).
     match v.get("version").and_then(serde_json::Value::as_u64) {
-        Some(1..=4) => {}
-        _ => return Err("Unsupported preset version (expected 1, 2, 3, or 4)".to_string()),
+        Some(1..=5) => {}
+        _ => return Err("Unsupported preset version (expected 1-5)".to_string()),
     }
     let nodes = v
         .get("nodes")

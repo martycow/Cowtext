@@ -1,19 +1,11 @@
 // Import wire types — RECONCILED against the landed src-tauri/src/import.rs
-// (WO03 audit defect D3, docs/design/WO03_AUDIT.md). This file started as a
-// best-effort placeholder written while Lane D's import.rs did not yet
-// exist; the audit diffed it field-for-field against the real Rust structs
-// and found two missing fields (`pinned`, `condition`) — both restored
-// below, with Rust's own doc comments carried across. A third field,
-// `compileOwned`, was added afterward when Lane D's D2 fix landed (refusing
-// to adopt a proposed node whose path is one `compile` owns and
-// overwrites — a hand-written CLAUDE.md, a `.cursor/rules/*.mdc`, etc.) —
-// see ImportReviewModal.tsx's default-adopt logic and its per-row note.
-// Everything else already matched exactly: `id`/`title`/`role`/`filePath`/
-// `brief`/`sourceFile`/`alreadyManaged` on the node, `id`/`source`/
-// `target`/`kind` on the edge, `ImportChangeset`, and `ImportApplyResult`'s
-// `nodesAdded`/`edgesAdded`/`skipped`.
+// (WO03 audit defect D3, docs/design/WO03_AUDIT.md), updated for the WO13 v5
+// taxonomy (see import.rs's own module doc for the Rust-side rationale).
+// `id`/`title`/`role`/`filePath`/`brief`/`sourceFile`/`alreadyManaged` on the
+// node, `id`/`source`/`target`/`kind` on the edge, `ImportChangeset`, and
+// `ImportApplyResult`'s `nodesAdded`/`edgesAdded`/`skipped` all match exactly.
 
-import type { EdgeKind, NodeRole } from "../store/graph";
+import type { EdgeGuard, EdgeKind, NodeRole } from "../store/graph";
 
 export interface ImportProposedNode {
   /** Stable within THIS scan only — not a real graph node id until applied. */
@@ -31,11 +23,14 @@ export interface ImportProposedNode {
    *  report as already managed rather than as a fresh proposal. Rendered
    *  disabled/checked-off, never auto-excluded (still visible for review). */
   alreadyManaged: boolean;
-  /** A `.mdc`'s frontmatter `alwaysApply: true` maps to this (contract:
-   *  "alwaysApply ... maps to pinned ... semantics"). Always `false` for
-   *  every non-`.mdc` source. An adopted always-apply rule that lands
-   *  unpinned would be a real surprise, so this is surfaced in the review
-   *  row, not just carried through silently. */
+  /** A `.mdc`'s frontmatter `alwaysApply: true` maps to this. WO13: the v5
+   *  taxonomy replaces `MemoryNode.pinned: boolean` with `rootLoad?:
+   *  "always"`, but this stays a plain proposal-local boolean (never itself
+   *  a `MemoryNode` field) — `import_apply` maps `true` to `rootLoad:
+   *  "always"` when the node is adopted. Always `false` for every
+   *  non-`.mdc` source. An adopted always-apply rule that lands unpinned
+   *  would be a real surprise, so this is surfaced in the review row, not
+   *  just carried through silently. */
   pinned: boolean;
   /** True when `filePath` is a shape `compile` owns and overwrites
    *  (CLAUDE.md, AGENTS.md, .cursor/rules/*.mdc, ...) — adopting it would
@@ -55,12 +50,14 @@ export interface ImportProposedEdge {
   source: string;
   target: string;
   kind: EdgeKind;
-  /** Carries a `conditional` edge's glob pattern (from a `.mdc`'s
-   *  frontmatter `globs`) through to import_apply — without it a
-   *  `conditional` edge would apply with no condition at all, silently
-   *  losing the contract's "globs ... maps to ... conditional semantics".
-   *  Absent for every `imports`/`references` edge. */
-  condition?: string;
+  /** WO13 v5: the old `conditional` edge kind is gone — a `.mdc`'s
+   *  frontmatter `globs` now proposes an `imports` edge carrying a typed
+   *  `EdgeGuard.Glob` instead (Cursor's `globs:` value is definitionally
+   *  already a glob list, split on `,` server-side). Without it a guarded
+   *  edge would apply with no guard at all, silently pinning the target
+   *  into every context instead of gating it on the glob. Absent for every
+   *  edge this importer never anchors a glob to. */
+  guard?: EdgeGuard;
 }
 
 export interface ImportChangeset {

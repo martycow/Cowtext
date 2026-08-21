@@ -343,12 +343,36 @@ export function claimReadCue(): boolean {
   return true;
 }
 
-/** Cabinet=rules/agent → drawer_slide; bookshelf=architecture/reference/
- *  glossary → page_flip; crate=task/workflow → paper_shuffle. */
+/** Mirrors sceneGraph.ts's `propForRole` grouping (WO13 §14.6) so the sound
+ *  a node makes on read always matches the prop it lives in: cabinet =
+ *  rule/invariant/trap/agent → drawer_slide; bookshelf = architecture/
+ *  decision/glossary/skill/style/example/tool → page_flip; crate =
+ *  workflow/command/env → paper_shuffle. `decision` reads like the design
+ *  doc it is (page_flip, with architecture); `env`/`tool` split the same way
+ *  their prop does — `env` is a live working setup (crate, paper_shuffle),
+ *  `tool` is reference material about a capability (bookshelf, page_flip).
+ *  An exhaustive switch (not the old ternary chain) so a future 15th role
+ *  fails the build here instead of silently defaulting. */
 export function readCueForRole(role: NodeRole): SfxCue {
-  return role === "rules" || role === "agent" ? "drawer_slide"
-    : role === "task" || role === "workflow" ? "paper_shuffle"
-    : "page_flip";
+  switch (role) {
+    case "rule":
+    case "invariant":
+    case "trap":
+    case "agent":
+      return "drawer_slide";
+    case "architecture":
+    case "decision":
+    case "glossary":
+    case "skill":
+    case "style":
+    case "example":
+    case "tool":
+      return "page_flip";
+    case "workflow":
+    case "command":
+    case "env":
+      return "paper_shuffle";
+  }
 }
 
 /** No-ops if already running; auto-fades after 3 s continuous (≤200 ms fade,

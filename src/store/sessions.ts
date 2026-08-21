@@ -19,7 +19,9 @@ import {
 export type SessionStatus = "idle" | "working" | "waiting";
 // WO06 §5.4 — "budget" is the one new kind; no field added/removed on
 // AgentEvent itself, `usage`/`text` already exist and carry it.
-export type AgentEventKind = "status" | "tool" | "text" | "usage" | "exit" | "error" | "budget";
+// F2 — "question" is appended last, mirroring `AgentEventKind::Question`
+// in sessions.rs positionally (append, never reorder).
+export type AgentEventKind = "status" | "tool" | "text" | "usage" | "exit" | "error" | "budget" | "question";
 
 export interface Usage {
   inputTokens: number;
@@ -111,6 +113,12 @@ export interface Session {
    *  ordinary exit/crash in the UI (WO06 §5.5). Reset to `null` on restart:
    *  "a restart is a new budget" (contract §5.5). */
   stopReason: "budget" | null;
+  /** F2 — set by a `"question"` event (the `COWTEXT_ASK:` marker convention,
+   *  sessions.rs `find_cowtext_ask`). Cleared once the answer turn starts
+   *  (`status` flips to `"working"`) or on kill/restart — never cleared by
+   *  merely reading it, so `AgentQuestionModal`'s Dismiss must clear it
+   *  explicitly. */
+  pendingQuestion: { text: string; ts: number } | null;
 }
 
 export interface SessionsState {
@@ -150,6 +158,9 @@ export interface SessionsState {
   kill(id: string): Promise<string | null>;
   restart(id: string): Promise<string | null>;
   dismiss(id: string): void; // removes an exited session; no-op while alive
+  /** F2 — clears `pendingQuestion` WITHOUT sending an answer (Esc/Dismiss on
+   *  `AgentQuestionModal`). No-op if that session has no pending question. */
+  clearPendingQuestion(id: string): void;
   selectSession(id: string | null): void;
   applyEvent(e: AgentEvent): void; // THE single entry point for agent://event
   hydrate(): Promise<void>; // agent_session_list -> adopt live sessions after a reload
@@ -182,6 +193,7 @@ function sessionFromInfo(info: SessionInfo): Session {
     tokenCeiling: info.tokenCeiling,
     tokensUsed: info.tokensUsed,
     stopReason: null,
+    pendingQuestion: null,
   };
 }
 
@@ -311,6 +323,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
                 // resetting usage client-side would desync from the next
                 // real `usage` event's deltas), only the stop signal is.
                 stopReason: null,
+                // F2 — a restart is a fresh turn; any question the previous
+                // turn asked is moot.
+                pendingQuestion: null,
                 transcript: pushTranscript(x.transcript, {
                   kind: "status",
                   text: "— restarted —",
@@ -341,6 +356,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     });
   },
 
+  clearPendingQuestion: (id) => {
+    set((st) => ({
+      sessions: st.sessions.map((x) => (x.id === id ? { ...x, pendingQuestion: null } : x)),
+    }));
+  },
+
   selectSession: (id) => set({ selectedId: id }),
 
   applyEvent: (e) => {
@@ -352,7 +373,14 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       switch (e.kind) {
         case "status": {
           const status = e.status ?? session.status;
-          next = { ...session, status, currentTool: status === "idle" ? null : session.currentTool };
+          next = {
+            ...session,
+            status,
+            currentTool: status === "idle" ? null : session.currentTool,
+            // F2 — the answer turn has started; the previous question is
+            // resolved (answered or superseded by a new prompt/turn).
+            pendingQuestion: status === "working" ? null : session.pendingQuestion,
+          };
           break;
         }
         case "tool": {
@@ -458,8 +486,15 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
             status: "idle",
             currentTool: null,
             queue: [],
+            // F2 — kill (and the "budget" stop's own exit pair) end the
+            // session outright; nothing will ever answer the question.
+            pendingQuestion: null,
             transcript: pushTranscript(session.transcript, { kind: "exit", text: e.text ?? "", ts: e.ts }),
           };
+          break;
+        }
+        case "question": {
+          next = { ...session, pendingQuestion: { text: e.text ?? "", ts: e.ts } };
           break;
         }
       }

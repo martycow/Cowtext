@@ -1,14 +1,15 @@
 ---
 name: task-format
-description: Reformat any task list into the canonical Cowtext task format so the Tasks board parses every item correctly. Load when asked to reformat/normalize/migrate TASKS.md, SPRINT.md, BACKLOG.md or ROADMAP.md, or when tasks are not showing up (or showing wrong) on the Cowtext board. Invoke as /task-format [file|all].
+description: Reformat any task list into the canonical Cowtext task format so the Tasks board parses every item correctly. Load when asked to reformat/normalize/migrate TASKS.md, SPRINT.md, BACKLOG.md, ROADMAP.md or BUGS.md, or when tasks are not showing up (or showing wrong) on the Cowtext board. Invoke as /task-format [file|all].
 ---
 
 # task-format — canonical Cowtext task format
 
-Cowtext's board (src-tauri/src/tasks.rs parser) reads FOUR convention files,
+Cowtext's board (src-tauri/src/tasks.rs parser) reads FIVE convention files,
 searched in this directory order (first hit per name wins):
 **project root → docs/ → docs/tasks/** — `TASKS.md`, `SPRINT.md`,
-`BACKLOG.md`, `ROADMAP.md`. Anything else is invisible to the board.
+`BACKLOG.md`, `ROADMAP.md`, `BUGS.md`. Anything else is invisible to the
+board.
 
 ## The canonical checklist line (preferred form)
 
@@ -40,12 +41,31 @@ No heading before a task → the "No sprint" lane. `#`-level-1 headings are igno
 ## Tables (also parsed, second-class)
 
 Pipe tables parse when the header row has a name-like column. Recognized headers
-(case-insensitive, first match): `name|task|title` · `tags` · `priority|prio` ·
-`description|desc|details` · `phase` · `agent|assignee|owner` · `status|state`.
+(case-insensitive, first match): `name|task|title` · `task type|type|kind` ·
+`tags` · `priority|prio` · `description|desc|details` · `phase` ·
+`agent|assignee|owner` · `status|state`.
 Status cells map: new/todo→New; in progress|in production|wip|doing→In production;
 testing|in testing|review→In testing; done|closed→Done; anything else→New.
 Prefer converting tables to checklist lines when reformatting UNLESS the table
-carries a `phase` column (phase is table-only) or the file is ROADMAP.md history.
+carries a `phase` or `task type` column (both are table-only) or the file is
+ROADMAP.md history.
+
+## The strict six-column grid (F6 — the shipped default skill's format)
+
+When the user wants the stricter grid format instead of checklist lines (this
+is what Cowtext's own "task-format" default skill, installed from the Skills
+rail, produces), use exactly these six columns and nothing more, in this
+order:
+
+```
+| Name | Task Type | Priority | Tags | Status | Description |
+| --- | --- | --- | --- | --- | --- |
+```
+
+The header row is matched case-insensitively by name, not by position — a
+reordered header still parses. Recognized Task Type synonyms: `Task Type`,
+`Type`, `Kind`. No Agent/Phase/Created column in this format — fold anything
+that doesn't fit a column into Description rather than drop it.
 
 ## ROADMAP time marks
 
@@ -55,15 +75,16 @@ reformatting ROADMAP, keep exactly one such token per line, early in the line.
 
 ## Reformat procedure
 
-1. Locate the four files across the three convention dirs (`Glob` for
-   `{,docs/,docs/tasks/}{TASKS,SPRINT,BACKLOG,ROADMAP}.md`). If a task list
+1. Locate the five files across the three convention dirs (`Glob` for
+   `{,docs/,docs/tasks/}{TASKS,SPRINT,BACKLOG,ROADMAP,BUGS}.md`). If a task list
    lives in a non-convention file, MOVE its items into the right convention
    file (ask which one when unclear: actionable→TASKS, scoped→SPRINT,
-   someday→BACKLOG, plan/history→ROADMAP).
+   someday→BACKLOG, plan/history→ROADMAP, defect→BUGS).
 2. For every item, rewrite to the canonical checklist line: derive the status
    marker (done/✅→`[x]`, in progress→`[>]`, testing/review→`[?]`, else `[ ]`),
    pull tags into `#tag` tokens, assignee into ONE `@agent` token, priority into
    a `P0`–`P3` token, and split name — description on the first natural boundary.
+   (Or the six-column grid above, if that's the format the user asked for.)
 3. TASKS.md: preserve/introduce `##` sprint headings; move Done items to the
    bottom of their lane rather than deleting them.
 4. Preserve every non-task line (prose, headings, links) byte-for-byte.

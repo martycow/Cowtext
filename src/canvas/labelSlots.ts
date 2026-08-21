@@ -50,9 +50,17 @@ function overlaps(a: LabelBox, ay: number, b: LabelBox, by: number): boolean {
  * to move — the common case, and the one worth keeping allocation-free at
  * the call site: an unchanged map means nothing re-renders).
  *
- * Candidate offsets are searched 0, +step, −step, +2·step, −2·step … so a
- * displaced label lands as close to its wire as it can, alternating sides to
- * keep a bundle of wires visually centred rather than drifting one way.
+ * Candidate offsets are searched 0, ±step, ±2·step … so a displaced label
+ * lands as close to its wire as it can (smallest absolute displacement
+ * wins, always — the search never skips a closer slot to try a farther one
+ * first). WO13_CONTRACT.md defect 7(b): which SIGN is tried first at a given
+ * step used to be fixed (`[+step, -step]`), so whichever label of a
+ * colliding pair was processed second always won the coin flip and always
+ * landed BELOW — every displaced chip drifted the same way instead of the
+ * bundle staying visually centred. The sign tried first now alternates by
+ * each label's position in the (deterministic, id-sorted) processing order,
+ * so two labels that both have to move split one up and one down rather
+ * than piling onto the same side.
  */
 export function resolveLabelOffsets(entries: readonly LabelBox[]): Map<string, number> {
   const out = new Map<string, number>();
@@ -61,10 +69,19 @@ export function resolveLabelOffsets(entries: readonly LabelBox[]): Map<string, n
   const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const placed: { box: LabelBox; y: number }[] = [];
 
-  for (const box of sorted) {
+  sorted.forEach((box, i) => {
+    // Even processing index tries "down" (+step) first, odd tries "up"
+    // (−step) first — a fixed, deterministic alternation, not a coin flip,
+    // so the same graph always resolves to the same layout.
+    const preferDown = i % 2 === 0;
     let chosen = box.y;
     for (let step = 0; step * LABEL_STEP <= MAX_PUSH; step += 1) {
-      const candidates = step === 0 ? [box.y] : [box.y + step * LABEL_STEP, box.y - step * LABEL_STEP];
+      const candidates =
+        step === 0
+          ? [box.y]
+          : preferDown
+            ? [box.y + step * LABEL_STEP, box.y - step * LABEL_STEP]
+            : [box.y - step * LABEL_STEP, box.y + step * LABEL_STEP];
       const free = candidates.find((y) => !placed.some((p) => overlaps(box, y, p.box, p.y)));
       if (free !== undefined) {
         chosen = free;
@@ -73,7 +90,7 @@ export function resolveLabelOffsets(entries: readonly LabelBox[]): Map<string, n
     }
     placed.push({ box, y: chosen });
     if (chosen !== box.y) out.set(box.id, chosen - box.y);
-  }
+  });
 
   return out;
 }

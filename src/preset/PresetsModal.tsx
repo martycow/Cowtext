@@ -9,6 +9,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { GRAPH_VERSION, serializeGraph, useGraphStore, type BarnGraph } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { presetApply, presetExport, presetList, presetRead, presetSave } from "./api";
+import { STARTER_PRESET } from "./starter";
 import { buildPreset, parsePreset, type CowtextPreset, type PresetInfo } from "./types";
 
 type Phase = "list" | "confirm" | "applying" | "done" | "failed";
@@ -114,23 +115,36 @@ export function PresetsModal({ root, onClose }: { root: string; onClose: () => v
   // is tolerated — deleting the last node leaves the file behind).
   const canApply = graphLoaded && nodeCount === 0;
 
+  // Shared by both apply entry points — the starter pack is a literal (never
+  // round-trips through preset_list/presetRead, which only enumerate
+  // app_config_dir/presets/* and are never seeded), a saved preset is read
+  // from disk and parsed first. Either way the confirm screen and the
+  // preset_apply "graph must be empty" precondition behave identically.
+  const beginApply = (preset: CowtextPreset) => {
+    const existing = new Set(
+      useProjectStore.getState().files.map((f) => f.relPath.toLowerCase()),
+    );
+    setConfirm({
+      preset,
+      files: [
+        ...preset.nodes.map((n) => ({
+          relPath: n.filePath,
+          exists: existing.has(n.filePath.replace(/\\/g, "/").toLowerCase()),
+        })),
+        { relPath: ".cowtext/graph.json", exists: false },
+      ],
+    });
+    setPhase("confirm");
+  };
+
   const startApply = (info: PresetInfo) =>
     run(async () => {
-      const preset = parsePreset(await presetRead(info.path));
-      const existing = new Set(
-        useProjectStore.getState().files.map((f) => f.relPath.toLowerCase()),
-      );
-      setConfirm({
-        preset,
-        files: [
-          ...preset.nodes.map((n) => ({
-            relPath: n.filePath,
-            exists: existing.has(n.filePath.replace(/\\/g, "/").toLowerCase()),
-          })),
-          { relPath: ".cowtext/graph.json", exists: false },
-        ],
-      });
-      setPhase("confirm");
+      beginApply(parsePreset(await presetRead(info.path)));
+    });
+
+  const startApplyStarter = () =>
+    run(async () => {
+      beginApply(STARTER_PRESET);
     });
 
   const doApply = () => {
@@ -149,8 +163,11 @@ export function PresetsModal({ root, onClose }: { root: string; onClose: () => v
       };
       const stubs = preset.nodes.map((n) => ({
         relPath: n.filePath,
-        // The Inspector's new-node stub idiom — user content, no header.
-        content: `# ${n.title}\n\n`,
+        // Shipped presets (e.g. the starter pack) carry a real skeleton
+        // body via PresetNode.content; user-saved presets never do (see
+        // buildPreset), so this falls back to the Inspector's new-node stub
+        // idiom — user content, no header.
+        content: n.content ?? `# ${n.title}\n\n`,
       }));
       const paths = await presetApply(root, serializeGraph(graph), stubs);
       await useGraphStore.getState().loadGraph(root);
@@ -233,6 +250,33 @@ export function PresetsModal({ root, onClose }: { root: string; onClose: () => v
                   Import…
                 </button>
               </div>
+
+              {/* Built-in starter pack — pinned first row. Not part of
+                  presets (preset_list only reads app_config_dir/presets/*
+                  and is never seeded), so it renders from the STARTER_PRESET
+                  literal and applies without a presetRead round-trip. */}
+              <ul>
+                <li className="flex h-row items-center gap-2 border-b border-border-subtle bg-surface-2 px-4">
+                  <Package size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-content">
+                    {STARTER_PRESET.name}
+                  </span>
+                  <span className="inline-flex h-[17px] flex-none items-center rounded-sm border border-border bg-surface-1 px-1 font-mono text-micro text-content-secondary">
+                    Built-in
+                  </span>
+                  <span className="inline-flex h-[17px] flex-none items-center rounded-sm border border-border bg-surface-1 px-1 font-mono text-micro text-content-secondary">
+                    {STARTER_PRESET.nodes.length} nodes
+                  </span>
+                  <button
+                    onClick={startApplyStarter}
+                    disabled={busy || !canApply}
+                    title={canApply ? "New project from the starter pack" : "Open an empty project first"}
+                    className={SECONDARY_BTN.replace("h-control ", "h-control-sm ")}
+                  >
+                    Apply
+                  </button>
+                </li>
+              </ul>
 
               {presets === null ? (
                 <p className="px-4 py-6 text-center text-sm text-content-muted">loading…</p>

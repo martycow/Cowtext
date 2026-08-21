@@ -1,43 +1,21 @@
-// Model picker catalog (Task-Board Rev 2, R6) — company then version. Stored
-// value is always the plain `model:` string Claude Code (or the relevant
-// provider) accepts; the picker only helps CHOOSE that string, it never
-// wraps or namespaces it. "Other" is a free-text escape hatch for anything
-// not in the curated list.
-
-export interface ModelCompany {
-  company: string;
-  models: string[];
-}
-
-export const MODEL_CATALOG: ModelCompany[] = [
-  {
-    company: "Anthropic",
-    models: [
-      "inherit",
-      "claude-opus-5",
-      "claude-sonnet-5",
-      "claude-haiku-4-5-20251001",
-      "claude-fable-5",
-    ],
-  },
-  { company: "OpenAI", models: ["gpt-5", "gpt-5-mini", "o3"] },
-  { company: "Google", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
-  { company: "Other", models: [] },
-];
-
-/** WO11 D3 (fix, frozen §5.6): the bare aliases used to sit in
- *  `MODEL_CATALOG` as a second row per tier ("Opus" AND "Opus-5"). They stay
- *  valid on the wire — a hand-edited `model: opus` must still resolve to
- *  Anthropic and render as itself, never blank or "Other" — but they no
- *  longer appear as pickable rows. Module-private: `companyFor` consults it
- *  directly; `isAliasModel` is the narrow public door for a caller (the
- *  picker) that needs to know whether to render a value as a disabled
- *  legacy option instead of a real select choice. */
-const ALIAS_MODELS = new Set(["opus", "sonnet", "haiku"]);
-
-export function isAliasModel(value: string): boolean {
-  return ALIAS_MODELS.has(value);
-}
+// Model helpers for the agent modal/editor. Stored value is always the plain
+// `model:` string Claude Code accepts; nothing here wraps or namespaces it.
+//
+// WO13 finding #9: this file used to also export a company/version catalog
+// (`MODEL_CATALOG`/`ModelCompany`) plus `isAliasModel`/`companyFor`, built
+// for the old company-then-version `ModelPicker` (WO11 R6). WO13 Block D
+// replaced that picker with a fixed radio list (Inherit / Haiku / Sonnet /
+// Opus / "Pin a specific model ID") that needs no per-provider grouping —
+// multi-provider support is explicitly out of scope (agent spec D1) — so
+// those four exports lost every caller (confirmed by a repo-wide grep) and
+// were DELETED rather than left half-correct: they encoded a bare-alias set
+// (`opus`/`sonnet`/`haiku`) that the D9 docs ruling extended with `fable`,
+// and that addition was never applied before they went dead. Leaving a
+// provably-unreachable "fixed" set around is how a future caller inherits a
+// subtly wrong alias list without any test ever exercising it — deleting is
+// the sound alternative to a half-correct fix. `shortModelLabel` below is
+// the one LIVE place that still special-cases the bare aliases; the `fable`
+// gap is closed there instead, where it's actually reachable.
 
 /** Short explanations rendered under the picker; absent key = no note. */
 export const MODEL_NOTES: Record<string, string> = {
@@ -46,6 +24,7 @@ export const MODEL_NOTES: Record<string, string> = {
   opus: "Alias: the current Opus tier, whatever that resolves to today. A dated id pins a snapshot.",
   sonnet: "Alias: the current Sonnet tier. A dated id pins a snapshot.",
   haiku: "Alias: the current Haiku tier. A dated id pins a snapshot.",
+  fable: "Alias: the current Fable tier (WO13_CONTRACT.md §3.0, D9). A dated id pins a snapshot.",
 };
 
 /** Anthropic id prefixes stripped for display — longest first, so
@@ -73,10 +52,12 @@ const ANTHROPIC_PREFIXES = ["us.anthropic.", "anthropic.", "claude-"];
  * Total: anything unrecognized comes back trimmed but otherwise untouched,
  * because a model this doesn't model is still a model the user typed.
  */
+const BARE_ALIASES = new Set(["inherit", "opus", "sonnet", "haiku", "fable"]);
+
 export function shortModelLabel(model: string | null): string {
   const raw = (model ?? "").trim();
   if (raw === "") return "inherit";
-  if (raw === "inherit" || raw === "opus" || raw === "sonnet" || raw === "haiku") return raw;
+  if (BARE_ALIASES.has(raw)) return raw;
 
   // A dated snapshot suffix carries no information at this size.
   let s = raw.replace(/-\d{8}$/, "");
@@ -93,19 +74,4 @@ export function shortModelLabel(model: string | null): string {
   const parts = s.split("-");
   if (parts.length === 1) return capitalize(parts[0]);
   return `${capitalize(parts[0])}-${parts.slice(1).join(".")}`;
-}
-
-/** Infers which catalog company a stored model string belongs to — an
- *  unrecognized (or empty) value falls back to "Other" so the free-text
- *  input can carry it forward unmodified. */
-export function companyFor(value: string | null): string {
-  if (value === null || value.trim() === "") return MODEL_CATALOG[0].company;
-  for (const c of MODEL_CATALOG) {
-    if (c.models.includes(value)) return c.company;
-  }
-  // An alias no longer lives in the catalog's model list (D3), but it is
-  // still an Anthropic id — falling through to "Other" here is exactly the
-  // regression the fix exists to prevent.
-  if (ALIAS_MODELS.has(value)) return MODEL_CATALOG[0].company;
-  return "Other";
 }

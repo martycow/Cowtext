@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
 import { GRAPH_VERSION, serializeGraph, useGraphStore } from "../store/graph";
 import { useEventsStore } from "../store/events";
+import { pushToast } from "../store/toasts";
 import { handoffGenerate, handoffWrite } from "./api";
 import { HandoffNodeProposalModal } from "./HandoffNodeProposalModal";
 import type { HandoffResult } from "./types";
@@ -145,7 +146,11 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
     })().catch((e: unknown) => {
       if (!liveRef.current) {
         // Abandoned wait (contract-sanctioned) — still leave a trace.
-        console.error("handoff generate failed after close:", e);
+        pushToast({
+          severity: "danger",
+          title: "Handoff generate failed",
+          detail: String(e),
+        });
         return;
       }
       setErrText(String(e));
@@ -159,13 +164,18 @@ export function HandoffModal({ root, onClose }: { root: string; onClose: () => v
     setErrText(null);
     handoffWrite(root, result.content)
       .then(() => {
+        pushToast({ severity: "info", title: "Wrote HANDOFF.md" });
         if (liveRef.current) setPhase("written");
       })
       .catch((e: unknown) => {
         if (!liveRef.current) {
           // Unreachable via UI now (close is blocked while writing), but a
           // write failure must never vanish without a trace.
-          console.error("handoff write failed after close:", e);
+          pushToast({
+            severity: "danger",
+            title: "Handoff write failed",
+            detail: String(e),
+          });
           return;
         }
         setErrText(String(e));

@@ -23,6 +23,7 @@ import { memo, useEffect, useMemo, useReducer, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AlertTriangle,
   FileCode,
   FilePlus2,
   FolderOpen,
@@ -44,9 +45,11 @@ import {
   sameRelPath,
   serializeGraph,
   useGraphStore,
+  type AssemblePhase,
 } from "../store/graph";
 import { lastLiveTs, lensLiveTs, useEventsStore, LIVE_PULSE_MS } from "../store/events";
 import { assembleCancel, assembleNode, summarizeNode } from "../assemble/api";
+import type { AssembleMode } from "../assemble/types";
 import { revealPath } from "../fs/api";
 import { activityEmphasis, brightnessFor, useLensTickStore, weightEmphasis } from "./lens";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
@@ -54,15 +57,30 @@ import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { shortModelLabel } from "../agents/modelCatalog";
 import { portHeight } from "./portSlots";
-import { useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
+import { useDenyTargetStore, useHighlightStore, useInspectorTabStore, type CanvasNode } from "./types";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
+import { formatTokenCount, tokensForBytes } from "../store/tokens";
+import { pushToast } from "../store/toasts";
+import { requestAssemble } from "../assemble/gate";
 
-function formatTokens(bytes: number): string {
-  const tokens = Math.max(1, Math.round(bytes / 4));
-  if (tokens < 1000) return `${tokens} tok`;
-  return `${(tokens / 1000).toFixed(1)}k tok`;
+// WO13_CONTRACT.md §3.3 / defect 5: `AssembleProgress` genuinely has no
+// denominator (the runner is one-shot, `assemble.rs:751-781`), so the fix is
+// a 3-step stepper plus a live elapsed readout — determinate where the data
+// is real (which phase we're in), elapsed time where it isn't (how long).
+// "queued"/"done"/"error" are not steps on the track: "queued" is before it,
+// "done"/"error" both flip `assembleStatus` away from queued/running almost
+// immediately, which is what actually gates whether this block renders at
+// all (see `assembling` below) — so the track only ever needs to answer
+// "which of these three are we past."
+const PHASE_STEPS: readonly AssemblePhase[] = ["starting", "running", "writing"];
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
@@ -136,6 +154,20 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   }, [assembleStatus]);
 
   const assembling = assembleStatus === "queued" || assembleStatus === "running";
+  // Defect 5 (§3.3): `phase`/`startedAt` are additive telemetry beside the
+  // authoritative `assembleStatus` above — `assembling` still decides
+  // whether this block renders at all, `phase` only decides what's inside.
+  const assemblePhase = useGraphStore((s) => s.assemblePhase[node.id]);
+  const assembleStartedAt = useGraphStore((s) => s.assembleStartedAt[node.id]);
+  const phaseIndex = assemblePhase !== undefined ? PHASE_STEPS.indexOf(assemblePhase) : -1;
+  // Same "force a re-render, read Date.now() at render time" idiom as the
+  // live-pulse reducer above — a live mm:ss readout with no store-side timer.
+  const [, bumpClock] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => {
+    if (!assembling || assembleStartedAt === undefined) return;
+    const t = setInterval(bumpClock, 1000);
+    return () => clearInterval(t);
+  }, [assembling, assembleStartedAt]);
   // The plate's 2px edge carries state. Role colour no longer appears as an
   // edge at all — it moved to the corner glyph chip — so the edge is free to
   // mean "something is happening to this node".
@@ -155,6 +187,11 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   // Hover-highlight echo from the Inspector's Relations grid: a softer
   // accent than real selection, so the two states stay tellable.
   const highlighted = useHighlightStore((s) => s.nodeIds.includes(node.id));
+  // §7.3 E4: this card is the currently-hovered target of an in-progress
+  // connection drag AND every edge kind would deny it — dim it so the
+  // refusal is visible on the card itself, not just in the cursor tooltip
+  // GraphCanvas renders from the same store entry.
+  const denyReason = useDenyTargetStore((s) => (s.nodeId === node.id ? s.reason : null));
   // Selection is a stamped marquee around the plate rather than a ring on it:
   // the agent plate is clip-path'd, so a box-shadow ring would be clipped
   // into the notch. One rule, both plate shapes, priority as before.
@@ -194,10 +231,15 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
     filter: "brightness(var(--lens-brightness, 1))",
   };
 
-  // Fire-and-forget enqueue, mirroring Inspector's AssembleSection — the
-  // card has no room for an error line, so failures surface through the
-  // Inspector once the node is selected (setSelection below).
-  const runAssemble = (fn: (graphJson: string) => Promise<void>) => {
+  // F7: routes through the always-on confirmation gate instead of invoking
+  // the Rust command directly — flush/serialize still happen up front (the
+  // preview must describe the saved state), but the optimistic "queued"
+  // mark moves inside `onApprove` so a cancelled gate leaves the node's
+  // status untouched. F1: the swallowed `catch {}` this replaced (the card
+  // has no room for a permanent error line) now surfaces as a toast rather
+  // than silently resetting to idle.
+  const runAssemble = (mode: AssembleMode, fn: (graphJson: string) => Promise<void>) => {
+    if (root === null) return;
     void (async () => {
       await useGraphStore.getState().flushSave();
       const s = useGraphStore.getState();
@@ -208,14 +250,24 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         edges: s.edges,
         compileTargets: s.compileTargets,
       });
-      useGraphStore.getState().setAssembleStatus(node.id, "queued");
-      try {
-        await fn(graphJson);
-      } catch {
-        if (useGraphStore.getState().assembleStatus[node.id] === "queued") {
-          useGraphStore.getState().setAssembleStatus(node.id, "idle");
-        }
-      }
+      requestAssemble({
+        root,
+        graphJson,
+        nodeId: node.id,
+        mode,
+        instruction: null,
+        onApprove: async () => {
+          useGraphStore.getState().setAssembleStatus(node.id, "queued");
+          try {
+            await fn(graphJson);
+          } catch (e) {
+            if (useGraphStore.getState().assembleStatus[node.id] === "queued") {
+              useGraphStore.getState().setAssembleStatus(node.id, "idle");
+            }
+            pushToast({ severity: "danger", title: "Assemble could not start", detail: String(e) });
+          }
+        },
+      });
     })();
   };
 
@@ -244,7 +296,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
                   .createAgent(node.title, { fileName })
                   .then((err) => {
                     if (err !== null) {
-                      console.error(err);
+                      pushToast({ severity: "danger", title: "Could not create agent file", detail: err });
                       return;
                     }
                     setSelection([node.id], []);
@@ -263,7 +315,9 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
                   setInspectorTab("markdown");
                   void useProjectStore.getState().rescan();
                 })
-                .catch((err: unknown) => console.error(err));
+                .catch((err: unknown) =>
+                  pushToast({ severity: "danger", title: "Could not create file", detail: String(err) }),
+                );
             },
           }
         : {
@@ -302,9 +356,10 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       {
         kind: "item",
         id: "pin",
-        label: node.pinned ? "Unpin" : "Pin",
-        icon: node.pinned ? PinOff : Pin,
-        onSelect: () => updateNode(node.id, { pinned: !node.pinned }),
+        label: node.rootLoad === "always" ? "Unpin" : "Pin",
+        icon: node.rootLoad === "always" ? PinOff : Pin,
+        onSelect: () =>
+          updateNode(node.id, { rootLoad: node.rootLoad === "always" ? undefined : "always" }),
       },
       {
         kind: "item",
@@ -313,7 +368,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         icon: Sparkles,
         disabled: assembling,
         hint: assembling ? "already running" : undefined,
-        onSelect: () => runAssemble((graphJson) => assembleNode(root, graphJson, node.id)),
+        onSelect: () => runAssemble("assemble", (graphJson) => assembleNode(root, graphJson, node.id)),
       },
       {
         kind: "item",
@@ -321,7 +376,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
         label: "Summarize",
         disabled: assembling,
         hint: assembling ? "already running" : undefined,
-        onSelect: () => runAssemble((graphJson) => summarizeNode(root, graphJson, node.id)),
+        onSelect: () => runAssemble("summarize", (graphJson) => summarizeNode(root, graphJson, node.id)),
       },
       ...(assembleStatus === "queued"
         ? ([
@@ -382,21 +437,48 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           title="Agent is reading this file"
         />
       )}
-      {node.pinned && <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />}
+      {/* N-F: the canvas half of the migration-review marker (WO13_CONTRACT.md
+          §5.2/§3.6a) — `needsReview` is a NODE field only, set once by a
+          migration pass that actually rewrote a value (or by an explicit
+          user deprecation) and never re-fired on an unchanged value, so this
+          is a real "look at this" flag, not decoration. The banner/filter
+          half is U4's (App.tsx / Inspector). */}
+      {node.needsReview === true && (
+        <span
+          className="flex-none text-warning-text"
+          title="Needs review — a migration changed this automatically; confirm it's still right"
+        >
+          <AlertTriangle size={11} strokeWidth={1.5} />
+        </span>
+      )}
+      {node.rootLoad === "always" && (
+        <Pin size={11} strokeWidth={1.5} className="flex-none text-amber-text" />
+      )}
     </>
   );
 
-  // Title · assembling bar · rtl path — identical on both plates.
+  // Title · assemble progress · rtl path — identical on both plates.
   const titleBlock = (
     <>
       <div className="truncate text-base font-semibold text-content">{node.title}</div>
       {assembling && (
-        <div className="h-[4px] w-full overflow-hidden bg-plate-inset">
-          <div
-            className={`h-full bg-accent ${
-              assembleStatus === "running" ? "w-2/3 animate-hard-blink" : "w-1/4 opacity-50"
-            }`}
-          />
+        <div className="flex items-center gap-1.5" title={`Assembling — ${assemblePhase ?? "queued"}`}>
+          <div className="flex flex-none gap-[2px]">
+            {PHASE_STEPS.map((step, i) => (
+              <span
+                key={step}
+                className={`h-[4px] w-[16px] ${i === phaseIndex ? "animate-hard-blink" : ""}`}
+                style={{
+                  background: i <= phaseIndex ? "var(--accent)" : "var(--plate-inset)",
+                }}
+              />
+            ))}
+          </div>
+          <span className="flex-1 truncate font-mono text-micro text-content-muted">
+            {assembleStartedAt !== undefined
+              ? formatElapsed(Date.now() - assembleStartedAt)
+              : "queued"}
+          </span>
         </div>
       )}
       <div
@@ -413,8 +495,8 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const tagRow = (
     <div className="flex items-center gap-1">
       {agentBacked && <span className={TAG}>{`P${agentMeta?.priority ?? 3}`}</span>}
-      <span className={TAG}>
-        {file !== undefined ? formatTokens(file.sizeBytes) : "0 tok"}
+      <span className={TAG} title="file size / 4 — estimate">
+        {file !== undefined ? `${formatTokenCount(tokensForBytes(file.sizeBytes))} tok file` : "0 tok file"}
       </span>
       {file === undefined ? (
         <span className="bg-danger-surface px-1 py-px font-mono text-micro leading-none text-danger-text">
@@ -437,7 +519,12 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   );
 
   return (
-    <div onContextMenu={openMenu} className="ct-node group relative w-node" style={lensStyle}>
+    <div
+      onContextMenu={openMenu}
+      className="ct-node group relative w-node"
+      style={denyReason !== null ? { ...lensStyle, opacity: 0.4 } : lensStyle}
+      title={denyReason ?? undefined}
+    >
       {/* Live-read marquee — a hard 2px amber rectangle that blinks in one
           step. No scale, no fade: on this canvas things flash, they don't
           breathe. Under reduced motion the animation stops and the
@@ -445,6 +532,15 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
       {live && (
         <div
           className="pointer-events-none absolute -inset-[5px] animate-hard-blink border-2 border-amber"
+          aria-hidden
+        />
+      )}
+      {/* §7.3 E4 — dims first (opacity above) and adds a dashed danger
+          outline on top; drawn before the selection marquee so a card can
+          still show BOTH (selected while a different drag hovers it). */}
+      {denyReason !== null && (
+        <div
+          className="pointer-events-none absolute -inset-[5px] border-2 border-dashed border-danger"
           aria-hidden
         />
       )}

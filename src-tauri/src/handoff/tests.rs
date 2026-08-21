@@ -29,9 +29,9 @@ fn graph_json() -> String {
         "projectName": "barnyard",
         "nodes": [
             { "id": "b", "title": "Coding rules", "role": "rules", "brief": "how we code",
-              "filePath": "context/rules.md", "readOrder": 2, "pinned": true },
+              "filePath": "context/rules.md", "readOrder": 2, "rootLoad": "always" },
             { "id": "a", "title": "Architecture", "role": "architecture", "brief": "",
-              "filePath": "context/arch.md", "readOrder": 1, "pinned": false }
+              "filePath": "context/arch.md", "readOrder": 1 }
         ],
         "edges": [
             { "id": "e1", "source": "b", "target": "a", "kind": "references" }
@@ -72,6 +72,36 @@ fn prompt_contains_nodes_edges_and_event_kinds() {
     assert!(prompt.contains("- read context/rules.md ("));
     assert!(prompt.contains("- stop ("));
     assert!(prompt.contains("1m ago"));
+}
+
+/// WO13 D11b regression: the wire field is `rootLoad?: "always"`, not the
+/// v4 `pinned: bool` this module used to read. A node carrying the OLD key
+/// name (as a stale hand-edited file, an unmigrated preset, or simply a
+/// caller that still sends it) must NOT be annotated "pinned" — only
+/// `rootLoad: "always"` does that. This is the one guard against silently
+/// regressing back to reading a wire field that no longer exists.
+#[test]
+fn prompt_pinned_annotation_reads_root_load_not_the_stale_pinned_key() {
+    let graph_json = json!({
+        "version": 5,
+        "projectName": "p",
+        "nodes": [
+            { "id": "a", "title": "Old Field", "role": "rule", "brief": "",
+              "filePath": "context/a.md", "readOrder": 0, "pinned": true },
+            { "id": "b", "title": "New Field", "role": "rule", "brief": "",
+              "filePath": "context/b.md", "readOrder": 1, "rootLoad": "always" }
+        ],
+        "edges": [],
+        "compileTargets": ["claude"]
+    })
+    .to_string();
+    let graph: GraphIn = serde_json::from_str(&graph_json).unwrap();
+    let prompt = build_handoff_prompt(&graph, &[], 0);
+    assert!(
+        prompt.contains("Old Field (role: rule, file:"),
+        "the legacy `pinned` key must be ignored, not resurrected: {prompt:?}"
+    );
+    assert!(prompt.contains("New Field (role: rule, pinned, file:"));
 }
 
 #[test]
@@ -218,7 +248,10 @@ fn handoff_node_propose_fills_every_frozen_field() {
     .unwrap();
 
     assert_eq!(proposal.title, "Handoff — Cedar — t-abc123");
-    assert_eq!(proposal.role, "reference");
+    // WO13 D11b: `reference` was deleted in the v5 role taxonomy;
+    // `architecture` is the frozen replacement (same fallback every other
+    // v5 migration path uses).
+    assert_eq!(proposal.role, "architecture");
     assert!(proposal.rel_path.starts_with("context/handoff/"));
     assert!(proposal.rel_path.ends_with(".md"));
     assert_eq!(proposal.brief, "Finished the migration.");

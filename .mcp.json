@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cowtext": {
+      "type": "stdio",
+      "command": "D:\\Moo.exe\\Cowtext\\src-tauri\\target\\release\\cowtext-mcp.exe",
+      "args": ["--root", "D:\\Moo.exe\\Cowtext"],
+      "env": {}
+    }
+  }
+}

@@ -5,13 +5,14 @@
 // inline — first click arms a confirm strip, nothing is destructive in one
 // click.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Plus, Trash2, Workflow } from "lucide-react";
-import { PRODUCER_FILE, useAgentsStore, metaOrDefault, seedFor } from "../store/agents";
+import { useAgentsStore, metaOrDefault, seedFor } from "../store/agents";
 import { useFocusStore } from "../canvas/types";
 import { sameRelPath, useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
+import { pushToast } from "../store/toasts";
 import { revealPath } from "../fs/api";
 import { AgentAvatar } from "./AgentAvatar";
 import { ContextMenu } from "../ui/ContextMenu";
@@ -79,7 +80,6 @@ export function AgentsRailSection({ root }: { root: string }) {
   const meta = useAgentsStore((s) => s.meta);
   const agentsSel = useAgentsStore((s) => s.selection);
   const select = useAgentsStore((s) => s.select);
-  const createAgent = useAgentsStore((s) => s.createAgent);
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
@@ -87,6 +87,7 @@ export function AgentsRailSection({ root }: { root: string }) {
   const adoptFile = useGraphStore((s) => s.adoptFile);
   const requestFocus = useFocusStore((s) => s.requestFocus);
   const files = useProjectStore((s) => s.files);
+  const assembleStatus = useGraphStore((s) => s.assembleStatus);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
@@ -94,12 +95,28 @@ export function AgentsRailSection({ root }: { root: string }) {
   const nodeFor = (fileName: string) =>
     nodes.find((n) => sameRelPath(n.filePath, `.claude/agents/${fileName}`));
 
-  // Producer always renders first (contract §4) — a real doc when
-  // .claude/agents/producer.md exists, else a virtual row that materializes
-  // it on click.
-  const producerDoc = agents.find((a) => a.fileName === PRODUCER_FILE);
-  const restAgents = agents.filter((a) => a.fileName !== PRODUCER_FILE);
-  const orderedAgents: AgentDoc[] = producerDoc !== undefined ? [producerDoc, ...restAgents] : restAgents;
+  // WO13_CONTRACT.md §2.6/defect 6, agent half. This section is mounted
+  // whenever a project is open regardless of which Inspector tab (or none)
+  // is showing, so it's the one place that can reliably notice an agent's
+  // assemble job finish and refresh the agents store — unlike AgentEditor,
+  // which is only mounted while its "Agent" tab happens to be selected.
+  // Diffs against the PREVIOUS status map rather than reading `"assembled"`
+  // directly, so this fires exactly once per completion, not once per
+  // render while the terminal state persists.
+  const prevAssembleRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const prev = prevAssembleRef.current;
+    prevAssembleRef.current = assembleStatus;
+    for (const a of agents) {
+      const node = nodeFor(a.fileName);
+      if (node === undefined) continue;
+      const status = assembleStatus[node.id];
+      if (status === "assembled" && prev[node.id] !== "assembled") {
+        void useAgentsStore.getState().reloadAgentFromDisk(a.fileName);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assembleStatus, agents, nodes]);
 
   const rowTitle = (doc: AgentDoc): string => {
     const tokens = agentContextTokens(doc, nodes, edges, files);
@@ -144,7 +161,14 @@ export function AgentsRailSection({ root }: { root: string }) {
         id: "reveal",
         label: "Reveal in File Explorer",
         icon: FolderOpen,
-        onSelect: () => void revealPath(root, `.claude/agents/${fileName}`).catch(() => undefined),
+        onSelect: () =>
+          void revealPath(root, `.claude/agents/${fileName}`).catch((e: unknown) =>
+            pushToast({
+              severity: "warning",
+              title: "Could not reveal in File Explorer",
+              detail: String(e),
+            }),
+          ),
       },
       { kind: "separator", id: "sep" },
       {
@@ -164,27 +188,10 @@ export function AgentsRailSection({ root }: { root: string }) {
       <SectionHeader label="Agents" count={agents.length} onCreate={() => setDialogOpen(true)} />
       {dialogOpen && <NewAgentDialog onClose={() => setDialogOpen(false)} />}
       <ul className="py-1">
-        {producerDoc === undefined && (
-          <li>
-            <div
-              onClick={() => void createAgent("Producer")}
-              title="Producer — default agent, click to create"
-              className="flex h-row cursor-default items-center gap-2 px-3 text-content-muted hover:bg-[var(--surface-hover)]"
-            >
-              <span className="flex-none" style={{ color: "var(--role-agent)" }}>
-                <AgentAvatar seed="producer" size={11} />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs italic">Producer</span>
-              <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-disabled">
-                click to create
-              </span>
-            </div>
-          </li>
-        )}
         {agents.length === 0 && (
           <li className="px-3 py-1 text-2xs text-content-muted">No agents in .claude/agents/</li>
         )}
-        {orderedAgents.map((a) => {
+        {agents.map((a) => {
           const node = nodeFor(a.fileName);
           const isSelected =
             (node !== undefined && selectedNodeIds.includes(node.id)) ||
@@ -275,7 +282,13 @@ export function SkillsRailSection({ root }: { root: string }) {
         label: "Reveal in File Explorer",
         icon: FolderOpen,
         onSelect: () =>
-          void revealPath(root, `.claude/skills/${dirName}/SKILL.md`).catch(() => undefined),
+          void revealPath(root, `.claude/skills/${dirName}/SKILL.md`).catch((e: unknown) =>
+            pushToast({
+              severity: "warning",
+              title: "Could not reveal in File Explorer",
+              detail: String(e),
+            }),
+          ),
       },
       { kind: "separator", id: "sep" },
       {

@@ -1,6 +1,6 @@
 ---
 name: cowtext-terminology
-description: Canonical Cowtext vocabulary — module map, the 73 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
+description: Canonical Cowtext vocabulary — module map, the 74 invoke commands, the four Tauri events, and the terms every agent must use consistently. Load before writing code, docs, or reports so names stay byte-exact. Full definitions live in docs/TERMINOLOGY_REFERENCE.md.
 ---
 
 # Cowtext canonical terminology
@@ -13,7 +13,7 @@ synonyms for existing terms.
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (73) |
+| `src-tauri/src/lib.rs` | Builder chain, plugin registration, `generate_handler!` list (75) |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write, `write_atomic`, `resolve_within_root` |
 | `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
 | `src-tauri/src/import.rs` | Importer: parse CLAUDE.md/AGENTS.md/.cursor rules → proposed graph changeset; never clobbers files |
@@ -29,14 +29,15 @@ synonyms for existing terms.
 | `src/scene/` | Pixi barn + `sfx.ts` (howler confined here) |
 | `src/settings/`, `src/preset/`, `src/handoff/` | SettingsModal, preset & handoff UI |
 
-## Invoke commands (73) — byte-exact names
+## Invoke commands (75) — byte-exact names
 
 project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs`
+· fs: `fs_apply_batch`
 · git: `git_status`, `git_init`, `gitignore_write`
 · compile: `compile_preview`, `compile_write`
 · import: `import_scan`, `import_apply`
 · lint: `lint_run`
-· assemble: `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel`
+· assemble: `assemble_node`, `assemble_preview`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel`
 · hooks: `hooks_preview`, `hooks_write`, `hooks_status`
 · settings: `read_app_settings`, `write_app_settings`
 · preset: `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply`
@@ -55,7 +56,7 @@ name). camelCase in JS ⇄ snake_case in Rust.
 
 - `barn://event` — `BarnEvent { kind, filePath?, sessionId, ts }`: hooks_server → emit
   → `useEventsStore.pushEvent` → canvas pulse + barn.
-- `assemble://status` — `AssembleProgress { nodeId, mode, status, error }`: assemble.rs
+- `assemble://status` — `AssembleProgress { nodeId, status, phase, startedAt, error }`: assemble.rs
   → emit → `useGraphStore.setAssembleStatus`.
 - `fs://change` — `FsChange { relPath, modifiedMs, sizeBytes, kind }`: watcher → emit
   → `useProjectStore.applyFsChange` → lens updates.
@@ -67,13 +68,12 @@ name). camelCase in JS ⇄ snake_case in Rust.
 ## Canon terms (use exactly these)
 
 - **Memory Node** — graph node backed by a real `.md` file; the file on disk is the
-  content source of truth. Roles: `agent`, `rules`, `architecture`, `workflow`,
-  `task`, `reference`, `glossary`, `command`, `invariant`, `trap`, `skill`, `snippet`, `style`.
-- **Edge kinds** — **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `conditional` (glob/NL condition), `supersedes`, `conflicts-with`.
+  content source of truth. Roles (v5, 14 total): `agent`, `rule`, `invariant`, `trap`, `architecture`, `decision`, `workflow`, `command`, `skill`, `env`, `tool`, `glossary`, `example`, `style`.
+- **Edge kinds** — (v5, 5 total) **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `contradicts` (symmetric; v4 `conflicts-with` renamed).
 - **Pinned / effective-pinned** — always-in-context flag; effective set = pinned +
   transitive `imports` closure — **excludes `overrides`** (affects order, not pinned).
 - **readOrder** — manual tie-break inside Kahn's topological order, pops by `(readOrder, id)`.
-- **BarnGraph** — `graph.json` shape (`version: 3`); v2→v3 adds roles 7→13, edges 4→7, tags/owner/meta/color; any schema change bumps `version` and adds a migration.
+- **BarnGraph** — `graph.json` shape (**`version: 5`**); v2→v3 adds roles 7→13, edges 4→7, tags/owner/meta/color; v3→v4 adds edge `waypoints`; v4→v5 adds roles 13→14, edges 7→5, node `rootLoad`/`deprecated`/`needsReview`, edge `guard`; any schema change bumps `version` and adds a migration.
 - **Compile** — one graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` / `GEMINI.md`; never writes without diff-preview approval. **GENERATED header** — line 1 of every compiled file; its absence marks a file handwritten. **Write allowlist** — `compile_write` accepts only compile-output shapes. **Errors XOR files** — `compile_preview` returns validation errors or preview files, never both.
 - **Assemble / Refine / Summarize** — brief → full file via headless `claude -p`
   (stdin prompt, `--output-format json`).

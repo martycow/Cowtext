@@ -1,6 +1,6 @@
 ---
 name: wo03-role-schema-v3-props
-description: NodeRole v3 (13 roles) prop mapping in sceneGraph.ts — grouping rationale and the palette.ts/props.ts boundary that shaped it
+description: NodeRole prop-mapping history in sceneGraph.ts (v3 13-role, then v5 14-role WO13) — grouping rationale and the palette.ts/props.ts boundary that shaped it
 metadata:
   type: project
 ---
@@ -42,3 +42,31 @@ real entries for both (reused the dead `iris`/`orchid` keys). The broader
 skill/style all render as the same bookshelf; task/workflow/command/snippet
 all render as the same crate) is still open — `makeBookshelf`/`makeCrate`
 still take no role param at all.
+
+**UPDATE (WO13 B1, role set 13→14, `rules`→`rule`/`snippet`→`example`/
+`task`→`workflow`/`reference` gone, `decision`/`env`/`tool` new — contract
+`docs/design/WO13_CONTRACT.md` §14.6 froze the mapping, no judgement call
+needed):**
+
+- **cabinet**: `rule`, `invariant`, `trap`, `agent` (unchanged from v3 modulo rename)
+- **bookshelf**: `architecture`, `decision`, `glossary`, `skill`, `style`, `example`, `tool`
+- **crate**: `workflow`, `command`, `env`
+
+`readCueForRole` in `sfx.ts` was converted from a ternary chain to an
+exhaustive switch mirroring this exact grouping (drawer_slide/page_flip/
+paper_shuffle), so a future role addition fails the sfx.ts build too, not
+just sceneGraph.ts's. See [[project_wo13-sfx-scope-contradiction]] for why
+`sfx.ts` was in scope at all despite §16 listing it write-forbidden.
+
+**Load-bearing trap found this round, keep watching for it:** `ROLE_ACCENT`
+(`palette.ts`) has two independent, differently-versioned consumers —
+`props.ts`'s `makeCabinet` reads current `NodeRole` (v5 now), but
+`calf.ts`'s `makeCalf` reads `identity.ts`'s **frozen, deliberately
+un-synced** 7-member `Role` list, which still says `rules`/`architecture`/
+`workflow`/`task`/`reference`/`glossary` — the pre-WO13 vocabulary,
+permanently. `identity.ts` is write-forbidden specifically so calf/avatar
+looks never rotate; that ban is transitive to any shared table it reads
+through, even in a file you do own. **Do not delete or rename dead-looking
+`ROLE_ACCENT` keys that match a role name only `identity.ts` still uses** —
+check `identity.ts`'s `ACCENT_ROLES` list before removing anything from
+`ROLE_ACCENT`, even entries that look orphaned from `props.ts`'s side.

@@ -14,6 +14,7 @@
 mod tests;
 
 use crate::project::{checked_root, write_atomic};
+use crate::worktree::{display_path, validate_branch};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,10 +85,21 @@ pub struct GitStatus {
     /// `git --version` succeeded (the binary was found and ran).
     pub git_available: bool,
     pub git_version: Option<String>,
+    /// True only when `root` itself is a git work tree's toplevel — see
+    /// [`is_repo_at`]. A project folder merely nested somewhere *inside* an
+    /// unrelated outer repo reports `false` here, not the outer repo's
+    /// truth (WO13 fix — was previously computed with a plain
+    /// `--is-inside-work-tree`, which walks upward and cannot tell the two
+    /// apart).
     pub is_repo: bool,
     /// `git rev-parse HEAD` succeeded.
     pub has_commits: bool,
-    /// None on detached HEAD / no commits / not a repo / git unavailable.
+    /// None on detached HEAD / not a repo / git unavailable. Populated even
+    /// before the first commit — an unborn branch (fresh `git init`, or
+    /// `git_init`'s own `symbolic-ref` choice) still has a name; see
+    /// [`probe_status`]'s use of `symbolic-ref --short HEAD` rather than
+    /// `rev-parse --abbrev-ref HEAD` (WO13 fix, same root cause `worktree.rs`
+    /// D8 already fixed for `worktree_check`/`branch_name`).
     pub branch: Option<String>,
     pub gitignore_exists: bool,
     /// Verbatim file content; `None` when the file is absent.
@@ -111,6 +123,40 @@ fn read_gitignore(root: &Path) -> (bool, Option<String>) {
     let exists = path.is_file();
     let content = if exists { fs::read_to_string(&path).ok() } else { None };
     (exists, content)
+}
+
+/// True only when `root` itself is the toplevel of a git work tree — not
+/// merely nested somewhere underneath one (WO13 fix, acceptance defect 2
+/// root cause (a)). `git rev-parse --is-inside-work-tree` alone answers "is
+/// `root` inside *any* work tree", walking upward through parent
+/// directories until it finds one; a project folder nested under an
+/// unrelated outer repo therefore reads as "already a repo" under that
+/// check alone, even though `root` has no `.git` of its own.
+/// `--show-toplevel` resolves to the outermost work tree root that
+/// *contains* `root`, whichever one that is — so a repo genuinely rooted AT
+/// `root` is exactly the case where the two normalized paths coincide.
+/// Comparison reuses `worktree::display_path` (canonicalize + forward
+/// slashes, the codebase's existing path-normalization idiom), lowercased
+/// on Windows where the filesystem is case-insensitive.
+fn is_repo_at(root: &Path) -> bool {
+    let inside = run_git(root, &["rev-parse", "--is-inside-work-tree"])
+        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+        .unwrap_or(false);
+    if !inside {
+        return false;
+    }
+    let toplevel = match run_git(root, &["rev-parse", "--show-toplevel"]) {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => return false,
+    };
+    if toplevel.is_empty() {
+        return false;
+    }
+    let root_display = display_path(root);
+    let top_display = display_path(Path::new(&toplevel));
+    #[cfg(windows)]
+    let (root_display, top_display) = (root_display.to_lowercase(), top_display.to_lowercase());
+    root_display == top_display
 }
 
 /// Probes `root` for git availability, repo state and `.gitignore`. Never
@@ -137,21 +183,27 @@ fn probe_status(root: &Path) -> GitStatus {
         }
     };
 
-    let is_repo = run_git(root, &["rev-parse", "--is-inside-work-tree"])
-        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
-        .unwrap_or(false);
+    let is_repo = is_repo_at(root);
 
     let has_commits = is_repo
         && run_git(root, &["rev-parse", "HEAD"])
             .map(|out| out.status.success())
             .unwrap_or(false);
 
+    // `symbolic-ref --short HEAD`, not `rev-parse --abbrev-ref HEAD`: the
+    // latter fails on an unborn HEAD (a freshly `git init`-ed, commitless
+    // repo — exactly what `git_init` itself produces), so `branch` used to
+    // come back `None` right after init even though the chosen name really
+    // is at `.git/HEAD` (WO13 fix, acceptance defect 2 root cause (b));
+    // mirrors `worktree.rs`'s own `branch_name`, added there for the same
+    // unborn-HEAD failure mode (D8). Still `None` on detached HEAD, where
+    // `symbolic-ref` also fails.
     let branch = if is_repo {
-        run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        run_git(root, &["symbolic-ref", "--short", "HEAD"])
             .ok()
             .filter(|out| out.status.success())
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-            .filter(|b| !b.is_empty() && b != "HEAD")
+            .filter(|b| !b.is_empty())
     } else {
         None
     };
@@ -178,17 +230,61 @@ pub fn git_status(root: String) -> Result<GitStatus, String> {
     Ok(probe_status(&root_path))
 }
 
-/// `git -C <root> init` and nothing else — no commit, no remote, no config,
-/// no first `add` (contract §4.1, frozen). Idempotent: calling it on an
-/// already-initialized repo is a no-op that still returns fresh status,
-/// because `git init` itself is idempotent.
+/// `git -C <root> init` and nothing else beyond an optional default-branch
+/// choice — no commit, no remote, no config, no first `add` (contract
+/// §4.1). Idempotent, and D1b-safe: calling it on an already-initialized
+/// repo is a genuine no-op — `branch` is validated but then never acted on,
+/// because the directory is probed for an existing repo BEFORE `init` or
+/// `symbolic-ref` ever run, and both are skipped entirely when it already
+/// is one. Re-running the wizard on a project you already initialized must
+/// never silently move that repo's HEAD.
+///
+/// "Already a repo" here means [`is_repo_at`]: `root` itself is a work
+/// tree's toplevel, not merely nested somewhere inside one (WO13 fix,
+/// acceptance defect 2 root cause (a)). The plain `--is-inside-work-tree`
+/// check this used before walks upward through parent directories, so a
+/// project folder created under an unrelated outer repo used to read as
+/// "already a repo" and silently skip `init` — the user's branch choice was
+/// validated and then discarded, no `.git` was ever created at `root`, and
+/// the resulting `GitStatus` was the OUTER repo's, not this project's own.
+/// `--show-toplevel` distinguishes the two: `git init` now genuinely runs
+/// (creating `root`'s own nested `.git`) whenever `root` is not itself that
+/// toplevel, even while sitting inside someone else's repo.
+///
+/// `branch: None` reproduces the pre-D1b behaviour byte-for-byte — bare
+/// `git init`, branch name left to `init.defaultBranch` / git's own
+/// built-in default. `branch: Some(name)` is validated with
+/// [`validate_branch`] (the same rule set `worktree_add` uses, D1b: plus a
+/// leading `-`, a `..` anywhere, and a trailing `.lock`) BEFORE any
+/// filesystem mutation — an invalid name never creates a `.git` directory.
+///
+/// Deliberately NOT `git init -b <name>`: that flag needs git >= 2.28 and
+/// hard-fails on older installs. The version-safe two-step instead: `init`,
+/// then `symbolic-ref HEAD refs/heads/<name>` — a command every git version
+/// in practical use supports.
 #[tauri::command]
-pub fn git_init(root: String) -> Result<GitStatus, String> {
+pub fn git_init(root: String, branch: Option<String>) -> Result<GitStatus, String> {
     let root_path = checked_root(&root)?;
-    let out = run_git(&root_path, &["init"])?;
-    if !out.status.success() {
-        return Err(stderr_tail(&out.stderr));
+    if let Some(name) = branch.as_deref() {
+        validate_branch(name)?;
     }
+
+    let already_repo = is_repo_at(&root_path);
+
+    if !already_repo {
+        let out = run_git(&root_path, &["init"])?;
+        if !out.status.success() {
+            return Err(stderr_tail(&out.stderr));
+        }
+        if let Some(name) = branch.as_deref() {
+            let target = format!("refs/heads/{name}");
+            let sref = run_git(&root_path, &["symbolic-ref", "HEAD", &target])?;
+            if !sref.status.success() {
+                return Err(stderr_tail(&sref.stderr));
+            }
+        }
+    }
+
     Ok(probe_status(&root_path))
 }
 

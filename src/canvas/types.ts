@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import type { Node, Edge } from "@xyflow/react";
-import type { EdgeKind, MemoryNode } from "../store/graph";
+import type { EdgeGuard, EdgeKind, MemoryNode } from "../store/graph";
 import type { PortSlot } from "./portSlots";
 import { resolveLabelOffsets, type LabelBox } from "./labelSlots";
 
@@ -21,7 +21,9 @@ export type CanvasNodePins = {
 
 export type CanvasEdgeData = {
   kind: EdgeKind;
-  condition?: string;
+  /** v5 (WO13_CONTRACT.md §4.2): replaces the old free-text `condition`.
+   *  Legal on every kind except `contradicts`. */
+  guard?: EdgeGuard;
   note?: string;
   /** For sequence edges: the target node's readOrder, shown in the step tag. */
   step?: number;
@@ -94,6 +96,29 @@ export const useHighlightStore = create<HighlightState>((set) => ({
   edgeIds: [],
   setHighlight: (nodeIds, edgeIds) => set({ nodeIds, edgeIds }),
   clearHighlight: () => set({ nodeIds: [], edgeIds: [] }),
+}));
+
+// ── Draw-time deny feedback (WO13_CONTRACT.md §7.3 E4) ────────────────
+// While a connection is being dragged, GraphCanvas hit-tests the node under
+// the pointer and asks `legalityFor` (src/config/edgeRules.ts) whether ANY
+// edge kind would be legal between the drag's source and that node. When
+// every kind is denied, it writes the target id + reason here; the card
+// dims itself (one subscriber, not a re-render of all 200 cards) and
+// GraphCanvas paints the reason next to the cursor. A tiny store, same
+// shape as `useHighlightStore` above, for the same reason: the answer is
+// computed once per pointer move, not recomputed per card.
+interface DenyTargetState {
+  nodeId: string | null;
+  reason: string | null;
+  setDeny: (nodeId: string, reason: string) => void;
+  clearDeny: () => void;
+}
+
+export const useDenyTargetStore = create<DenyTargetState>((set) => ({
+  nodeId: null,
+  reason: null,
+  setDeny: (nodeId, reason) => set({ nodeId, reason }),
+  clearDeny: () => set({ nodeId: null, reason: null }),
 }));
 
 // ── Viewport focus requests (WO10 item 8) ─────────────────────────────

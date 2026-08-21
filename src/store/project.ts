@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { hooksStatus } from "../fs/api";
 import { flushSettings, useSettingsStore } from "./settings";
-import { useGraphStore } from "./graph";
+import { GRAPH_VERSION, migrateGraph, useGraphStore } from "./graph";
+import { useFocusStore } from "../canvas/types";
 import { flushAgentSave, flushMetaSave, useAgentsStore } from "./agents";
 import { useTasksStore } from "./tasks";
 import { useEventsStore } from "./events";
@@ -32,6 +33,115 @@ export interface FsChange {
   selfWrite: boolean;
 }
 
+/** WO13 N-F/E-F — computed once per project open by diffing the raw
+ *  on-disk graph against {@link migrateGraph}'s own output for that same
+ *  input. This is a READ of the one real migrator (`migrateGraph`,
+ *  `store/graph.ts`, Stage 0's file, imported not re-derived) against a
+ *  second, independent read of `graph.json` — never a second
+ *  implementation of the pass list itself, which is exactly the "one
+ *  decider" discipline the rest of this contract enforces for
+ *  `resolveLoad`. `null` means the current project either has no
+ *  `graph.json` yet or was already on `GRAPH_VERSION` when opened — nothing
+ *  to report. */
+export interface MigrationSummary {
+  fromVersion: number;
+  totalNodes: number;
+  nodesNeedingReview: number;
+  /** "reference→architecture": 3, etc. — role migrations, node-rootLoad
+   *  renames excluded (that one is universal and not diagnostic). */
+  byRoleChange: Record<string, number>;
+  /** "conditional→imports": 2, "supersedes→deprecated": 1,
+   *  "conflicts-with→contradicts": 1 — edge conversions, keyed the same way
+   *  the node roles are. */
+  byEdgeChange: Record<string, number>;
+  /** Edges present before migration and absent after (supersedes deletion,
+   *  contradicts dedup collapse) — not an error, just accounted for so the
+   *  edge count drop in the summary is never a silent mystery. */
+  edgesDropped: number;
+}
+
+function bump(rec: Record<string, number>, key: string): void {
+  rec[key] = (rec[key] ?? 0) + 1;
+}
+
+/** Pure diff of raw pre-migration JSON against the real migrator's output
+ *  for that same input — see {@link MigrationSummary}'s doc comment for why
+ *  this is not a second migrator. Returns `null` when there is nothing to
+ *  report (no file, or already current). */
+function computeMigrationSummary(raw: string | null): MigrationSummary | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null; // corrupt graph.json — loadGraph's own error path surfaces this
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const rawVersion = (parsed as { version?: unknown }).version;
+  if (typeof rawVersion !== "number" || rawVersion >= GRAPH_VERSION) return null;
+
+  const rawNodes = Array.isArray((parsed as { nodes?: unknown }).nodes)
+    ? ((parsed as { nodes: unknown[] }).nodes as Record<string, unknown>[])
+    : [];
+  const rawEdges = Array.isArray((parsed as { edges?: unknown }).edges)
+    ? ((parsed as { edges: unknown[] }).edges as Record<string, unknown>[])
+    : [];
+
+  let migrated;
+  try {
+    migrated = migrateGraph(parsed);
+  } catch {
+    return null; // loadGraph's own error path surfaces the real failure
+  }
+
+  const rawRoleById = new Map(rawNodes.map((n) => [String(n.id), n.role]));
+  const byRoleChange: Record<string, number> = {};
+  let nodesNeedingReview = 0;
+  for (const n of migrated.nodes) {
+    if (n.needsReview === true) nodesNeedingReview += 1;
+    const before = rawRoleById.get(n.id);
+    if (typeof before === "string" && before !== n.role) {
+      bump(byRoleChange, `${before}→${n.role}`);
+    }
+  }
+
+  const rawEdgeById = new Map(rawEdges.map((e) => [String(e.id), e]));
+  const migratedIds = new Set(migrated.edges.map((e) => e.id));
+  const byEdgeChange: Record<string, number> = {};
+  for (const e of migrated.edges) {
+    const before = rawEdgeById.get(e.id);
+    const beforeKind = before?.kind;
+    if (typeof beforeKind === "string" && beforeKind !== e.kind) {
+      bump(byEdgeChange, `${beforeKind}→${e.kind}`);
+    }
+  }
+  let edgesDropped = 0;
+  for (const id of rawEdgeById.keys()) {
+    if (!migratedIds.has(id)) edgesDropped += 1;
+  }
+  // A supersedes edge is deleted outright (§5.5) rather than renamed, so it
+  // never appears in byEdgeChange — count it there too, under the same
+  // "old→new" convention the banner reads (target becomes deprecated).
+  for (const [id, e] of rawEdgeById) {
+    if (e.kind === "supersedes" && !migratedIds.has(id)) {
+      bump(byEdgeChange, "supersedes→deprecated");
+    }
+  }
+
+  return {
+    fromVersion: rawVersion,
+    totalNodes: migrated.nodes.length,
+    nodesNeedingReview,
+    byRoleChange,
+    byEdgeChange,
+    edgesDropped,
+  };
+}
+
+function migrationBannerKey(root: string): string {
+  return `cowtext:migration-banner-dismissed:${root}`;
+}
+
 interface ProjectState {
   root: string | null;
   files: MdFile[];
@@ -41,6 +151,23 @@ interface ProjectState {
   hooksInstalled: boolean | null;
   /** false = .claude/settings.json exists but could not be parsed. */
   hooksReadable: boolean;
+  /** WO13 N-F/E-F. Set once per `openProjectAt`/`rescan`-independent probe;
+   *  see {@link MigrationSummary}. `undefined` = not probed yet (first
+   *  render before the async read lands); `null` = probed, nothing to
+   *  report. */
+  migration: MigrationSummary | null | undefined;
+  /** Persisted per-root via localStorage (UI-only preference, not part of
+   *  the synced graph or `AppSettings` — `store/settings.ts` is outside
+   *  this lane's WO13 zone; flagged in the session report as a candidate to
+   *  fold into `AppSettings.dismissedMigrationBanners` in a later round). */
+  migrationBannerDismissed: boolean;
+  dismissMigrationBanner: () => void;
+  /** WO13 N-F — "review-needed nodes findable in one action from the
+   *  canvas". Selects every `needsReview` node and asks the canvas to pan
+   *  to the first one; the caller still owns switching to the canvas VIEW
+   *  (that's component-local state in App.tsx, not a store). No-op when
+   *  there is nothing to review. */
+  focusNeedsReview: () => void;
 
   openProject: () => Promise<void>;
   /** Open a known path (recent list). Resolves false when the scan failed;
@@ -74,6 +201,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   error: null,
   hooksInstalled: null,
   hooksReadable: true,
+  migration: undefined,
+  migrationBannerDismissed: false,
+
+  dismissMigrationBanner: () => {
+    const root = get().root;
+    if (root === null) return;
+    try {
+      window.localStorage.setItem(migrationBannerKey(root), "1");
+    } catch {
+      // Storage unavailable (e.g. private mode) — the dismissal just
+      // doesn't survive a restart; the banner itself still closes.
+    }
+    set({ migrationBannerDismissed: true });
+  },
+
+  focusNeedsReview: () => {
+    const ids = useGraphStore.getState().nodes.filter((n) => n.needsReview === true).map((n) => n.id);
+    if (ids.length === 0) return;
+    useGraphStore.getState().setSelection(ids, []);
+    useFocusStore.getState().requestFocus(ids[0]);
+  },
 
   openProject: async () => {
     const picked = await open({ directory: true, title: "Open project folder" });
@@ -82,12 +230,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   openProjectAt: async (root) => {
-    set({ scanning: true, error: null, hooksInstalled: null });
+    set({ scanning: true, error: null, hooksInstalled: null, migration: undefined });
     try {
       const result = await scan(root);
       set({ root: result.root, files: result.files, scanning: false });
       useSettingsStore.getState().pushRecentProject(result.root);
       void get().refreshHooksStatus();
+      // WO13 N-F/E-F — independent, read-only probe (see
+      // computeMigrationSummary's doc comment). Fire-and-forget: never
+      // blocks the open, and a stale/slow response for a project the user
+      // has since navigated away from is dropped rather than applied.
+      let dismissed = false;
+      try {
+        dismissed = window.localStorage.getItem(migrationBannerKey(result.root)) !== null;
+      } catch {
+        dismissed = false;
+      }
+      invoke<string | null>("read_graph", { root: result.root })
+        .then((raw) => {
+          if (get().root !== result.root) return; // stale: project switched meanwhile
+          set({ migration: computeMigrationSummary(raw), migrationBannerDismissed: dismissed });
+        })
+        .catch(() => {
+          if (get().root !== result.root) return;
+          set({ migration: null, migrationBannerDismissed: dismissed });
+        });
       return true;
     } catch (e) {
       set({ scanning: false, error: String(e) });
@@ -170,7 +337,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     flushSettings();
 
     // Step 3: clear this store...
-    set({ root: null, files: [], error: null, hooksInstalled: null, hooksReadable: true });
+    set({
+      root: null,
+      files: [],
+      error: null,
+      hooksInstalled: null,
+      hooksReadable: true,
+      migration: undefined,
+      migrationBannerDismissed: false,
+    });
     // ...and every other panel-owning selection. `useGraphStore` has no
     // public `reset()` — graph.ts is outside this lane's WO11 file zone
     // (lane UI-C) and the contract doesn't list one as a frozen cross-lane

@@ -1,15 +1,18 @@
 // Task context modal (WO06_CONTRACT.md §4, §10.3) — the product's whole
 // pitch made visible: shows exactly which Memory Nodes a task's session
-// would receive, why each one is in there, a token estimate, the compiled
-// body itself, and lets the user Save it (`.cowtext/context/task-<id>.md`)
-// or Launch a session with it injected over the boot prompt.
+// would receive, why each one is in there, a token estimate, and the
+// compiled body itself, and lets the user Save it
+// (`.cowtext/context/task-<id>.md`). Launching a session with the context
+// injected happens elsewhere now — the topbar's single Run button, via
+// RunSessionDialog, which prefills the task from the board's own selection
+// (F3, WO12).
 //
 // Frozen call-site signature (contract §10.3) — U1 mounts this from the
 // board / Inspector task panel against exactly this interface; it must not
 // change without a reported deviation.
 //
 // Same modal chrome, focus-hold-on-Cancel and Esc discipline as
-// HandoffModal/AddAgentDialog — no new UI primitive. Local PixelMarch/
+// HandoffModal/RunSessionDialog — no new UI primitive. Local PixelMarch/
 // ContentWell copies, per the established "modals never import across
 // feature dirs" idiom (HandoffModal.tsx).
 
@@ -19,7 +22,7 @@ import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
 import { GRAPH_VERSION, serializeGraph, useGraphStore, type MemoryNode } from "../store/graph";
 import { useTaskLinksStore } from "../store/tasklinks";
 import { ctxPercent, formatTokenCount, tokensForBytes } from "../store/tokens";
-import { AddAgentDialog } from "../sessions/AddAgentDialog";
+import { alwaysLoadedNodeIds } from "../config/resolveLoad";
 import { taskContextPreview, taskContextWrite, TASK_CONTEXT_MAX_BYTES, type TaskContext, type TaskContextError } from "./api";
 
 type Phase = "loading" | "ready" | "empty" | "error";
@@ -58,11 +61,11 @@ function errorText(e: TaskContextError): string {
   }
 }
 
-type Bucket = "seed" | "pinned" | "ancestry" | "closure";
+type Bucket = "seed" | "always" | "ancestry" | "closure";
 
 const BUCKET_LABEL: Record<Bucket, string> = {
   seed: "linked to this task",
-  pinned: "always in context (pinned)",
+  always: "always in context",
   ancestry: "inherited from parent goal",
   closure: "pulled in via imports",
 };
@@ -87,19 +90,20 @@ function NodeRow({ node, id }: { node: MemoryNode | undefined; id: string }) {
   );
 }
 
-export function TaskContextModal({
-  root,
-  taskId,
-  taskName,
-  onClose,
-  onLaunched,
-}: {
+// F3 — launching moved to the single RunSessionDialog (reachable from the
+// topbar Run button, prefilled from the board's task selection); this modal
+// is preview/save only now. `onLaunched` stays in the frozen §10.3 call-site
+// signature so TasksBoard.tsx (a different lane's file) doesn't need an
+// edit — kept on `props` rather than destructured, since nothing inside
+// calls it anymore.
+export function TaskContextModal(props: {
   root: string;
   taskId: string;
   taskName: string;
   onClose: () => void;
   onLaunched?: (sessionId: string) => void;
 }) {
+  const { root, taskId, taskName, onClose } = props;
   const [phase, setPhase] = useState<Phase>("loading");
   const [ctx, setCtx] = useState<TaskContext | null>(null);
   const [errors, setErrors] = useState<TaskContextError[]>([]);
@@ -109,8 +113,6 @@ export function TaskContextModal({
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const [launchOpen, setLaunchOpen] = useState(false);
-
   const panelRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef(true);
 
@@ -119,6 +121,7 @@ export function TaskContextModal({
   const loadLinks = useTaskLinksStore((s) => s.load);
   const ancestryChain = useTaskLinksStore((s) => s.ancestryChain);
   const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
 
   useEffect(() => {
     liveRef.current = true;
@@ -200,21 +203,26 @@ export function TaskContextModal({
   };
 
   const nodeById = new Map(nodes.map((n) => [n.id, n] as const));
-  const pinnedIds = new Set(nodes.filter((n) => n.pinned).map((n) => n.id));
+  // The same decider the linter and the compiler use (WO13 fix round,
+  // T1's D6) — NOT a local `n.rootLoad === "always"` test. A node reached
+  // only transitively through an unguarded `imports` edge is genuinely
+  // always-in-context but carries no `rootLoad` of its own; a local test
+  // would put it in the wrong bucket even though `ctx.nodeIds` (the actual
+  // compiled closure) already contains it correctly.
+  const alwaysIds = alwaysLoadedNodeIds({ nodes, edges });
   const seedIds = new Set(link.nodeIds);
   const ancestryIds = new Set(ancestryChain(taskId).flatMap((l) => l.nodeIds));
 
-  const buckets: Record<Bucket, string[]> = { seed: [], pinned: [], ancestry: [], closure: [] };
+  const buckets: Record<Bucket, string[]> = { seed: [], always: [], ancestry: [], closure: [] };
   for (const id of ctx?.nodeIds ?? []) {
     if (seedIds.has(id)) buckets.seed.push(id);
-    else if (pinnedIds.has(id)) buckets.pinned.push(id);
+    else if (alwaysIds.has(id)) buckets.always.push(id);
     else if (ancestryIds.has(id)) buckets.ancestry.push(id);
     else buckets.closure.push(id);
   }
 
   const tokenEstimate = ctx !== null ? tokensForBytes(ctx.bytes) : 0;
   const truncated = ctx !== null && ctx.bytes > TASK_CONTEXT_MAX_BYTES;
-  const effectiveCeiling = link.tokenCeiling ?? null;
 
   return (
     <div
@@ -343,29 +351,8 @@ export function TaskContextModal({
           >
             {saveBusy ? "· · ·" : "Save"}
           </button>
-          <button
-            onClick={() => setLaunchOpen(true)}
-            disabled={phase !== "ready"}
-            className="flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
-          >
-            Launch…
-          </button>
         </div>
       </div>
-
-      {launchOpen && ctx !== null && (
-        <AddAgentDialog
-          root={root}
-          taskId={taskId}
-          taskContext={ctx.body}
-          tokenCeiling={effectiveCeiling}
-          onSpawned={(sessionId) => {
-            void useTaskLinksStore.getState().recordSession(root, taskId, sessionId);
-            onLaunched?.(sessionId);
-          }}
-          onClose={() => setLaunchOpen(false)}
-        />
-      )}
     </div>
   );
 }

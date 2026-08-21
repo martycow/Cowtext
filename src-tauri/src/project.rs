@@ -71,7 +71,7 @@ pub fn scan_project(
 
 /// Does the actual recursive `.md` scan. Split out of `scan_project` so
 /// tests (and any future non-command caller) don't need a Tauri `AppHandle`.
-pub(crate) fn scan_root(root: String) -> Result<ProjectScan, String> {
+pub fn scan_root(root: String) -> Result<ProjectScan, String> {
     let root_path = PathBuf::from(&root);
     if !root_path.is_dir() {
         return Err(format!("Not a directory: {root}"));
@@ -262,117 +262,157 @@ pub(crate) fn checked_root(root: &str) -> Result<PathBuf, String> {
     Ok(root_path)
 }
 
-// WO03 Lane A infrastructure: this schema/migration/serialization surface
-// has no caller yet inside this crate — it exists for Lanes B (compile.rs),
-// C (cowtext-cli), D (import.rs), and E (lint.rs) to consume once their
-// modules land (none of which are this lane's to touch or pre-wire). Until
-// then it is exercised only by this module's own tests, so the plain
-// (non-`--tests`) `cargo clippy -- -D warnings` gate sees it as dead code.
-// The allow is scoped to this submodule only, re-exported flat below so
-// callers still see `crate::project::MemoryNode` etc.
+// WO03 Lane A infrastructure, now the WO13 Stage 0 v5 schema seam: this
+// schema/migration/serialization surface is consumed today by compile.rs,
+// import.rs, lint.rs, taskctx.rs, cowtext-cli and cowtext-mcp — none of
+// which are this lane's to touch. WO13 Stage 0 renames/widens NodeRole and
+// EdgeKind and reshapes MemoryNode/MemoryEdge (v4 → v5, WO13_CONTRACT.md
+// §4); those four downstream modules therefore fail to compile until their
+// owning lanes (R1: compile.rs/resolve_load.rs; R2: import.rs/lint.rs; R3:
+// taskctx.rs) land their own edits — an accepted, contract-anticipated
+// consequence of the multi-lane handoff (§17 "Known required edits inside
+// already-assigned zones"; the identical pattern this module's own WO03
+// history hit with the dead_code trap below). The `#[allow(dead_code)]`
+// wrapper stays for the same original reason (infra landing ahead of a
+// consumer that has not yet re-synced against it).
 #[allow(dead_code)]
-mod graph_v3 {
+mod graph_v5 {
     use super::*;
 
-    // ── Graph v3 schema (WO03) ──────────────────────────────────────────
+    // ── Graph v5 schema (WO13) ──────────────────────────────────────────
     // Canonical Rust model of `graph.json`, for Rust-only consumers that never
-    // go through the webview — the CLI (`cowtext-cli`, WO03 Lane C), importer
-    // (`import.rs`, Lane D), and linter (`lint.rs`, Lane E). `read_graph` /
-    // `write_graph` below stay raw string pass-through: `src/store/graph.ts`
-    // still owns serialization for the live app; this model mirrors it
-    // field-for-field (same names, same wire order, same default-omission
-    // rules) so the two never drift.
+    // go through the webview — the CLI (`cowtext-cli`), MCP server
+    // (`cowtext-mcp`), importer (`import.rs`), and linter (`lint.rs`).
+    // `read_graph` / `write_graph` below stay raw string pass-through:
+    // `src/store/graph.ts` still owns serialization for the live app; this
+    // model mirrors it field-for-field (same names, same wire order, same
+    // default-omission rules) so the two never drift.
     //
     // Schema history: v1's node role `persona` was renamed to `agent` in v2
     // (same semantics — an agent-role node may be backed by a real
-    // `.claude/agents/*.md` file). v3 (WO03) widens the node role and edge
-    // kind vocabularies and adds `tags` / `owner` / `meta` to nodes, `color`
+    // `.claude/agents/*.md` file). v3 (WO03) widened the node role and edge
+    // kind vocabularies and added `tags` / `owner` / `meta` to nodes, `color`
     // to edges, and two new compile targets (`copilot`, `gemini`). v4 (WO10)
-    // adds `waypoints` to edges — the hand-edited orthogonal route.
+    // added `waypoints` to edges. v5 (WO13) is a taxonomy overhaul, not pure
+    // default-filling: `pinned: bool` becomes `rootLoad?: "always"`,
+    // `condition: string` on a `conditional` edge becomes a typed `guard`,
+    // the node role vocabulary is fully re-cut (14 roles, 5 groups), the
+    // edge kind vocabulary shrinks to 5 (`conditional`/`supersedes`/
+    // `conflicts-with` are gone; `contradicts` is new), and nodes gain
+    // `deprecated` / `needsReview`. See [`migrate_graph`] for the full
+    // ordered pass list (WO13_CONTRACT.md §5.1).
 
     /// Current `graph.json` schema version. Bumping this needs a migration
     /// step in [`migrate_graph`] and the matching entry in `src/store/graph.ts`'s
     /// `migrateGraph`.
-    pub const GRAPH_VERSION: u32 = 4;
+    pub const GRAPH_VERSION: u32 = 5;
 
-    /// Node role — 13 values (WO03_CONTRACT.md §"Graph v3 schema": 7
-    /// existing + 6 new; ratified at 13 in `docs/design/WO03_AUDIT.md`
-    /// §4.5).
+    /// Node role — 14 values, 5 groups (1 identity + 3 constraints + 2
+    /// structure + 5 process + 3 knowledge; WO13_CONTRACT.md §6.1). `Agent`
+    /// sits outside the four pickable groups (§6.1: dropping it would orphan
+    /// every `.claude/agents/*.md` node) — declaration order below IS the
+    /// contract's enumeration order and must stay in lockstep with
+    /// [`NODE_ROLES`] and TS's `NODE_ROLES` in `src/store/graph.ts`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     pub enum NodeRole {
         /// May be backed by a real `.claude/agents/*.md` file (v1 name: `persona`).
         Agent,
-        Rules,
-        Architecture,
-        Workflow,
-        Task,
-        Reference,
-        Glossary,
-        Command,
+        /// v5 rename of v4's `rules` (§6.2).
+        Rule,
         Invariant,
         Trap,
+        Architecture,
+        /// New in v5, no v4 predecessor.
+        Decision,
+        Workflow,
+        Command,
         Skill,
-        Snippet,
+        /// New in v5, no v4 predecessor.
+        Env,
+        /// New in v5, no v4 predecessor.
+        Tool,
+        Glossary,
+        /// v5 rename of v4's `snippet` (§6.2).
+        Example,
         Style,
     }
 
-    /// Every [`NodeRole`] value, in the contract's enumeration order. Used by
-    /// round-trip tests and available to any future exhaustive-role consumer.
-    pub const NODE_ROLES: [NodeRole; 13] = [
+    /// Every [`NodeRole`] value, in the contract's enumeration order.
+    pub const NODE_ROLES: [NodeRole; 14] = [
         NodeRole::Agent,
-        NodeRole::Rules,
-        NodeRole::Architecture,
-        NodeRole::Workflow,
-        NodeRole::Task,
-        NodeRole::Reference,
-        NodeRole::Glossary,
-        NodeRole::Command,
+        NodeRole::Rule,
         NodeRole::Invariant,
         NodeRole::Trap,
+        NodeRole::Architecture,
+        NodeRole::Decision,
+        NodeRole::Workflow,
+        NodeRole::Command,
         NodeRole::Skill,
-        NodeRole::Snippet,
+        NodeRole::Env,
+        NodeRole::Tool,
+        NodeRole::Glossary,
+        NodeRole::Example,
         NodeRole::Style,
     ];
 
-    /// Edge kind. `overrides` is STRUCTURAL (participates in Kahn's algorithm
-    /// / cycle validation / topological ordering exactly like `imports`);
-    /// `supersedes` and `conflicts-with` are NON-structural (linter-only,
-    /// WO03 Lane E) — see [`EdgeKind::is_structural`].
+    /// Edge kind — 5 values (WO13_CONTRACT.md §7.1). `conditional` is gone
+    /// (a `conditional` edge is now `imports` + a typed [`EdgeGuard`]);
+    /// `supersedes` is gone (a `supersedes` edge now deprecates its target
+    /// and is deleted by migration); `conflicts-with` is renamed
+    /// `contradicts`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "kebab-case")]
     pub enum EdgeKind {
         Imports,
         References,
-        Conditional,
-        Sequence,
         Overrides,
-        Supersedes,
-        ConflictsWith,
+        Sequence,
+        Contradicts,
     }
 
     /// Every [`EdgeKind`] value, in the contract's enumeration order.
-    pub const EDGE_KINDS: [EdgeKind; 7] = [
+    pub const EDGE_KINDS: [EdgeKind; 5] = [
         EdgeKind::Imports,
         EdgeKind::References,
-        EdgeKind::Conditional,
-        EdgeKind::Sequence,
         EdgeKind::Overrides,
-        EdgeKind::Supersedes,
-        EdgeKind::ConflictsWith,
+        EdgeKind::Sequence,
+        EdgeKind::Contradicts,
     ];
 
     impl EdgeKind {
         /// True for edge kinds that participate in Kahn's algorithm / cycle
-        /// validation / topological ordering — `imports` and `sequence`
-        /// (unchanged since v1) plus the new `overrides`. False for edge kinds
-        /// that exist only for the linter (`references`, `conditional`,
-        /// `supersedes`, `conflicts-with`) and never affect compile order.
-        /// Lanes B (`compile.rs`) and E (`lint.rs`) call this rather than
-        /// re-deriving the structural/non-structural split.
+        /// validation / topological ordering — `imports`, `sequence` and
+        /// `overrides`. UNCHANGED MEANING across v3/v4/v5 (WO13_CONTRACT.md
+        /// §9: this predicate answers "participates in ordering", not the
+        /// edge spec's "structural" == "affects compiled output" sense —
+        /// that sense is [`EdgeKind::affects_output`]). False for
+        /// `references` and `contradicts`, which never affect compile order.
         pub fn is_structural(self) -> bool {
             matches!(self, EdgeKind::Imports | EdgeKind::Sequence | EdgeKind::Overrides)
         }
+
+        /// The edge spec's own sense of "structural": does this kind ever
+        /// change what lands in a compiled file? Everything except
+        /// `contradicts` (WO13_CONTRACT.md §9) — deliberately a DIFFERENT
+        /// predicate from [`is_structural`](Self::is_structural), which
+        /// answers Kahn-participation only. Conflating the two would put
+        /// every `references` `@path` pointer into the topological order,
+        /// inventing cycles on graphs that have none.
+        pub fn affects_output(self) -> bool {
+            !matches!(self, EdgeKind::Contradicts)
+        }
+    }
+
+    /// Ordering participation for a CONCRETE edge (WO13_CONTRACT.md §9). A
+    /// guarded `imports` edge is conditional content, exactly as the old
+    /// `conditional` kind was, and must NOT enter Kahn's algorithm — doing
+    /// so would change `total_order` and therefore the order of
+    /// `## Always read` and of `.cursor/rules/*.mdc`. `compile.rs`'s
+    /// `total_order` and `lint.rs`'s `check_cycle` both key on this instead
+    /// of `EdgeKind::is_structural` alone (R1/R2 wiring, not this lane's).
+    pub fn edge_participates_in_order(kind: EdgeKind, guarded: bool) -> bool {
+        kind.is_structural() && !guarded
     }
 
     /// Compile target. `copilot` / `gemini` are new in v3 and OFF by default —
@@ -449,9 +489,10 @@ mod graph_v3 {
         }
     }
 
-    /// `condition`/`note` treat an empty string the same as absent (matches
-    /// `stableEdge` in `src/store/graph.ts`): an edge that once had one and
-    /// lost it serializes without the key rather than as `""`.
+    /// `note`/`color`/`owner` treat an empty string the same as absent
+    /// (matches `stableEdge`/`stableNode` in `src/store/graph.ts`): a
+    /// field that once had a value and lost it serializes without the key
+    /// rather than as `""`.
     fn is_empty_string_opt(o: &Option<String>) -> bool {
         match o {
             None => true,
@@ -468,7 +509,47 @@ mod graph_v3 {
         }
     }
 
-    /// A Memory Node (v3 shape). Field declaration order here IS the wire
+    /// `rootLoad` (v5): the only legal value is `Always`; "on-demand" is
+    /// expressed by absence (`Option::None`) — a single-variant optional
+    /// enum makes the two-serializer parity landmine unrepresentable
+    /// (WO13_CONTRACT.md §4.1).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum RootLoad {
+        Always,
+    }
+
+    /// `deprecated` (v5). Field declaration order here IS the wire order —
+    /// `replacedBy`, `since?`, `reason?` — frozen (§4.1). `since` is a
+    /// `YYYY-MM-DD` string; migration NEVER stamps it (§5.5) — only a
+    /// user-initiated deprecation in the UI does, and only the TS side
+    /// computes the date (Rust never calls `now()` for it), or the two
+    /// serializers would disagree on bytes for the same graph.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Deprecated {
+        pub replaced_by: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub since: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub reason: Option<String>,
+    }
+
+    /// `guard` (v5): the typed replacement for the old free-text
+    /// `condition` string on a `conditional` edge. `#[serde(tag = "type")]`
+    /// emits the tag first, matching the TS object-literal field order
+    /// (§4.2: "Inner key order, frozen: `type` first, then `globs` (glob)
+    /// or `text` (description)"). A glob guard with an empty `globs` array
+    /// is invalid and normalized away by migration; the UI must never be
+    /// able to construct one.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(tag = "type", rename_all = "lowercase")]
+    pub enum EdgeGuard {
+        Glob { globs: Vec<String> },
+        Description { text: String },
+    }
+
+    /// A Memory Node (v5 shape). Field declaration order here IS the wire
     /// order — see [`serialize_graph`]. Mirrors `MemoryNode` in
     /// `src/store/graph.ts`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -482,8 +563,10 @@ mod graph_v3 {
         pub file_path: String,
         #[serde(default)]
         pub read_order: i64,
-        #[serde(default)]
-        pub pinned: bool,
+        /// v5: replaces `pinned: bool`. Slot 7 — exactly where `pinned`
+        /// was. Absent ⇒ on-demand.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root_load: Option<RootLoad>,
         #[serde(default)]
         pub position: Position,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -494,9 +577,21 @@ mod graph_v3 {
         /// (contract: "new fields must be OMITTED when at default value").
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub tags: Vec<String>,
-        /// v3: optional owner/assignee.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// v3: optional owner/assignee. `""` is treated the same as absent
+        /// (v5, §4.1 row 12 — was plain `Option::is_none` pre-v5).
+        #[serde(default, skip_serializing_if = "is_empty_string_opt")]
         pub owner: Option<String>,
+        /// v5: set by a `supersedes` edge during migration, or by a
+        /// user-initiated deprecation in the UI (TS-side only stamps
+        /// `since`; migration never does — §5.5).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub deprecated: Option<Deprecated>,
+        /// v5: `true` ⇒ absent; `false` ⇒ omitted (§4.1 row 14 — "`false` ⇒
+        /// absent"). Set only where a migration pass actually rewrote a
+        /// value (§5.2) or by explicit user action; never re-fires on an
+        /// unchanged value.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub needs_review: bool,
         /// v3: reserved extension map. Keys serialize sorted — `BTreeMap`
         /// (and `serde_json::Value`'s own default non-`preserve_order` `Map`,
         /// used for nested object values) are both alphabetical — so output
@@ -505,7 +600,7 @@ mod graph_v3 {
         pub meta: Option<BTreeMap<String, Value>>,
     }
 
-    /// A Memory Edge (v3 shape). Field declaration order here IS the wire
+    /// A Memory Edge (v5 shape). Field declaration order here IS the wire
     /// order. Mirrors `MemoryEdge` in `src/store/graph.ts`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -514,14 +609,16 @@ mod graph_v3 {
         pub source: String,
         pub target: String,
         pub kind: EdgeKind,
-        /// Glob or natural-language condition (`conditional` edges only).
-        #[serde(default, skip_serializing_if = "is_empty_string_opt")]
-        pub condition: Option<String>,
+        /// v5: replaces `condition: Option<String>`. Slot 5 — exactly where
+        /// `condition` was. Legal on every kind except `contradicts`
+        /// (migration strips it there — §5.1 pass 12).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub guard: Option<EdgeGuard>,
         /// Human hint rendered on the edge label.
         #[serde(default, skip_serializing_if = "is_empty_string_opt")]
         pub note: Option<String>,
         /// v3: edge colour override (backlog "edge colour persistence" row).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "is_empty_string_opt")]
         pub color: Option<String>,
         /// v4 (WO10): hand-edited route — flow-space points the router must
         /// pass through, in order, between source and target. Empty ⇒ the
@@ -532,7 +629,7 @@ mod graph_v3 {
         pub waypoints: Vec<Position>,
     }
 
-    /// `graph.json` shape (v3). Mirrors `BarnGraph` in `src/store/graph.ts`.
+    /// `graph.json` shape (v5). Mirrors `BarnGraph` in `src/store/graph.ts`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct BarnGraph {
@@ -545,67 +642,278 @@ mod graph_v3 {
         pub compile_targets: Vec<CompileTarget>,
     }
 
-    /// The 13 [`NodeRole`] wire values, as raw strings, used only by
-    /// [`migrate_graph`] tolerance pre-pass (WO03 audit D6), kept apart
+    /// The 14 [`NodeRole`] wire values, as raw strings, used only by
+    /// [`migrate_graph`]'s tolerance pre-pass (§5.1 pass 5), kept apart
     /// from [`NODE_ROLES`] (typed values) so that pre-pass stays a plain
     /// string comparison over raw JSON.
-    const KNOWN_NODE_ROLE_STRS: [&str; 13] = [
-        "agent", "rules", "architecture", "workflow", "task", "reference", "glossary", "command",
-        "invariant", "trap", "skill", "snippet", "style",
+    const KNOWN_NODE_ROLE_STRS: [&str; 14] = [
+        "agent", "rule", "invariant", "trap", "architecture", "decision", "workflow", "command",
+        "skill", "env", "tool", "glossary", "example", "style",
     ];
-    /// The 7 [`EdgeKind`] wire values, as raw strings, same purpose as
+    /// The 5 [`EdgeKind`] wire values, as raw strings, same purpose as
     /// [`KNOWN_NODE_ROLE_STRS`].
-    const KNOWN_EDGE_KIND_STRS: [&str; 7] = [
-        "imports", "references", "conditional", "sequence", "overrides", "supersedes",
-        "conflicts-with",
-    ];
+    const KNOWN_EDGE_KIND_STRS: [&str; 5] =
+        ["imports", "references", "overrides", "sequence", "contradicts"];
     /// The 5 [`CompileTarget`] wire values, as raw strings, same purpose as
     /// [`KNOWN_NODE_ROLE_STRS`].
     const KNOWN_COMPILE_TARGET_STRS: [&str; 5] = ["claude", "agents", "cursor", "copilot", "gemini"];
 
+    /// A condition is a glob iff it has no whitespace and at least one of
+    /// `*`, `?`, `[`, `/`; otherwise it is natural language (§5.4). The
+    /// SAME predicate `compile.rs` used to keep as a private `is_glob` —
+    /// moved here (Stage 0, WO13_CONTRACT.md §5.4) so [`migrate_graph`] and
+    /// `compile.rs` share one definition instead of two that could drift.
+    /// R1 deletes `compile.rs`'s private copy and re-points it here.
+    pub fn is_glob_condition(condition: &str) -> bool {
+        !condition.chars().any(char::is_whitespace)
+            && condition.chars().any(|c| matches!(c, '*' | '?' | '[' | '/'))
+    }
+
+    /// Pass 3+4+5 (§5.1): node role rewrite. Mutates `node["role"]` in place
+    /// and stamps `node["needsReview"] = true` exactly where §5.2 says to.
+    /// Order matters: `persona` → `agent` (pass 3) must run before the v4→v5
+    /// rename table (pass 4) or `agent` would never be reached from
+    /// `persona` directly (harmless here since `agent` isn't renamed, but
+    /// the ordering is the frozen contract, not an accident of this
+    /// implementation); the rename table must run before the unknown-role
+    /// catch-all (pass 5) or every renamed v4 role would first be seen as
+    /// unknown.
+    fn migrate_node_role(node: &mut Value) {
+        // Pass 3: v1's "persona" → "agent" (unchanged semantics).
+        if node.get("role").and_then(Value::as_str) == Some("persona") {
+            node["role"] = Value::String("agent".to_string());
+        }
+        // Pass 4: v4 → v5 rename table (§6.2). Only the four that actually
+        // change are listed; every other v4 role name is already a valid
+        // v5 role name and needs no rewrite.
+        let renamed: Option<(&str, bool)> = match node.get("role").and_then(Value::as_str) {
+            Some("rules") => Some(("rule", false)),
+            Some("task") => Some(("workflow", true)),
+            Some("reference") => Some(("architecture", true)),
+            Some("snippet") => Some(("example", false)),
+            _ => None,
+        };
+        if let Some((new_role, flag_review)) = renamed {
+            node["role"] = Value::String(new_role.to_string());
+            if flag_review {
+                node["needsReview"] = Value::Bool(true);
+            }
+        }
+        // Pass 5: still not a known v5 role ⇒ neutral fallback + review flag.
+        let known = matches!(
+            node.get("role").and_then(Value::as_str),
+            Some(r) if KNOWN_NODE_ROLE_STRS.contains(&r)
+        );
+        if !known {
+            node["role"] = Value::String("architecture".to_string());
+            node["needsReview"] = Value::Bool(true);
+        }
+    }
+
+    /// Pass 6+7 (§5.1): `pinned: bool` → `rootLoad?: "always"`. `pinned` is
+    /// deleted unconditionally (idempotence law (a): the key it's keyed on
+    /// no longer exists after this runs). Pass 7 then discards any
+    /// `rootLoad` value other than `"always"` — defensive tolerance for a
+    /// hand-edited or downstream-written stray value; it never touches what
+    /// pass 6 itself just set, since pass 6 only ever writes `"always"` or
+    /// nothing.
+    fn migrate_node_root_load(node: &mut Value) {
+        let pinned = node.get("pinned").and_then(Value::as_bool).unwrap_or(false);
+        if pinned {
+            node["rootLoad"] = Value::String("always".to_string());
+        }
+        if let Some(obj) = node.as_object_mut() {
+            obj.remove("pinned");
+        }
+        let valid_root_load = node.get("rootLoad").and_then(Value::as_str) == Some("always");
+        if node.get("rootLoad").is_some() && !valid_root_load {
+            if let Some(obj) = node.as_object_mut() {
+                obj.remove("rootLoad");
+            }
+        }
+    }
+
+    /// Pass 8 (§5.1, §5.4): `conditional` edges become `imports` + a typed
+    /// [`EdgeGuard`], classified by [`is_glob_condition`] — the SAME
+    /// predicate `compile.rs`'s `emit_cursor`/`on_demand_bullets` use. The
+    /// `condition` key is deleted unconditionally, on every edge, not just
+    /// former-`conditional` ones (idempotence law (a) — and a defensive
+    /// clean-up of any stray `condition` a hand edit might have left on a
+    /// different kind). An absent or empty `condition` produces a bare,
+    /// unguarded `imports` edge — no guard at all.
+    fn migrate_edge_conditional(edge: &mut Value) {
+        if edge.get("kind").and_then(Value::as_str) == Some("conditional") {
+            let condition = edge
+                .get("condition")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            edge["kind"] = Value::String("imports".to_string());
+            if let Some(c) = condition {
+                edge["guard"] = if is_glob_condition(&c) {
+                    serde_json::json!({ "type": "glob", "globs": [c] })
+                } else {
+                    serde_json::json!({ "type": "description", "text": c })
+                };
+            }
+        }
+        if let Some(obj) = edge.as_object_mut() {
+            obj.remove("condition");
+        }
+    }
+
+    /// Pass 9 (§5.1, §5.5): `supersedes` edges deprecate their target and
+    /// are deleted. Processed in BYTE ORDER of edge id (not array order) so
+    /// "the lowest-id edge wins when a node is superseded twice" is
+    /// deterministic regardless of input ordering. `since`/`reason` are
+    /// never set here — migration never stamps a date (§5.5); only a
+    /// user-initiated deprecation in the TS-side UI does.
+    fn migrate_supersedes(value: &mut Value) {
+        let mut supersedes: Vec<(String, String, String)> = Vec::new();
+        if let Some(edges) = value.get("edges").and_then(Value::as_array) {
+            for e in edges {
+                if e.get("kind").and_then(Value::as_str) == Some("supersedes") {
+                    if let (Some(id), Some(source), Some(target)) = (
+                        e.get("id").and_then(Value::as_str),
+                        e.get("source").and_then(Value::as_str),
+                        e.get("target").and_then(Value::as_str),
+                    ) {
+                        supersedes.push((id.to_string(), source.to_string(), target.to_string()));
+                    }
+                }
+            }
+        }
+        // Byte order of edge id — `String`'s `Ord` is byte order (WO03 D5's
+        // established rule throughout this module).
+        supersedes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
+            for (_, source, target) in &supersedes {
+                for node in nodes.iter_mut() {
+                    if node.get("id").and_then(Value::as_str) == Some(target.as_str()) {
+                        if node.get("deprecated").is_none() {
+                            node["deprecated"] = serde_json::json!({ "replacedBy": source });
+                        }
+                        node["needsReview"] = Value::Bool(true);
+                    }
+                }
+            }
+        }
+        if let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) {
+            edges.retain(|e| e.get("kind").and_then(Value::as_str) != Some("supersedes"));
+        }
+    }
+
+    /// Pass 10+11 (§5.1): `conflicts-with` → `contradicts`, then any edge
+    /// kind still not one of the 5 v5 values falls back to `references`
+    /// (non-structural, same no-op-for-ordering class as before).
+    fn migrate_edge_kind_rename(edge: &mut Value) {
+        if edge.get("kind").and_then(Value::as_str) == Some("conflicts-with") {
+            edge["kind"] = Value::String("contradicts".to_string());
+        }
+        let known = matches!(
+            edge.get("kind").and_then(Value::as_str),
+            Some(k) if KNOWN_EDGE_KIND_STRS.contains(&k)
+        );
+        if !known {
+            edge["kind"] = Value::String("references".to_string());
+        }
+    }
+
+    /// Pass 12 (§5.1): `guard` is illegal on `contradicts` (edge spec A2) —
+    /// strip it. Nothing else is deleted; a `contradicts` edge keeps its
+    /// `note`/`color`/`waypoints`.
+    fn strip_illegal_guard(edge: &mut Value) {
+        if edge.get("kind").and_then(Value::as_str) == Some("contradicts") {
+            if let Some(obj) = edge.as_object_mut() {
+                obj.remove("guard");
+            }
+        }
+    }
+
+    /// Pass 13 (§5.1, §5.6): `contradicts` normalization + dedupe. Step 1:
+    /// canonicalize every `contradicts` edge to `source < target` byte-wise
+    /// (a fixed point — re-running never swaps twice). Step 2: group by the
+    /// canonical `(source, target)` pair; keep only the lowest-id edge in
+    /// byte order, deleting every other edge in the group OUTRIGHT —
+    /// including its `note`/`color`/`waypoints` (the frozen, lossy
+    /// behaviour §5.6 calls out, exercised by the `e09-x` fixture case).
+    /// Both steps are fixed points, so a second pass is a no-op.
+    fn migrate_contradicts(value: &mut Value) {
+        let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) else {
+            return;
+        };
+        for e in edges.iter_mut() {
+            if e.get("kind").and_then(Value::as_str) != Some("contradicts") {
+                continue;
+            }
+            let source = e.get("source").and_then(Value::as_str).unwrap_or("").to_string();
+            let target = e.get("target").and_then(Value::as_str).unwrap_or("").to_string();
+            if source > target {
+                e["source"] = Value::String(target);
+                e["target"] = Value::String(source);
+            }
+        }
+
+        let mut winner: BTreeMap<(String, String), String> = BTreeMap::new();
+        for e in edges.iter() {
+            if e.get("kind").and_then(Value::as_str) != Some("contradicts") {
+                continue;
+            }
+            let key = (
+                e.get("source").and_then(Value::as_str).unwrap_or("").to_string(),
+                e.get("target").and_then(Value::as_str).unwrap_or("").to_string(),
+            );
+            let id = e.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            winner
+                .entry(key)
+                .and_modify(|cur| {
+                    if id < *cur {
+                        *cur = id.clone();
+                    }
+                })
+                .or_insert(id);
+        }
+        edges.retain(|e| {
+            if e.get("kind").and_then(Value::as_str) != Some("contradicts") {
+                return true;
+            }
+            let key = (
+                e.get("source").and_then(Value::as_str).unwrap_or("").to_string(),
+                e.get("target").and_then(Value::as_str).unwrap_or("").to_string(),
+            );
+            let id = e.get("id").and_then(Value::as_str).unwrap_or("");
+            winner.get(&key).is_some_and(|w| w == id)
+        });
+    }
+
     /// Migration harness (mirrors `migrateGraph` in `src/store/graph.ts`).
-    /// Accepts v1..v4 `graph.json` bytes and returns the current (v4)
-    /// shape in one read — a v1 graph migrates v1→v2→v3→v4 without an
-    /// intermediate write. v1→v2: `persona` role renamed to `agent` (same
-    /// semantics). v2→v3: pure default-filling (new node/edge fields absent
-    /// ⇒ their v3 defaults; v2's 7 roles and 4 edge kinds are already valid
-    /// v3 values, so nothing else changes there). v3→v4: pure
-    /// default-filling again — the only new field is the edge's
-    /// `waypoints`, absent ⇒ empty ⇒ the automatic route. Both
-    /// default-filling steps need no code here: `#[serde(default)]` on
-    /// every new field does the work, which is why this function's body
-    /// only ever grows a step when a rename or a reshape lands.
-    /// Idempotent: migrating an
-    /// already-current graph only re-normalizes to the typed shape (e.g. a stale
-    /// non-current `version` value is corrected). `Err` for unparseable JSON,
-    /// an out-of-range version, or a missing/non-array `nodes`/`edges` —
-    /// mirrors the TS function's strictness there (no silent default to `[]`).
+    /// NOT a version chain (WO13_CONTRACT.md §5): a set of `serde_json::Value`
+    /// pre-passes keyed on string values, run unconditionally on every load
+    /// regardless of the input's `version`, in the exact order of §5.1's
+    /// table — v1's `persona`→`agent` rename included, so a v1 graph
+    /// migrates to v5 in one read with no intermediate write. Idempotence
+    /// law: every pass is either (a) keyed on a value/key that no longer
+    /// exists after it runs, or (b) a projection onto a canonical form (a
+    /// fixed point by construction) — see each pass's own doc comment.
+    /// `Err` for unparseable JSON, an out-of-range version, or a
+    /// missing/non-array `nodes`/`edges` — mirrors the TS function's
+    /// strictness there (no silent default to `[]`).
     ///
-    /// WO03 audit D6 — unrecognized role/kind/target strings are coerced,
-    /// not rejected. The app itself tolerates them (`compile.rs`'s
-    /// `RoleIn`/`EdgeKindIn`/`TargetIn` parse anything unrecognized into an
-    /// `Other`/`Unknown` fallback; the TS store casts without validating),
-    /// so a hand-edited `graph.json` with a typo in `role` loads, renders,
-    /// and compiles fine in the app; it must not then hard-fail
-    /// `migrate_graph` (and by extension `lint_run` / `import_apply` /
-    /// `cowtext-cli`) for an infrastructure reason. Unlike `compile.rs`,
-    /// [`NodeRole`]/[`EdgeKind`]/[`CompileTarget`] are deliberately CLOSED
-    /// enums here (no `#[serde(other)]` fallback variant): `import.rs`'s
-    /// `edge_kind_slug` and `lint.rs`'s `edge_kind_name` both exhaustively
-    /// match `EdgeKind` with no wildcard arm, outside this lane's zone;
-    /// widening the enum would require touching those files too. So
-    /// instead of preserving an unrecognized string, this coerces it to a
-    /// neutral default before typed deserialization: an unknown node role
-    /// becomes `reference` (matches `src/preset/types.ts`'s `asRole`
-    /// fallback), an unknown edge kind becomes `references`
-    /// (non-structural, same no-op-for-ordering class as `compile.rs`'s
-    /// `EdgeKindIn::Unknown`), and an unknown compile target is dropped
-    /// from the array. This is a deliberate, audit-flagged exception to
-    /// "preserve unknown values on round-trip" — the trade is documented
-    /// rather than silently made.
+    /// WO03 audit D6's tolerance posture carries forward unchanged: unlike
+    /// `compile.rs`'s `RoleIn`/`EdgeKindIn`/`TargetIn`, [`NodeRole`]/
+    /// [`EdgeKind`]/[`CompileTarget`] are deliberately CLOSED enums here (no
+    /// `#[serde(other)]` fallback variant) — `import.rs`'s `edge_kind_slug`
+    /// and `lint.rs`'s `edge_kind_name` both exhaustively match `EdgeKind`
+    /// with no wildcard arm, outside this lane's zone. So an unrecognized
+    /// role/kind/target is coerced to a neutral default before typed
+    /// deserialization rather than preserved — the v5 fallback for an
+    /// unrecognized role is `architecture` (+ `needsReview`), not v4's
+    /// `reference` (§5.1 pass 5 note: `reference` no longer exists).
     pub fn migrate_graph(raw: &str) -> Result<BarnGraph, String> {
         let mut value: Value = serde_json::from_str(raw).map_err(|e| format!("graph.json: {e}"))?;
 
+        // Pass 1: version range check.
         let version = value
             .get("version")
             .and_then(Value::as_u64)
@@ -614,42 +922,52 @@ mod graph_v3 {
             return Err(format!("Unsupported graph.json version: {version}"));
         }
 
+        // Pass 2: nodes/edges present and arrays.
         if !matches!(value.get("nodes"), Some(Value::Array(_)))
             || !matches!(value.get("edges"), Some(Value::Array(_)))
         {
             return Err("graph.json is missing nodes/edges arrays".to_string());
         }
 
-        // v1 → v2: "persona" role renamed to "agent"; D6: any other
-        // unrecognized role coerced to "reference" (see doc comment above).
+        // Passes 3-5 (role), then 6-7 (pinned → rootLoad).
         if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
-            for node in nodes {
-                match node.get("role").and_then(Value::as_str) {
-                    Some("persona") => node["role"] = Value::String("agent".to_string()),
-                    Some(r) if !KNOWN_NODE_ROLE_STRS.contains(&r) => {
-                        node["role"] = Value::String("reference".to_string());
-                    }
-                    _ => {}
-                }
+            for node in nodes.iter_mut() {
+                migrate_node_role(node);
+                migrate_node_root_load(node);
             }
         }
 
-        // D6: unrecognized edge kind coerced to "references" (non-structural).
+        // Pass 8 (conditional → imports+guard) must run before 9's removal
+        // pass touches the edges array shape, and well before 10/11 or a
+        // `conditional` edge would be flattened to `references`, losing its
+        // condition.
         if let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) {
-            for edge in edges {
-                if let Some(k) = edge.get("kind").and_then(Value::as_str) {
-                    if !KNOWN_EDGE_KIND_STRS.contains(&k) {
-                        edge["kind"] = Value::String("references".to_string());
-                    }
-                }
+            for edge in edges.iter_mut() {
+                migrate_edge_conditional(edge);
             }
         }
+        // Pass 9 (supersedes → deprecate + delete) must run before 10/11 or
+        // an unconverted `supersedes` edge falls into 11's `references`
+        // catch-all, losing the deprecation entirely.
+        migrate_supersedes(&mut value);
+        // Passes 10-11 (conflicts-with → contradicts; unknown → references),
+        // then 12 (strip illegal guard on contradicts).
+        if let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) {
+            for edge in edges.iter_mut() {
+                migrate_edge_kind_rename(edge);
+                strip_illegal_guard(edge);
+            }
+        }
+        // Pass 13: contradicts normalization + dedupe.
+        migrate_contradicts(&mut value);
 
-        // D6: unrecognized compile target dropped from the array.
+        // Pass 14: unrecognized compile target dropped from the array
+        // (unchanged from v4).
         if let Some(Value::Array(targets)) = value.get_mut("compileTargets") {
             targets.retain(|t| t.as_str().is_some_and(|s| KNOWN_COMPILE_TARGET_STRS.contains(&s)));
         }
 
+        // Pass 15: typed deserialization; stamp version = 5.
         let mut graph: BarnGraph =
             serde_json::from_value(value).map_err(|e| format!("graph.json: {e}"))?;
         graph.version = GRAPH_VERSION;
@@ -686,7 +1004,7 @@ mod graph_v3 {
     }
 }
 #[allow(unused_imports)]
-pub use graph_v3::*;
+pub use graph_v5::*;
 
 /// Read `.cowtext/graph.json`. `Ok(None)` when the project has no graph yet.
 #[tauri::command]
@@ -700,11 +1018,37 @@ pub fn read_graph(root: String) -> Result<Option<String>, String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Relative path of the one-time pre-v5 backup (WO13_CONTRACT.md §5.8).
+const GRAPH_V4_BAK_REL_PATH: &str = ".cowtext/graph.v4.bak.json";
+
 /// Write `.cowtext/graph.json` atomically. The webview is responsible for
 /// stable serialization (fixed field order, LF, trailing newline).
+///
+/// WO13 §5.8: migration is irreversible (`migrate_graph` hard-rejects
+/// `version > GRAPH_VERSION`), so before the FIRST write that would
+/// overwrite a pre-v5 (`version <= 4`) `graph.json`, this takes exactly one
+/// backup at `.cowtext/graph.v4.bak.json` — the pre-migration bytes,
+/// verbatim. Deliberately placed here, not in `read_graph`: this is the only
+/// place that holds the pre-migration bytes on disk immediately before
+/// overwriting them, and it is already the sole writer. Never overwrites an
+/// existing backup. A failed backup write is a hard `Err` — the
+/// irreversible write does not proceed (the `?` below aborts before
+/// `write_atomic(&path, ...)` runs).
 #[tauri::command]
 pub fn write_graph(root: String, content: String) -> Result<(), String> {
-    let path = checked_root(&root)?.join(GRAPH_REL_PATH);
+    let root_path = checked_root(&root)?;
+    let path = root_path.join(GRAPH_REL_PATH);
+    let bak = root_path.join(GRAPH_V4_BAK_REL_PATH);
+    if path.is_file() && !bak.is_file() {
+        let old = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let is_pre_v5 = serde_json::from_str::<Value>(&old)
+            .ok()
+            .and_then(|v| v.get("version").and_then(Value::as_u64).map(|n| n <= 4))
+            .unwrap_or(false);
+        if is_pre_v5 {
+            write_atomic(&bak, &old)?;
+        }
+    }
     write_atomic(&path, &content)
 }
 

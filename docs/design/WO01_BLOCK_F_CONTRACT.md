@@ -200,12 +200,17 @@ sessions::agent_session_list` → **50 commands**.
 
 ### 4.1 Semantics, frozen
 
-- **`worktree_check`** — one `git -C <path> rev-parse --is-inside-work-tree --absolute-git-dir
-  --git-common-dir --abbrev-ref HEAD` invocation. Non-zero exit or "not a git repository" in
-  stderr → `Ok(WorktreeInfo { isRepo: false, isWorktree: false, branch: None, .. })` (**not**
-  an `Err` — "this folder isn't a repo" is an answer, not a failure). `git` missing entirely →
-  `Err("git not found on PATH")`. `isWorktree = absolute-git-dir != git-common-dir` (path
-  compare, normalized). `branch = "HEAD"` (detached) → `None`.
+- **`worktree_check`** — **AMENDED 2026-08-20, see §12 D8.** One `git -C <path> rev-parse
+  --is-inside-work-tree --absolute-git-dir --git-common-dir` invocation (the `--abbrev-ref HEAD`
+  flag from the original byte-exact set is **dropped**), followed by a second, independent
+  `git -C <path> symbolic-ref --short HEAD` for the branch name. Non-zero exit from the
+  three-flag call → `Ok(WorktreeInfo { isRepo: false, isWorktree: false, branch: None, .. })`
+  (**not** an `Err` — "this folder isn't a repo" is an answer, not a failure). `git` missing
+  entirely → `Err("git not found on PATH")`. `isWorktree = absolute-git-dir != git-common-dir`
+  (path compare, normalized). `branch` comes from the second `symbolic-ref` call: non-zero exit
+  (detached HEAD, **or** an unborn HEAD on a repo with zero commits) → `None`. The error string
+  and the `WorktreeInfo` wire shape are **UNCHANGED** by this amendment — only the number and
+  shape of the underlying `git` invocations changed.
 - **`worktree_add`** — refuses when: `repo_path` is not a repo, `new_path` exists and is a
   non-empty directory, `new_path` is inside `repo_path/.git`, or `branch` is empty / contains
   whitespace or any of `~^:?*[\`. Runs
@@ -762,3 +767,44 @@ Green before the dispatcher commits:
 - **Open risk 2:** `taskkill /T /F` is a hard kill — an agent mid-write can leave a partial file
   in its worktree. Accepted for an MVP Kill button; a graceful stop belongs to Phase 8.
 - **Open risk 3:** transcripts do not survive a reload (§7 `hydrate`). Recorded, not fixed.
+- **D8 — `worktree_check`'s byte-exact flag set (§4.1) is amended, ratified 2026-08-20 (lane
+  `git-truth`, WO12).** Root cause, verified by reading `worktree.rs`, not guessed: the original
+  composite invocation included `--abbrev-ref HEAD`. `git rev-parse` exits 128 for the **whole**
+  invocation when any one of its arguments fails to resolve, and `--abbrev-ref HEAD` fails on an
+  unborn HEAD — so **every commitless repository read as "not a git repository"**, including
+  every repo Cowtext's own `git_init` had just created (it deliberately makes no first commit;
+  §4.1 "no commit, no remote, no config, no first `add`"). Symptom: Add-agent's Spawn flow
+  (`sessions.rs`, "\<path\> is not a git repository") rejected a folder the app's own Git wizard
+  had just shown a green `repo` badge for — `git.rs`'s `git_status` gets it right because it
+  issues `--is-inside-work-tree` alone, which is why the contradiction was visible in-app.
+  **Fix, `worktree.rs` only:** drop `--abbrev-ref HEAD` from the composite `rev-parse` call
+  (now three flags, not four); add a second, independent `git -C <path> symbolic-ref --short
+  HEAD` call for the branch name, `None` on any non-zero exit (detached HEAD, or the same
+  unborn-HEAD case, now scoped to just `branch` instead of the whole answer). `git.rs`'s own
+  `probe_status` (`git_status`'s branch field, via `rev-parse --abbrev-ref HEAD`) has the same
+  latent bug but is explicitly **out of scope** for this fix — ratified as `worktree.rs`-only,
+  not touched. The error string and the `WorktreeInfo` wire shape (§4/§4.1) are **unchanged**;
+  only the underlying `git` invocation(s) changed. See §4.1 for the amended flag set.
+- **D1a — the `.gitignore` preset chip's checkbox square (`GitWizard.tsx`) was dead**, ratified
+  2026-08-20 (lane `git-truth`, WO12). Root cause: `CheckSquare` rendered a `<button
+  role="checkbox">` nested inside the preset chip's own `<button>`; neither handler called
+  `stopPropagation`, so a click on the inner square fired `togglePreset` twice in one event (the
+  functional set-toggle net-cancelled), and the markup was invalid HTML (`<button>` inside
+  `<button>`). Fix: `CheckSquare` gained an `interactive?: boolean` prop (default `true`); when
+  `false` it renders a `<span role="presentation">` with identical geometry and no handler of its
+  own, and the preset chip's outer `<button>` alone carries `role="checkbox"` +
+  `aria-checked` + the single `onClick`. The "I've reviewed this diff" call site is unchanged
+  (a labelable `<button>` inside a `<label>` does not double-fire).
+- **D1b — no default-branch choice at `git init`**, ratified 2026-08-20 (lane `git-truth`,
+  WO12). `git_init` gains a second parameter, `branch: Option<String>` (Rust) /
+  `branch: string | null` (TS) — an arity change, transparent to `generate_handler!`, no `lib.rs`
+  edit, no invoke-count change. Validated with `worktree::validate_branch` (bumped
+  `pub(crate)`, shared with `worktree_add`'s rule set; gained three checks: a leading `-`, a `..`
+  anywhere, a trailing `.lock`) **before** any filesystem mutation. Not `git init -b <name>`
+  (needs git ≥ 2.28); instead a version-safe two-step: probe whether the directory is already a
+  repo (read-only `rev-parse --is-inside-work-tree`); only when it was **not** already a repo,
+  run `init` then `symbolic-ref HEAD refs/heads/<name>`. Re-running `git_init` on an existing
+  repo skips both steps entirely — `branch` is validated but never acted on, so the wizard can
+  never silently move an existing repo's HEAD. `GitWizard.tsx` offers a `main` / `master` /
+  `custom` segmented control, defaulting to `main`, disabling Init while a custom name is empty
+  or fails the same client-side rule mirror (`isValidBranchName`) as `validate_branch`.

@@ -35,4 +35,13 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
     },
   },
+  // WO13_CONTRACT.md §15: Vitest test files get the vitest globals
+  // (describe/it/expect/vi/...) on top of the browser globals above —
+  // `no-explicit-any` stays ON, same as every other file (§15's own rule).
+  {
+    files: ["src/**/*.test.ts"],
+    languageOptions: {
+      globals: globals.vitest,
+    },
+  },
 );

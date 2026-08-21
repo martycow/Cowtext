@@ -14,16 +14,25 @@
 // from tauri-2.11.5/src/webview/mod.rs's `run_invoke_handler` fallback, is
 // exactly `Command {name} not found` — matched narrowly below. Everything
 // else renders as a real error row.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, ListChecks, RefreshCw } from "lucide-react";
 import { useGraphStore } from "../store/graph";
+import { useFocusStore } from "../canvas/types";
 import { lintRun } from "../lint/api";
 import { LINT_CODE_LABELS, type LintItem, type Severity } from "../lint/types";
+
+// WO13 §11.2 — `Severity` gains a third member, `"info"`, once R2 lands the
+// extended lint set. Ranked rather than hardcoded to exactly the two values
+// this file could see before that lands: an unranked severity (a future
+// fourth member) still sorts, just last, instead of a compile error.
+const SEVERITY_RANK: Record<string, number> = { error: 0, warning: 1, info: 2 };
 
 function severityClasses(sev: Severity): string {
   return sev === "error"
     ? "border-danger bg-danger-surface text-danger-text"
-    : "border-amber-border bg-amber-surface text-amber-text";
+    : String(sev) === "info"
+      ? "border-accent-border bg-accent-surface text-accent-text"
+      : "border-amber-border bg-amber-surface text-amber-text";
 }
 
 /** Narrow match on Tauri's own "unregistered command" wording — anything
@@ -73,8 +82,14 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
   const [items, setItems] = useState<LintItem[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [errText, setErrText] = useState<string | null>(null);
+  // WO13 §11 — filter-by-severity. `null` = show every severity; clicking
+  // an active badge again clears the filter rather than requiring a
+  // separate "all" control.
+  const [severityFilter, setSeverityFilter] = useState<Severity | null>(null);
   const saveState = useGraphStore((s) => s.saveState);
   const setSelection = useGraphStore((s) => s.setSelection);
+  const edgesList = useGraphStore((s) => s.edges);
+  const requestFocus = useFocusStore((s) => s.requestFocus);
 
   const refresh = () => {
     setStatus("loading");
@@ -111,11 +126,30 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveState]);
 
-  const errorCount = items.filter((i) => i.severity === "error").length;
-  const warningCount = items.filter((i) => i.severity === "warning").length;
+  // Every severity actually present, ranked error → warning → info (and
+  // anything unranked sorts last rather than erroring — see SEVERITY_RANK).
+  const severities = useMemo(
+    () =>
+      Array.from(new Set(items.map((i) => i.severity))).sort(
+        (a, b) => (SEVERITY_RANK[a] ?? 99) - (SEVERITY_RANK[b] ?? 99),
+      ),
+    [items],
+  );
+  const countBySeverity = useMemo(() => {
+    const counts: Partial<Record<Severity, number>> = {};
+    for (const i of items) counts[i.severity] = (counts[i.severity] ?? 0) + 1;
+    return counts;
+  }, [items]);
+  const visibleItems =
+    severityFilter === null ? items : items.filter((i) => i.severity === severityFilter);
 
   const navigate = (item: LintItem) => {
     setSelection(item.nodeIds ?? [], item.edgeIds ?? []);
+    // Prefer a node id (the common case); fall back to the first flagged
+    // edge's source so an edge-only diagnostic (e.g. `contradicts`,
+    // `edge-legality-warning`) still pans the canvas somewhere.
+    const focusId = item.nodeIds?.[0] ?? edgesList.find((e) => e.id === item.edgeIds?.[0])?.source;
+    if (focusId !== undefined) requestFocus(focusId);
     onNavigate();
   };
 
@@ -138,17 +172,23 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
           </span>
         ) : (
           <>
-            {errorCount > 0 && (
-              <span className="inline-flex h-[17px] items-center rounded-sm border border-danger bg-danger-surface px-1 font-mono text-micro text-danger-text">
-                {errorCount}
-              </span>
-            )}
-            {warningCount > 0 && (
-              <span className="inline-flex h-[17px] items-center rounded-sm border border-amber-border bg-amber-surface px-1 font-mono text-micro text-amber-text">
-                {warningCount}
-              </span>
-            )}
-            {status === "ready" && errorCount === 0 && warningCount === 0 && (
+            {severities.map((sev) => (
+              <button
+                key={sev}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSeverityFilter((cur) => (cur === sev ? null : sev));
+                }}
+                title={`Show only ${sev}`}
+                aria-pressed={severityFilter === sev}
+                className={`inline-flex h-[17px] items-center rounded-sm border px-1 font-mono text-micro transition-opacity duration-fast ${severityClasses(sev)} ${
+                  severityFilter !== null && severityFilter !== sev ? "opacity-40" : ""
+                }`}
+              >
+                {countBySeverity[sev] ?? 0}
+              </button>
+            ))}
+            {status === "ready" && items.length === 0 && (
               <span className="font-mono text-2xs text-content-disabled">none</span>
             )}
           </>
@@ -185,7 +225,12 @@ export function ProblemsPanel({ root, onNavigate }: { root: string; onNavigate: 
           {status === "ready" && items.length === 0 && (
             <li className="px-3 py-2 text-xs text-content-muted">No problems found.</li>
           )}
-          {items.map((item, i) => (
+          {status === "ready" && items.length > 0 && visibleItems.length === 0 && (
+            <li className="px-3 py-2 text-xs text-content-muted">
+              No {severityFilter} problems — {items.length} hidden by the filter.
+            </li>
+          )}
+          {visibleItems.map((item, i) => (
             <ProblemRow key={i} item={item} onNavigate={navigate} />
           ))}
         </ul>

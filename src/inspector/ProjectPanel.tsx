@@ -154,7 +154,7 @@ function EditableTextField({
   );
 }
 
-export function ProjectPanel({ root }: { root: string }) {
+export function ProjectPanel({ root, onOpenGit }: { root: string; onOpenGit: () => void }) {
   const files = useProjectStore((s) => s.files);
   const [meta, setMeta] = useState<ProjectMeta | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -279,9 +279,13 @@ export function ProjectPanel({ root }: { root: string }) {
                 <ReadOnlyField label="Commits" value={git.hasCommits ? "yes" : "none yet"} />
               </>
             )}
-            <p className="text-xs leading-snug text-content-muted">
-              Manage git from the project row's context menu.
-            </p>
+            <button
+              onClick={onOpenGit}
+              className="flex h-control items-center gap-1.5 self-start rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+            >
+              <GitBranch size={13} strokeWidth={1.5} />
+              {git.isRepo ? "Manage .gitignore…" : "Initialize repository…"}
+            </button>
           </>
         )}
       </InspectorSection>

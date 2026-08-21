@@ -4,18 +4,21 @@
 // closed palette (canvas/edgeColor.ts), which overrides the neutral. The
 // palette borrows no role hue, so "colour means role" still holds.
 //
-// SOLID stroke = STRUCTURAL (participates in Kahn ordering / cycle
-// validation, changes compiled output); DASHED/DOTTED = advisory /
-// lint-only (never changes what gets compiled) — contract WO03 §"F —
-// frontend". That split predates v3 (imports/sequence were already solid,
-// references/conditional already dashed) — v3 just extends both families.
-//   imports          3px   solid, pixel arrow                      STRUCTURAL
-//   sequence         3px   solid, pixel chevron + numbered step tag STRUCTURAL
-//   overrides        5px   solid, pixel arrow + trailing bar        STRUCTURAL
-//   references       3px   dash 5 5, open circle                    advisory
-//   conditional      3px   dash 3 5, pixel arrow + condition chip    advisory
-//   supersedes       3px   dash 9 5, hollow square                  advisory
-//   conflicts-with   3px   dash 3 3, cross marker                   advisory
+// v5 (WO13_CONTRACT.md §7, §14.5): 5 kinds. SOLID = affects compiled output
+// (imports/sequence/overrides — the file's-point-of-view "structural" group
+// in KindPicker.tsx); DASHED = advisory, linter-only (references always;
+// contradicts always). A GUARD dashes any kind that can legally carry one
+// (everything but `contradicts`, §7.1) — that is the visual distinction the
+// old `conditional` kind used to own by itself, now available on any of
+// them without a separate menu entry (edge spec E2).
+//   imports          3px   solid, pixel arrow                 (guard → dashed)
+//   sequence         3px   solid, pixel chevron + step tag     (guard → dashed)
+//   overrides        5px   solid, pixel arrow + trailing bar   (guard → dashed)
+//   references       3px   dash 5 5, open circle               (guard → dashed)
+//   contradicts      3px   dash 3 3, cross marker at BOTH ends — no
+//                          arrowhead, ever: §7.2 stores it as a symmetric,
+//                          unordered pair, and an arrow would claim a
+//                          direction that does not exist.
 //
 // ── The three emphasis tones (WO10 items 1 + 2) ──────────────────────────
 //   rest      the kind's colour, or the author's palette override
@@ -35,7 +38,8 @@ import { EDGE_KINDS, useGraphStore, type EdgeKind } from "../store/graph";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
-import { isStructuralEdgeKind } from "./edgeKind";
+import { affectsOutput } from "./edgeKind";
+import { legalityFor } from "../config/edgeRules";
 import { EDGE_COLOR_KEYS, edgeMarkerSuffix, edgeStroke } from "./edgeColor";
 import { dragHandles, moveSegment } from "./edgeEdit";
 import { edgeLabel } from "./edgeVerb";
@@ -51,14 +55,18 @@ import { useEdgeLabelStore, useHighlightStore, type CanvasEdge } from "./types";
 const STROKE: Record<EdgeKind, { width: number; dash?: string }> = {
   imports: { width: 3 },
   references: { width: 3, dash: "5 5" },
-  conditional: { width: 3, dash: "3 5" },
   sequence: { width: 3 },
   overrides: { width: 5 },
-  supersedes: { width: 3, dash: "9 5" },
-  "conflicts-with": { width: 3, dash: "3 3" },
+  contradicts: { width: 3, dash: "3 3" },
 };
 
-type Shape = "arrow" | "circle" | "chevron" | "arrowBar" | "square" | "cross";
+/** A guarded edge renders dashed regardless of its kind's own base style —
+ *  the visual distinction the removed `conditional` kind used to provide by
+ *  itself (§14.5, edge spec E2). `contradicts` can never carry a guard
+ *  (§7.1), so this pattern is never reached for it. */
+const GUARD_DASH = "3 5";
+
+type Shape = "arrow" | "circle" | "chevron" | "arrowBar" | "cross";
 
 /** Which marker shape a kind ends with. The shape carries the kind; the tone
  *  carries the emphasis. Keeping them orthogonal is what makes the def table
@@ -67,9 +75,10 @@ function shapeFor(kind: EdgeKind): Shape {
   if (kind === "references") return "circle";
   if (kind === "sequence") return "chevron";
   if (kind === "overrides") return "arrowBar";
-  if (kind === "supersedes") return "square";
-  if (kind === "conflicts-with") return "cross";
-  return "arrow"; // imports, conditional
+  // contradicts (§7.2): symmetric tension marker, drawn at BOTH ends below —
+  // never an arrowhead, because the relation has no direction.
+  if (kind === "contradicts") return "cross";
+  return "arrow"; // imports
 }
 
 function markerId(kind: EdgeKind, tone: string): string {
@@ -166,36 +175,18 @@ export function EdgeMarkerDefs() {
       <rect x="10" y="1" width="2" height="8" fill={colour} />
     </marker>
   );
-  // Hollow square — "supersedes": the old node has been swapped out.
-  const square = (id: string, colour: string) => (
-    <marker
-      key={id}
-      id={id}
-      viewBox="0 0 10 10"
-      refX="9"
-      refY="5"
-      markerWidth="11"
-      markerHeight="11"
-      markerUnits="userSpaceOnUse"
-    >
-      <rect
-        x="2"
-        y="2"
-        width="6"
-        height="6"
-        fill="var(--barn-canvas)"
-        stroke={colour}
-        strokeWidth="2"
-      />
-    </marker>
-  );
-  // Cross — "conflicts-with": a symmetric, bidirectional tension marker.
+  // Cross — "contradicts" (§7.2): a symmetric, bidirectional tension
+  // marker, drawn at BOTH ends of the wire (never just markerEnd) so
+  // nothing reads as a directional arrowhead. refX/refY sit on the cross's
+  // own visual centre (2..8 in an 0..10 box) rather than offset toward one
+  // side, the way the directional shapes above are — this one has to look
+  // identical anchored at a path's start OR its end.
   const cross = (id: string, colour: string) => (
     <marker
       key={id}
       id={id}
       viewBox="0 0 10 10"
-      refX="9"
+      refX="5"
       refY="5"
       markerWidth="11"
       markerHeight="11"
@@ -210,10 +201,9 @@ export function EdgeMarkerDefs() {
     circle,
     chevron,
     arrowBar,
-    square,
     cross,
   };
-  const SHAPES: Shape[] = ["arrow", "circle", "chevron", "arrowBar", "square", "cross"];
+  const SHAPES: Shape[] = ["arrow", "circle", "chevron", "arrowBar", "cross"];
 
   // Rest tones are per-KIND, so only that kind's own shape is ever asked
   // for — one def each. Override and emphasis tones can land on any kind, so
@@ -323,7 +313,7 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
 
   // ── Label: one chip, nudged clear of its neighbours ──────────────────
   const label = edgeLabel(kind, {
-    condition: props.data?.condition,
+    guard: props.data?.guard,
     note: props.data?.note,
     step: props.data?.step,
   });
@@ -335,11 +325,20 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
 
   // Measure in flow units: offsetWidth/Height are pre-transform, so they are
   // already zoom-independent and the solver never has to know about zoom.
+  // WO13_CONTRACT.md §2.7(c): `color`/`kind` are added as a CORRECTNESS
+  // GUARD only, not because a colour change is proven to move labelX/labelY
+  // — it does not (routeEdge's output is unrelated to colour). What DOES
+  // change on a colour or kind edit is the chip's own rendered width (the
+  // border/text colour swap below never resizes it, but a kind change can
+  // swap the icon and the verb text, which does). Re-measuring on either
+  // costs nothing (the effect is a no-op when the box is unchanged, see
+  // `report`'s dedupe in canvas/types.ts) and closes the one path where a
+  // stale `w`/`h` could linger after an edit.
   useLayoutEffect(() => {
     const el = labelRef.current;
     if (el === null) return;
     reportBox({ id, x: labelX, y: labelY, w: el.offsetWidth, h: el.offsetHeight });
-  }, [id, labelX, labelY, label.text, reportBox]);
+  }, [id, labelX, labelY, label.text, reportBox, props.data?.color, kind]);
 
   useEffect(() => () => dropBox(id), [id, dropBox]);
 
@@ -382,20 +381,40 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
   );
 
   const openMenu = (e: React.MouseEvent) => {
-    const kindItem = (k: EdgeKind): MenuItem => ({
-      kind: "item",
-      id: `kind-${k}`,
-      label: k,
-      hint: isStructuralEdgeKind(k)
-        ? "structural — changes compile order"
-        : "advisory — lint only, doesn't change output",
-      checked: k === kind,
-      onSelect: () => updateEdge(id, { kind: k }),
-    });
+    // Read once at open time (the menu is ephemeral) rather than
+    // subscribing — a right-click that outlives a graph edit is not a case
+    // worth tracking. §7.3: re-checked here as a UI-side courtesy so the
+    // switcher does not visibly offer a kind the legality matrix would
+    // refuse; the store's `addEdge` is the actual gate for creation.
+    const nodes = useGraphStore.getState().nodes;
+    const sourceNode = nodes.find((n) => n.id === source);
+    const targetNode = nodes.find((n) => n.id === target);
+    const kindItem = (k: EdgeKind): MenuItem => {
+      const check =
+        sourceNode !== undefined && targetNode !== undefined
+          ? legalityFor(sourceNode.role, k, targetNode.role, targetNode.deprecated !== undefined)
+          : { legality: "allow" as const, reason: "" };
+      const denied = check.legality === "deny";
+      return {
+        kind: "item",
+        id: `kind-${k}`,
+        label: k,
+        hint: denied
+          ? check.reason
+          : affectsOutput(k)
+            ? "changes what lands in the file"
+            : "advisory — linter only, never compiled",
+        checked: k === kind,
+        disabled: denied,
+        onSelect: () => {
+          if (!denied) updateEdge(id, { kind: k });
+        },
+      };
+    };
     const items: MenuItem[] = [
-      ...EDGE_KINDS.filter(isStructuralEdgeKind).map(kindItem),
+      ...EDGE_KINDS.filter(affectsOutput).map(kindItem),
       { kind: "separator", id: "sep-structural" },
-      ...EDGE_KINDS.filter((k) => !isStructuralEdgeKind(k)).map(kindItem),
+      ...EDGE_KINDS.filter((k) => !affectsOutput(k)).map(kindItem),
       { kind: "separator", id: "sep-0" },
       {
         kind: "item",
@@ -427,6 +446,12 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
   };
 
   const handles = isSelected ? dragHandles(points) : [];
+  // §7.2: `contradicts` is symmetric and gets the SAME marker at both ends
+  // (the cross shape has no orientation of its own, unlike the arrows) —
+  // never a markerEnd-only arrowhead, which would claim a direction the
+  // relation does not have.
+  const markerUrl = `url(#${markerId(kind, tone)})`;
+  const guarded = props.data?.guard !== undefined;
 
   return (
     <>
@@ -434,13 +459,14 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
         <BaseEdge
           id={id}
           path={path}
-          markerEnd={`url(#${markerId(kind, tone)})`}
+          markerStart={kind === "contradicts" ? markerUrl : undefined}
+          markerEnd={markerUrl}
           style={{
             stroke: colour,
             // A related wire thickens by 1 so the emphasis survives on the
             // thin dashed kinds, where a hue step alone is easy to miss.
             strokeWidth: related && !isSelected ? stroke.width + 1 : stroke.width,
-            strokeDasharray: stroke.dash,
+            strokeDasharray: guarded ? GUARD_DASH : stroke.dash,
             // Butt caps + miter joins: a round cap on a 2px orthogonal wire
             // rounds off the corners the square routing exists to produce.
             strokeLinecap: "butt",
@@ -466,12 +492,21 @@ function MemoryEdgeInner(props: EdgeProps<CanvasEdge>) {
           style={{
             // dy is the collision solver's answer (canvas/labelSlots.ts).
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + dy}px)`,
-            borderColor: isSelected
-              ? "var(--accent)"
-              : related
-                ? "var(--accent-border)"
-                : "var(--plate-edge)",
-            color: isSelected ? "var(--accent-text)" : "var(--text-secondary)",
+            // WO13_CONTRACT.md §2.7(a) / defect 7: this used to derive from
+            // isSelected/related ONLY, falling back to a fixed
+            // `--plate-edge` grey — a recoloured wire kept a default-plate
+            // chip beside a saturated line. `colour` (above) is the exact
+            // value the wire's own stroke paints with, selected/related
+            // tones included, so reusing it here makes the chip and the
+            // wire the same object by construction rather than two things
+            // that happen to usually agree.
+            borderColor: colour,
+            // Text stays on the dedicated `-text` tokens for selected/
+            // related — `--edge-related` resolves to a translucent
+            // `accent-border` (rgba .38), fine as a border, unreadable as
+            // text. At rest `colour` is always an opaque kind or palette
+            // token (never the translucent one), so it is safe as text too.
+            color: isSelected ? "var(--accent-text)" : related ? "var(--text-secondary)" : colour,
             // Above the wires, below the cards.
             zIndex: isSelected ? 2 : 1,
           }}

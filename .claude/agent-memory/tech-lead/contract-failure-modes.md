@@ -1,6 +1,6 @@
 ---
 name: contract-failure-modes
-description: The nine recurring defect classes Cowtext work-order contracts must pre-empt, distilled from the WO02, WO03, WO06 and WO11 audits
+description: The eleven recurring defect classes Cowtext work-order contracts must pre-empt, distilled from the WO02, WO03, WO06, WO11 and WO13 audits
 metadata:
   type: project
 ---
@@ -82,17 +82,73 @@ already shipped a real defect once:
    runtime rejection in the chokepoint command (`write_md_file` refuses agent paths, beside the
    `.claude/settings.json` arm that was already there), because documented-only invariants in this
    codebase have failed twice (see class 2).
+   **Mirror-pair corollary (WO13): consistency between two implementations is not evidence
+   of correctness — it is only evidence that one person wrote both.** Twice in WO13 a Rust/TS
+   pair agreed with each other while both diverged from the spec: `always_closure`'s seed
+   handling (D5) and the edge-legality matrix's deprecated-target rule (D15). Both times a lane
+   checked cross-language agreement, found it, and reasonably stopped there. When auditing a
+   mirror pair, check it against the **contract text**, never against its twin. And treat an
+   unpinned mirror pair — one with no shared, tech-lead-owned fixture corpus asserted from both
+   sides — as an incomplete deliverable, not a tolerable risk.
    **The tell:** replacing an explicit Save with an autosave queue is a *concurrency* change, not a
    UI change. It obliges an audit of every other reader and writer of those files in the same work
    order. Three of WO11's four highest-severity defects traced to that single omission.
 
-**Why:** these are the defects that cost extra audit rounds in WO02, WO03, WO06 and WO11; all
-nine are seam defects, invisible inside any single lane's diff — every lane in WO06 reported
-success.
+10. **A gate authored by the lane it gates degrades into spot-checks.** WO13-D1: §18.1 demanded
+    "compile pre-change, migrate, recompile, **diff the produced file sets**". R1 (author of both
+    the emitter and its gate) shipped three `assert!(content.contains(…))` tests plus a comment
+    saying the old compiler "no longer exists in this tree to run side-by-side". Four of the five
+    file families the gate names were never asserted at all, and one enumerated row was vacuous by
+    its own admission. 751 tests green. Fix pattern: **a byte-identity gate needs a committed
+    baseline artifact, not a procedure.** Freeze the pre-change output as a fixture in the
+    contract's fixture table (tech-lead-owned, lane-uneditable) so the lane cannot substitute
+    a re-derivation of the expectation for the expectation.
+    **The author's own failure mode, WO13 (four instances): a contract contradicts itself, and
+    every lane implements both halves faithfully.** §7.3's specificity formula defeated §7.3's own
+    required-rule table (D15); §18.1's exception list was incomplete three separate times, and
+    **every omission was an output change specified elsewhere in the same document** (Amendment 1's
+    lock, D2's closure row, §10.4's precedence marker); §14.2 asked for a control §4.1's wire shape
+    cannot represent (open item 4). None was caught by any gate until something computed a real
+    answer. Fix pattern: an enumerated-exception list must be **derived mechanically** from the set
+    of sections that change the behaviour being gated — walk that set, don't write the list from
+    the amendment in front of you. And when two sections disagree, the normative *table* states the
+    intent; the *mechanism* is an implementation detail and yields.
+    Cousin: **a fixture built to hit an enumerated list will hit exactly that list.** WO13-D2 —
+    §18.1's five-row exception was missing a sixth (nodes downstream of a pinned `command` also
+    leave `## Always read`), and neither fixture contained the edge that would expose it. When
+    enumerating exceptions, derive the fixture from the *algorithm diff*, not from the list.
 
-**How to apply:** when drafting a contract, walk each new command against all six before
+11. **A rule that costs a lane its ability to validate gets broken every time.** WO13: the
+    zone grid was violated twice in one work order (U1 stubbed over T1's file; R1 patched five
+    foreign files and "restored" them from its own stale snapshot, clobbering R2 and R3
+    repeatedly) — the same incident as WO11, despite an explicit written rule. Both agents were
+    making a build go green so they could check their own work, against a brief saying "the tree
+    is red until integration". **Treat this as a design problem, not discipline.** Fix pattern,
+    in order: (a) generate `.claude/zones/<lane>.json` from the §17 grid and enforce it with a
+    PreToolUse hook, the `docs-guard.ps1` shape — a lane must be *unable* to write a foreign file,
+    so stop-and-report is the only move left; (b) Stage 0 lays a compiling stub for **every**
+    cross-lane seam it freezes, not just new commands, so the tree is green from the end of
+    Stage 0 and the motive disappears (this already worked for `resolve_load.rs`); (c) hard rule —
+    never restore a file you did not write from a snapshot you took, because your snapshot is
+    stale the moment another lane writes.
+    Related silent-degradation tell from the same round: a Stage 0 sweep licence that enumerates
+    only TypeScript files. `#[serde(default)] pinned: bool` on a private Rust node projection is
+    invisible to the compiler once the field leaves the wire — it just reads `false` forever
+    (`assemble.rs`, `handoff.rs`, WO13-D11). Any wire-field rename needs both halves of the sweep.
+
+**Why:** these are the defects that cost extra audit rounds in WO02, WO03, WO06, WO11 and WO13;
+all eleven are seam defects, invisible inside any single lane's diff — every lane in WO06 reported
+success, and WO13 passed clippy, 751 Rust tests, tsc, the production build and 95 Vitest specs
+with five HIGHs open.
+
+**How to apply:** when drafting a contract, walk each new command against all eleven before
 freezing. When auditing, check them first — they are where the confirmed CRITICALs have been.
 For 5 and 6, the fastest check is mechanical: grep every new component for an importer, and
-grep for `Stage-0 stub` in the merged tree.
+grep for `Stage-0 stub` in the merged tree. For 10, read the gate's assertions against the
+gate's own prose sentence by sentence — the gap is always in what it *doesn't* assert.
+
+**Green gates are the start of an audit, not its conclusion.** Every WO13 finding was in a tree
+that passed clippy `-D warnings`, 751 Rust tests, `tsc --noEmit`, the production build and
+95 Vitest specs.
 
 Related: [[cowtext-work-order-cadence]]

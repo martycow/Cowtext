@@ -29,10 +29,56 @@ import { AgentAvatar } from "./AgentAvatar";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
-import { companyFor, isAliasModel, MODEL_CATALOG, MODEL_NOTES } from "./modelCatalog";
-import { ToolPicker } from "./ToolPicker";
+import { MODEL_NOTES } from "./modelCatalog";
+import { ToolsField } from "./ToolPicker";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
+
+// ── A1/A3 — the "local only" badge, one shared component ────────────────
+//
+// `compiles` is a REQUIRED prop, not an optional flag on a lookup table a
+// new field could forget to add itself to — omitting it is a TypeScript
+// error at every call site. That is the enforcement A3 asks for ("a new
+// field cannot be added without answering the question"): a config array
+// can silently go unedited, a required prop cannot silently go unpassed.
+// Marking one field and leaving a neighbour unmarked is worse than no badge
+// at all (A3), so this is the ONLY place either badge text or its styling
+// may be written.
+
+export function LocalOnlyBadge() {
+  return (
+    <span
+      title="Stored in .cowtext/agents.json — never written to the agent's own file."
+      className="flex-none rounded-sm border border-border-strong bg-surface-2 px-1 font-mono text-micro uppercase tracking-wider text-content-muted"
+    >
+      local only
+    </span>
+  );
+}
+
+export function FieldRow({
+  label,
+  compiles,
+  hint,
+  children,
+}: {
+  label: string;
+  /** REQUIRED — see the module note above. `false` renders `LocalOnlyBadge`. */
+  compiles: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1.5">
+        <FieldLabel>{label}</FieldLabel>
+        {!compiles && <LocalOnlyBadge />}
+      </div>
+      {children}
+      {hint !== undefined && <p className="pt-1 text-2xs leading-snug text-content-muted">{hint}</p>}
+    </div>
+  );
+}
 
 export function FieldLabel({ children }: { children: string }) {
   return (
@@ -141,17 +187,34 @@ export function ChipEditor({
   );
 }
 
-/** Two-step model picker (contract R6) — company first, then that company's
- *  version list; "Other" swaps the version select for a free-text input.
- *  Company is INFERRED from the stored value every time this remounts (the
- *  caller keys it on the doc identity, same idiom as the CodeMirror
- *  `docKey`), so a value picked outside the catalog (hand-edited frontmatter)
- *  still lands on the right step instead of silently resetting.
+export type ModelChoice = "inherit" | "haiku" | "sonnet" | "opus" | "pin";
+
+function modelChoiceFor(value: string | null): ModelChoice {
+  if (value === null || value.trim() === "") return "inherit";
+  if (value === "haiku" || value === "sonnet" || value === "opus") return value;
+  return "pin";
+}
+
+const MODEL_RADIO: { choice: Exclude<ModelChoice, "pin">; label: string }[] = [
+  { choice: "inherit", label: "Inherit from the main session" },
+  { choice: "haiku", label: "Haiku" },
+  { choice: "sonnet", label: "Sonnet" },
+  { choice: "opus", label: "Opus" },
+];
+
+/** WO13_CONTRACT.md Block D — replaces the company/version picker (WO11 R6).
+ *  No provider dropdown: this modal writes exactly one format,
+ *  `.claude/agents/*.md`, which is Claude Code, where provider was never
+ *  actually selectable — the removed dropdown implied a choice that did
+ *  nothing (agent spec D1: multi-provider support is out of scope). "Pin a
+ *  specific model ID" is the free-text escape hatch for anything else,
+ *  including a dated Anthropic snapshot or `fable` (docs verdict, §3.0).
  *
- *  WO11 D3: the bare aliases (`opus`/`sonnet`/`haiku`) no longer appear as
- *  pickable rows in the Anthropic list, but a file that already has one on
- *  disk must keep showing it — as a disabled, appended option — rather than
- *  going blank or silently swapping to a different model. */
+ *  Frozen: `model: inherit` is OMITTED from frontmatter — `inherit` is the
+ *  format's own default, so writing it adds a line that means nothing.
+ *  "Inherit" maps to `onChange(null)`; `FmFields.model: string | null`
+ *  already deletes a null key on save (contract: "null ⇒ the key is
+ *  deleted"), so no new emitter behaviour is needed for that half. */
 export function ModelPicker({
   value,
   disabled,
@@ -159,69 +222,433 @@ export function ModelPicker({
 }: {
   value: string | null;
   disabled: boolean;
-  onChange: (v: string) => void;
+  onChange: (v: string | null) => void;
 }) {
-  const [company, setCompany] = useState(() => companyFor(value));
-  const companyDef = MODEL_CATALOG.find((c) => c.company === company) ?? MODEL_CATALOG[0];
-  const isOther = company === "Other";
+  const choice = modelChoiceFor(value);
+  const [pinDraft, setPinDraft] = useState(choice === "pin" ? (value ?? "") : "");
 
-  const pickCompany = (next: string) => {
-    setCompany(next);
-    const def = MODEL_CATALOG.find((c) => c.company === next);
-    if (def !== undefined && def.models.length > 0) onChange(def.models[0]);
+  const pick = (c: ModelChoice) => {
+    if (c === "inherit") onChange(null);
+    else if (c === "pin") onChange(pinDraft.trim() === "" ? "" : pinDraft.trim());
+    else onChange(c);
   };
 
-  const effectiveValue = value ?? companyDef.models[0];
-  const note = MODEL_NOTES[effectiveValue];
-  const legacyAlias = !isOther && value !== null && isAliasModel(value) && !companyDef.models.includes(value);
+  const note = MODEL_NOTES[value ?? "inherit"];
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <select
-          value={company}
-          disabled={disabled}
-          onChange={(e) => pickCompany(e.target.value)}
-          className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+      <div role="radiogroup" aria-label="Model" className="flex flex-col gap-1">
+        {MODEL_RADIO.map((r) => (
+          <label
+            key={r.choice}
+            className={`flex items-center gap-2 rounded border px-2 py-1 transition-colors duration-fast ${
+              choice === r.choice ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2"
+            } ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          >
+            <input
+              type="radio"
+              name="model-choice"
+              checked={choice === r.choice}
+              disabled={disabled}
+              onChange={() => pick(r.choice)}
+              className="h-3 w-3 accent-[var(--accent)]"
+            />
+            <span className="text-xs text-content">{r.label}</span>
+          </label>
+        ))}
+        <label
+          className={`flex items-center gap-2 rounded border px-2 py-1 transition-colors duration-fast ${
+            choice === "pin" ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2"
+          } ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
         >
-          {MODEL_CATALOG.map((c) => (
-            <option key={c.company} value={c.company}>
-              {c.company}
+          <input
+            type="radio"
+            name="model-choice"
+            checked={choice === "pin"}
+            disabled={disabled}
+            onChange={() => pick("pin")}
+            className="h-3 w-3 accent-[var(--accent)]"
+          />
+          <span className="flex-none text-xs text-content">Pin a specific model ID</span>
+          {choice === "pin" && (
+            <input
+              value={pinDraft}
+              disabled={disabled}
+              onChange={(e) => {
+                setPinDraft(e.target.value);
+                onChange(e.target.value.trim() === "" ? "" : e.target.value);
+              }}
+              placeholder="claude-opus-5, gpt-5, gemini-2.5-pro…"
+              className="ml-1 h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-2xs text-content focus:border-accent disabled:text-content-disabled"
+            />
+          )}
+        </label>
+      </div>
+      {note !== undefined && <p className="text-2xs leading-snug text-content-muted">{note}</p>}
+    </div>
+  );
+}
+
+// ── B — description as a dispatch contract ───────────────────────────────
+
+/** Frozen join (contract §14.3): the two halves are joined with this exact
+ *  phrase and split on its first occurrence, so parsing is total and the
+ *  round-trip (split → edit → compose → reopen → split) never drifts. */
+export const DESCRIPTION_JOIN = " Do not use it when ";
+
+export function splitDescription(description: string | null): { whenToUse: string; whenNotToUse: string } {
+  const raw = description ?? "";
+  const idx = raw.indexOf(DESCRIPTION_JOIN);
+  if (idx === -1) return { whenToUse: raw, whenNotToUse: "" };
+  return { whenToUse: raw.slice(0, idx), whenNotToUse: raw.slice(idx + DESCRIPTION_JOIN.length) };
+}
+
+export function joinDescription(whenToUse: string, whenNotToUse: string): string {
+  const a = whenToUse.trim();
+  const b = whenNotToUse.trim();
+  if (a === "") return b === "" ? "" : `${DESCRIPTION_JOIN.trim()} ${b}`;
+  return b === "" ? a : `${a}${DESCRIPTION_JOIN}${b}`;
+}
+
+const TRIGGER_WORDS = [
+  "when",
+  "whenever",
+  "use this agent",
+  "invoke",
+  "if ",
+  "before ",
+  "after ",
+  "handles",
+  "handling",
+  "reviewing",
+  "reviews",
+  "needs",
+  "should be used",
+  "must be used",
+  "requires",
+];
+
+function wordCount(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function hasTriggerLanguage(s: string): boolean {
+  const lower = s.toLowerCase();
+  return TRIGGER_WORDS.some((w) => lower.includes(w));
+}
+
+/** Contract's own example: "A senior tech lead who…" — a bio, not dispatch
+ *  instructions. Heuristic only; this WARNS, it never blocks (B3). */
+function looksIdentityShaped(s: string): boolean {
+  return /^(a|an|the)\b[\s\S]*\bwho\b/i.test(s.trim());
+}
+
+function significantWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 3),
+  );
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+export interface DescriptionValidation {
+  /** Non-null ⇒ Create/save-worthy state is blocked; names the consequence,
+   *  never just "required" (dispatch: "say the consequence in plain terms"). */
+  blocking: string | null;
+  identityWarning: boolean;
+  /** The other agent's display label, when overlap crosses the threshold. */
+  overlapWarning: string | null;
+}
+
+/** `composed` is the full frontmatter-bound string (both halves joined);
+ *  `whenToUse` alone drives the trigger-language/word-count/identity checks
+ *  — "when NOT to use it" legitimately contains none of that shape. */
+export function validateDescription(
+  whenToUse: string,
+  composed: string,
+  others: { label: string; description: string }[],
+): DescriptionValidation {
+  const trimmed = composed.trim();
+  let blocking: string | null = null;
+  if (trimmed === "") {
+    blocking =
+      "Claude Code skips an agent file with no description entirely — it never loads, and nothing but the debug log says why.";
+  } else if (wordCount(whenToUse) < 15 || !hasTriggerLanguage(whenToUse)) {
+    blocking =
+      "This description doesn't say when to use the agent. The file will be created and valid, but Claude Code will never choose to invoke it.";
+  }
+  const identityWarning = looksIdentityShaped(whenToUse);
+  const mine = significantWords(whenToUse);
+  let overlapWarning: string | null = null;
+  let best = 0;
+  for (const o of others) {
+    const score = jaccard(mine, significantWords(o.description));
+    if (score > best && score >= 0.6) {
+      best = score;
+      overlapWarning = o.label;
+    }
+  }
+  return { blocking, identityWarning, overlapWarning };
+}
+
+export function DescriptionEditor({
+  whenToUse,
+  whenNotToUse,
+  disabled,
+  validation,
+  onChangeWhenToUse,
+  onChangeWhenNotToUse,
+}: {
+  whenToUse: string;
+  whenNotToUse: string;
+  disabled: boolean;
+  validation: DescriptionValidation;
+  onChangeWhenToUse: (v: string) => void;
+  onChangeWhenNotToUse: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <FieldLabel>When to use this agent</FieldLabel>
+        <textarea
+          value={whenToUse}
+          disabled={disabled}
+          onChange={(e) => onChangeWhenToUse(e.target.value)}
+          rows={2}
+          placeholder="Use this agent when a pull request touches the payments module, to check for…"
+          className="min-h-[44px] max-h-[30vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
+        />
+      </div>
+      <div>
+        <FieldLabel>When not to use it (optional)</FieldLabel>
+        <textarea
+          value={whenNotToUse}
+          disabled={disabled}
+          onChange={(e) => onChangeWhenNotToUse(e.target.value)}
+          rows={1}
+          placeholder="Do not use it when…"
+          className="min-h-[32px] max-h-[20vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
+        />
+      </div>
+      {validation.blocking !== null && (
+        <p className="text-xs leading-snug text-danger-text">{validation.blocking}</p>
+      )}
+      {validation.blocking === null && validation.identityWarning && (
+        <p className="text-2xs leading-snug text-amber-text">
+          Reads like a bio ("A senior … who…") rather than dispatch instructions — consider
+          rephrasing around WHEN to reach for this agent.
+        </p>
+      )}
+      {validation.blocking === null && validation.overlapWarning !== null && (
+        <p className="text-2xs leading-snug text-amber-text">
+          Overlaps heavily with "{validation.overlapWarning}" — Claude Code may struggle to pick
+          between them.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── B4 — system prompt (DUTIES → System prompt) ─────────────────────────
+
+const THIRD_PERSON_PATTERNS = [/\bthis agent\b/i, /\bthe agent\b/i, /\bagent's\b/i];
+
+export function looksThirdPerson(text: string): boolean {
+  const sample = text.trim();
+  if (sample === "") return false;
+  const hasMarker = THIRD_PERSON_PATTERNS.some((p) => p.test(sample));
+  const hasYou = /\byou\b/i.test(sample);
+  return hasMarker && !hasYou;
+}
+
+/** A mechanical, best-effort rewrite — not NLP. Offered, never applied
+ *  (B4: "never auto-apply"); the user reviews the result in the preview
+ *  and clicks Apply themselves, or dismisses it. */
+export function rewriteToSecondPerson(text: string): string {
+  return text
+    .replace(/\bThis agent\b/g, "You")
+    .replace(/\bThe agent\b/g, "You")
+    .replace(/\bthis agent\b/g, "you")
+    .replace(/\bthe agent\b/g, "you")
+    .replace(/\bAgent's\b/g, "Your")
+    .replace(/\bagent's\b/g, "your")
+    .replace(/\bIt is\b/g, "You are")
+    .replace(/\bit is\b/g, "you are")
+    .replace(/\bIts\b/g, "Your")
+    .replace(/\bits\b/g, "your");
+}
+
+export function SystemPromptEditor({
+  value,
+  docKey,
+  disabled,
+  onChange,
+  onSave,
+}: {
+  value: string;
+  docKey: string;
+  disabled: boolean;
+  onChange: (v: string) => void;
+  onSave?: () => void;
+}) {
+  const [rewrite, setRewrite] = useState<string | null>(null);
+  const thirdPerson = looksThirdPerson(value);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <FieldLabel>System prompt</FieldLabel>
+        <div className="flex-1" />
+        {thirdPerson && rewrite === null && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setRewrite(rewriteToSecondPerson(value))}
+            className="h-control-sm flex-none rounded border border-border bg-surface-2 px-2 text-2xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled"
+          >
+            Offer a second-person rewrite
+          </button>
+        )}
+      </div>
+      <p className="text-2xs leading-snug text-content-muted">
+        This is what the agent reads as instructions to itself — write "you", not "this agent".
+      </p>
+      {thirdPerson && rewrite === null && (
+        <p className="text-2xs leading-snug text-amber-text">
+          Reads like a description OF the agent, not instructions TO it.
+        </p>
+      )}
+      {rewrite !== null && (
+        <div className="rounded border border-accent-border bg-accent-surface p-2">
+          <p className="mb-1 text-2xs text-content-secondary">Suggested rewrite — not applied yet:</p>
+          <pre className="max-h-[160px] overflow-y-auto whitespace-pre-wrap font-mono text-2xs text-content">
+            {rewrite}
+          </pre>
+          <div className="mt-1.5 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onChange(rewrite);
+                setRewrite(null);
+              }}
+              className="h-control-sm flex-none rounded bg-accent px-2 text-2xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={() => setRewrite(null)}
+              className="h-control-sm flex-none rounded border border-border bg-surface-2 px-2 text-2xs text-content transition-colors duration-fast hover:border-border-strong"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="h-[240px] min-h-0 rounded border border-border-subtle bg-surface-inset">
+        <CodeMirrorEditor docKey={docKey} value={value} onChange={onChange} onSave={onSave ?? (() => {})} />
+      </div>
+    </div>
+  );
+}
+
+// ── D — runtime limits (maxTurns + permissionMode) ───────────────────────
+//
+// Deliberately positioned beside the tools/Elevated section by every call
+// site in this file, not at the bottom (contract: "the only bound on an
+// agent that loops").
+
+const PERMISSION_MODES: { value: string; label: string; consequence: string }[] = [
+  { value: "default", label: "Default", consequence: "Asks before edits and commands, as normal." },
+  {
+    value: "acceptEdits",
+    label: "Accept edits",
+    consequence: "File edits apply without asking; other actions still ask.",
+  },
+  {
+    value: "auto",
+    label: "Auto",
+    consequence: "Claude decides permissions itself — a parent session already in Auto ignores this setting entirely.",
+  },
+  { value: "dontAsk", label: "Don't ask", consequence: "Never prompts for permission on anything this agent does." },
+  {
+    value: "bypassPermissions",
+    label: "Bypass permissions",
+    consequence: "Skips every permission check. Once a parent session is here, a child can't dial it back down.",
+  },
+  { value: "plan", label: "Plan only", consequence: "Plans the work but never executes it." },
+];
+
+export function RuntimeLimits({
+  maxTurns,
+  permissionMode,
+  disabled,
+  onChangeMaxTurns,
+  onChangePermissionMode,
+}: {
+  /** `FmFields.maxTurns` — a digit STRING (contract §14.4: "rendered
+   *  unquoted; sent/read as a plain digit string"), not a number. The
+   *  numeric `<input>` below is the one place this file converts between
+   *  the two; every other consumer moves the string as-is. */
+  maxTurns: string | null;
+  permissionMode: string | null;
+  disabled: boolean;
+  onChangeMaxTurns: (v: string | null) => void;
+  onChangePermissionMode: (v: string | null) => void;
+}) {
+  const active = PERMISSION_MODES.find((m) => m.value === (permissionMode ?? "default")) ?? PERMISSION_MODES[0];
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <FieldLabel>Max turns</FieldLabel>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={maxTurns ?? ""}
+          disabled={disabled}
+          placeholder="unlimited"
+          onChange={(e) => {
+            const raw = e.target.value.trim();
+            if (raw === "") {
+              onChangeMaxTurns(null);
+              return;
+            }
+            const n = Math.max(1, Math.round(Number(raw)));
+            onChangeMaxTurns(Number.isFinite(n) ? String(n) : null);
+          }}
+          className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+        />
+        <p className="pt-1 text-2xs leading-snug text-content-muted">
+          The only bound on an agent that loops. Empty = unlimited.
+        </p>
+      </div>
+      <div>
+        <FieldLabel>Permission mode</FieldLabel>
+        <select
+          value={permissionMode ?? "default"}
+          disabled={disabled}
+          onChange={(e) => onChangePermissionMode(e.target.value === "default" ? null : e.target.value)}
+          className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+        >
+          {PERMISSION_MODES.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
             </option>
           ))}
         </select>
-        {isOther ? (
-          <input
-            value={value ?? ""}
-            disabled={disabled}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="model id"
-            className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
-          />
-        ) : (
-          <select
-            value={effectiveValue}
-            disabled={disabled}
-            onChange={(e) => onChange(e.target.value)}
-            className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
-          >
-            {/* the option's title mirrors the helper line under this select */}
-            {companyDef.models.map((m) => (
-              <option key={m} value={m} title={MODEL_NOTES[m]}>
-                {m}
-              </option>
-            ))}
-            {legacyAlias && value !== null && (
-              <option value={value} disabled title={MODEL_NOTES[value]}>
-                {value} (legacy alias)
-              </option>
-            )}
-          </select>
-        )}
+        <p className="pt-1 text-2xs leading-snug text-content-muted">{active.consequence}</p>
       </div>
-      {note !== undefined && (
-        <p className="text-2xs leading-snug text-content-muted">{note}</p>
-      )}
     </div>
   );
 }
@@ -294,11 +721,19 @@ export function AgentEditor({
   const sel: Selection = { kind: "agent", key: doc.fileName };
   const rawDraft = useAgentsStore((s) => s.drafts[draftKey(sel)]);
   const meta = useAgentsStore((s) => s.meta);
+  const allAgents = useAgentsStore((s) => s.agents);
   const agentEdit = useAgentsStore((s) => s.agentEdit);
   const retryAgentSave = useAgentsStore((s) => s.retryAgentSave);
   const saveState = useAgentsStore((s) => s.agentSaveState[doc.fileName] ?? "idle");
   const saveErr = useAgentsStore((s) => s.agentSaveErrors[doc.fileName] ?? null);
   const reloadNonce = useAgentsStore((s) => s.reloadNonce[doc.fileName] ?? 0);
+  // HIGH fix (tester-found, post-WO13) — see store/agents.ts's
+  // `reloadAgentFromDisk` doc comment: while this is true, `reloadNonce`
+  // deliberately did NOT bump and the draft was deliberately NOT touched.
+  // Same banner/copy/dismiss idiom as Inspector.tsx's Markdown tabs.
+  const stale = useAgentsStore((s) => s.staleAgents[doc.fileName] ?? false);
+  const dismissStaleAgent = useAgentsStore((s) => s.dismissStaleAgent);
+  const discardStaleAgentDraft = useAgentsStore((s) => s.discardStaleAgentDraft);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const renameSelected = useAgentsStore((s) => s.renameSelected);
   const ensureMemory = useAgentsStore((s) => s.ensureMemory);
@@ -449,30 +884,25 @@ export function AgentEditor({
   ];
 
   const docKey = `${doc.fileName}:${reloadNonce}`;
+  const { whenToUse, whenNotToUse } = splitDescription(draft.fields.description);
+  const others = allAgents
+    .filter((a) => a.fileName !== doc.fileName)
+    .map((a) => ({
+      label: a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName,
+      description: a.fields.description ?? "",
+    }));
+  const descriptionValidation = validateDescription(whenToUse, joinDescription(whenToUse, whenNotToUse), others);
+
+  // E2 order: identity → dispatch → system prompt → runtime → local-only
+  // (last, quieter). Avatar/nickname/priority/influence are ALL local-only
+  // (contract §14.3) — moved out of the identity header into the Local
+  // only section at the bottom, consistent with NewAgentDialog.
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      {/* Identity header */}
+      {/* Identity */}
       <div className="flex items-start gap-3">
-        <button
-          ref={avatarBtnRef}
-          type="button"
-          onClick={openAvatarMenu}
-          disabled={disabled}
-          title="Change avatar"
-          className="flex-none rounded-sm outline-none transition-opacity duration-fast hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <AgentAvatar seed={seedFor(meta, doc.fileName)} size={44} src={avatarSrc} />
-        </button>
-        {avatarMenuAnchor !== null && (
-          <ContextMenu
-            x={avatarMenuAnchor.x}
-            y={avatarMenuAnchor.y}
-            items={avatarMenuItems}
-            onClose={() => setAvatarMenuAnchor(null)}
-          />
-        )}
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <input
             value={nameDraft}
             onChange={(e) => setNameDraft(e.target.value)}
@@ -489,18 +919,7 @@ export function AgentEditor({
             className="h-control w-full max-w-[320px] rounded border border-border bg-surface-2 px-2 text-base font-semibold text-content focus:border-accent disabled:text-content-disabled"
           />
           {renameError !== null && <p className="text-xs text-danger-text">{renameError}</p>}
-          <div className="flex items-center gap-2">
-            <span className="flex-none font-mono text-2xs text-content-muted">nickname</span>
-            <input
-              value={m.nickname}
-              onChange={(e) =>
-                updateMeta(doc.fileName, { nickname: e.target.value.slice(0, 40) })
-              }
-              disabled={disabled}
-              placeholder="optional"
-              className="h-control-sm w-full max-w-[220px] rounded border border-border bg-surface-2 px-2 text-xs text-content placeholder:text-content-disabled focus:border-accent-border disabled:text-content-disabled"
-            />
-          </div>
+          <span className="font-mono text-2xs text-content-muted">name: {memoryStem}</span>
         </div>
         <div className="flex flex-none flex-col items-end gap-1">
           <button
@@ -516,7 +935,6 @@ export function AgentEditor({
             <FolderOpen size={12} strokeWidth={1.5} />
             Reveal file
           </button>
-          <span className="font-mono text-2xs text-content-muted">{doc.fileName}</span>
           <span
             title="estimate, chars/4 · window ~200k"
             className="font-mono text-2xs text-content-muted"
@@ -527,9 +945,6 @@ export function AgentEditor({
       </div>
       {revealError !== null && (
         <p className="font-mono text-xs text-danger-text">{revealError}</p>
-      )}
-      {avatarError !== null && (
-        <p className="font-mono text-xs text-danger-text">{avatarError}</p>
       )}
 
       {/* WO11 D4 — the failure surface for the per-keystroke autosave. A
@@ -555,10 +970,43 @@ export function AgentEditor({
         </div>
       )}
 
+      {/* HIGH fix (tester-found, post-WO13) — same copy, same affordance,
+          same dismiss behaviour as Inspector.tsx's Markdown-tab banners
+          (FileMarkdownTab / AgentMarkdownTab). The draft underneath is
+          untouched while this is showing (store/agents.ts never cleared
+          it), so "Reload from disk" is the ONLY thing that discards it. */}
+      {stale && (
+        <div className="flex items-center gap-2 rounded border border-amber-border bg-amber-surface px-2.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate text-xs text-amber-text">
+            Assemble changed this file on disk. Your unsaved edits are still here.
+          </span>
+          <button
+            type="button"
+            onClick={() => discardStaleAgentDraft(doc.fileName)}
+            disabled={disabled}
+            className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2 text-2xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled"
+          >
+            Reload from disk
+          </button>
+          <button
+            type="button"
+            onClick={() => dismissStaleAgent(doc.fileName)}
+            title="Dismiss"
+            className="grid h-4 w-4 flex-none place-items-center text-amber-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={11} strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
+
       {/* WO11 D2 — memory control, unconditional (not gated on doc.raw): an
           agent whose frontmatter fails to parse still has a memory folder
           concept, and Marty's "does nothing" repro was on a healthy agent,
-          not specifically a broken one. */}
+          not specifically a broken one. Not part of the local-only/compiles
+          split (§14.3 names exactly nickname/priority/avatarPath/influence)
+          — this creates a real project file, it just isn't the agent's own
+          frontmatter, so it stays near identity rather than joining either
+          badge group. */}
       <div>
         <FieldLabel>Memory</FieldLabel>
         <div className="flex items-center gap-2">
@@ -617,70 +1065,54 @@ export function AgentEditor({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <div className="col-span-2">
-              <FieldLabel>Description</FieldLabel>
-              <textarea
-                value={draft.fields.description ?? ""}
-                onChange={(e) => patchFields({ description: e.target.value })}
-                disabled={disabled}
-                rows={2}
-                className="min-h-[40px] max-h-[30vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content focus:border-accent disabled:text-content-disabled"
-              />
-            </div>
-            <div>
-              <FieldLabel>Model</FieldLabel>
-              <ModelPicker
-                key={doc.fileName}
-                value={draft.fields.model}
-                disabled={disabled}
-                onChange={(v) => patchFields({ model: v })}
-              />
-            </div>
-            <div>
-              <FieldLabel>Priority</FieldLabel>
-              <Stepper
-                value={m.priority}
-                min={1}
-                max={5}
-                disabled={disabled}
-                onChange={(v) => updateMeta(doc.fileName, { priority: v })}
-              />
-            </div>
-            <div className="col-span-2">
-              <FieldLabel>Influence</FieldLabel>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={m.influence}
-                  disabled={disabled}
-                  aria-label="Influence"
-                  onChange={(e) => updateMeta(doc.fileName, { influence: Number(e.target.value) })}
-                  className="h-[16px] w-[180px] cursor-pointer appearance-none bg-transparent disabled:cursor-default disabled:opacity-40 [&::-webkit-slider-runnable-track]:h-[4px] [&::-webkit-slider-runnable-track]:rounded-sm [&::-webkit-slider-runnable-track]:bg-surface-inset [&::-webkit-slider-thumb]:mt-[-4px] [&::-webkit-slider-thumb]:h-[12px] [&::-webkit-slider-thumb]:w-[12px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-sm [&::-webkit-slider-thumb]:bg-accent"
-                />
-                <span className="w-[32px] text-right font-mono text-xs text-content-secondary">
-                  {m.influence}%
-                </span>
-              </div>
-            </div>
-            <div className="col-span-2">
-              <FieldLabel>Tools</FieldLabel>
-              {/* WO10 item 11 — a dropdown over agents/toolCatalog.ts, not
-                  free text. Tool names are case-sensitive and a misspelled
-                  one is dropped silently by Claude Code, so "type it and
-                  hope" was the wrong control for this field. Free text
-                  survives as the popup's bottom row, because MCP tool names
-                  are per-installation and cannot be enumerated. */}
-              <ToolPicker
-                items={draft.fields.tools}
-                disabled={disabled}
-                onChange={(items) => patchFields({ tools: items })}
-              />
-            </div>
+          {/* Dispatch — Block B */}
+          <DescriptionEditor
+            whenToUse={whenToUse}
+            whenNotToUse={whenNotToUse}
+            disabled={disabled}
+            validation={descriptionValidation}
+            onChangeWhenToUse={(v) => patchFields({ description: joinDescription(v, whenNotToUse) })}
+            onChangeWhenNotToUse={(v) => patchFields({ description: joinDescription(whenToUse, v) })}
+          />
+
+          {/* System prompt — Block B4 */}
+          <SystemPromptEditor
+            key={doc.fileName}
+            value={draft.body}
+            docKey={docKey}
+            disabled={disabled}
+            onChange={(v) => agentEdit(doc.fileName, { body: v })}
+            onSave={() => retryAgentSave(doc.fileName)}
+          />
+
+          {/* Runtime — Block C/D */}
+          <div>
+            <FieldLabel>Model</FieldLabel>
+            <ModelPicker
+              key={doc.fileName}
+              value={draft.fields.model}
+              disabled={disabled}
+              onChange={(v) => patchFields({ model: v })}
+            />
           </div>
+          <div>
+            <FieldLabel>Tools</FieldLabel>
+            <ToolsField
+              key={doc.fileName}
+              tools={draft.fields.tools}
+              disallowedTools={draft.fields.disallowedTools}
+              disabled={disabled}
+              onChangeTools={(items) => patchFields({ tools: items })}
+              onChangeDisallowed={(items) => patchFields({ disallowedTools: items })}
+            />
+          </div>
+          <RuntimeLimits
+            maxTurns={draft.fields.maxTurns}
+            permissionMode={draft.fields.permissionMode}
+            disabled={disabled}
+            onChangeMaxTurns={(v) => patchFields({ maxTurns: v })}
+            onChangePermissionMode={(v) => patchFields({ permissionMode: v })}
+          />
 
           <div>
             <FieldLabel>Skills</FieldLabel>
@@ -690,20 +1122,82 @@ export function AgentEditor({
             </p>
             <SkillsChecklist fileName={doc.fileName} draftSkills={draft.fields.skills} disabled={disabled} />
           </div>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-            <FieldLabel>Duties</FieldLabel>
-            <div className="h-[280px] min-h-0 rounded border border-border-subtle bg-surface-inset">
-              <CodeMirrorEditor
-                docKey={docKey}
-                value={draft.body}
-                onChange={(v) => agentEdit(doc.fileName, { body: v })}
-                onSave={() => retryAgentSave(doc.fileName)}
-              />
-            </div>
-          </div>
         </>
       )}
+
+      {/* Local only — last, quieter (contract §14.3), and rendered
+          UNCONDITIONALLY (outside the raw/structured split above): none of
+          avatar/nickname/priority/influence depend on frontmatter having
+          parsed, same reasoning as the Memory control. Every field here is
+          stored in .cowtext/agents.json / .cowtext/avatars/, never in the
+          agent's own frontmatter or body. */}
+      <div className="flex flex-col gap-3 rounded border border-border-subtle bg-surface-inset p-3">
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">Local only</span>
+          <LocalOnlyBadge />
+        </div>
+        <div className="flex items-start gap-3">
+          <button
+            ref={avatarBtnRef}
+            type="button"
+            onClick={openAvatarMenu}
+            disabled={disabled}
+            title="Change avatar"
+            className="flex-none rounded-sm outline-none transition-opacity duration-fast hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <AgentAvatar seed={seedFor(meta, doc.fileName)} size={36} src={avatarSrc} />
+          </button>
+          {avatarMenuAnchor !== null && (
+            <ContextMenu
+              x={avatarMenuAnchor.x}
+              y={avatarMenuAnchor.y}
+              items={avatarMenuItems}
+              onClose={() => setAvatarMenuAnchor(null)}
+            />
+          )}
+          <FieldRow label="Nickname" compiles={false} hint="Shown on the fleet rail only.">
+            <input
+              value={m.nickname}
+              onChange={(e) => updateMeta(doc.fileName, { nickname: e.target.value.slice(0, 40) })}
+              disabled={disabled}
+              placeholder="optional"
+              className="h-control-sm w-full max-w-[220px] rounded border border-border bg-surface-2 px-2 text-xs text-content placeholder:text-content-disabled focus:border-accent-border disabled:text-content-disabled"
+            />
+          </FieldRow>
+        </div>
+        {avatarError !== null && <p className="font-mono text-xs text-danger-text">{avatarError}</p>}
+        <FieldRow
+          label="Priority (1 = highest)"
+          compiles={false}
+          hint="Your own ranking. Cowtext shows it on the fleet rail and the agent's canvas plate; it does not affect dispatch order or compiled context."
+        >
+          <Stepper
+            value={m.priority}
+            min={1}
+            max={5}
+            disabled={disabled}
+            onChange={(v) => updateMeta(doc.fileName, { priority: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Influence" compiles={false}>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={m.influence}
+              disabled={disabled}
+              aria-label="Influence"
+              onChange={(e) => updateMeta(doc.fileName, { influence: Number(e.target.value) })}
+              className="h-[16px] w-[180px] cursor-pointer appearance-none bg-transparent disabled:cursor-default disabled:opacity-40 [&::-webkit-slider-runnable-track]:h-[4px] [&::-webkit-slider-runnable-track]:rounded-sm [&::-webkit-slider-runnable-track]:bg-surface-inset [&::-webkit-slider-thumb]:mt-[-4px] [&::-webkit-slider-thumb]:h-[12px] [&::-webkit-slider-thumb]:w-[12px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-sm [&::-webkit-slider-thumb]:bg-accent"
+            />
+            <span className="w-[32px] text-right font-mono text-xs text-content-secondary">
+              {m.influence}%
+            </span>
+          </div>
+        </FieldRow>
+      </div>
     </div>
   );
 }

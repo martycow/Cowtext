@@ -52,6 +52,58 @@ fn worktree_check_main_working_copy() {
     assert!(info.branch.is_some(), "expected a branch name on the main working copy");
 }
 
+/// D8: a repository with zero commits has an unborn HEAD. The old composite
+/// `rev-parse ... --abbrev-ref HEAD` call misreported this as "not a git
+/// repository" — exactly the state Cowtext's own `git_init` leaves behind
+/// (it deliberately makes no first commit).
+#[test]
+fn worktree_check_bare_init_no_commits_reports_repo_with_branch_and_no_worktree() {
+    let root = temp_dir("bareinit");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(git(&repo, &["init", "-q"]).status.success());
+
+    let info = worktree_check(repo.to_string_lossy().into_owned()).unwrap();
+    assert!(
+        info.is_repo,
+        "a freshly `git init`ed repo with no commits must still read as a repo (D8)"
+    );
+    assert!(!info.is_worktree);
+    assert!(
+        matches!(info.branch.as_deref(), Some("master") | Some("main")),
+        "expected an unborn-HEAD branch name, got {:?}",
+        info.branch
+    );
+}
+
+/// D8's second bug: `symbolic-ref --short HEAD` also fails on a genuine
+/// detached HEAD on the main working copy (not just a linked worktree) —
+/// that must clear `branch` without clearing `is_repo`.
+#[test]
+fn worktree_check_detached_head_on_main_working_copy_reports_no_branch() {
+    let root = temp_dir("detachedmain");
+    let repo = root.join("repo");
+    init_repo_with_commit(&repo);
+    let out = git(&repo, &["checkout", "--detach", "HEAD", "-q"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let info = worktree_check(repo.to_string_lossy().into_owned()).unwrap();
+    assert!(info.is_repo);
+    assert!(!info.is_worktree);
+    assert_eq!(info.branch, None);
+}
+
+/// A genuine non-repo (never `git init`ed at all) must still read as
+/// `is_repo: false` — the D8 fix must not turn every folder into a repo.
+#[test]
+fn worktree_check_genuine_non_repo_reports_not_a_repo() {
+    let dir = temp_dir("genuinenonrepo");
+    let info = worktree_check(dir.to_string_lossy().into_owned()).unwrap();
+    assert!(!info.is_repo);
+    assert!(!info.is_worktree);
+    assert_eq!(info.branch, None);
+}
+
 #[test]
 fn worktree_check_linked_worktree_and_detached() {
     let root = temp_dir("linked");
@@ -89,6 +141,18 @@ fn validate_branch_rejects_empty_whitespace_and_bad_chars() {
     assert!(validate_branch("weird*name").is_err());
     assert!(validate_branch("weird[name").is_err());
     assert!(validate_branch("weird\\name").is_err());
+    assert!(validate_branch("ok-name").is_ok());
+}
+
+/// D1b: three checks `worktree_add`'s original rule set didn't cover, added
+/// to `validate_branch` so `git_init`'s branch argument shares the exact
+/// same rule set `worktree_add` already covers.
+#[test]
+fn validate_branch_rejects_leading_dash_dotdot_and_lock_suffix() {
+    assert!(validate_branch("-weird").is_err());
+    assert!(validate_branch("weird..name").is_err());
+    assert!(validate_branch("weird.lock").is_err());
+    assert!(validate_branch("weird.lock.txt").is_ok(), "only a *trailing* .lock is rejected");
     assert!(validate_branch("ok-name").is_ok());
 }
 

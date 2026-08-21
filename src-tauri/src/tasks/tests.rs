@@ -49,6 +49,81 @@ fn table_tags_split_on_comma_and_whitespace() {
     );
 }
 
+// ---- parser: Task Type column (F6) ------------------------------------------
+
+// F6 (a): the shipped skill's own six-column grid — all six map, task_type
+// populated.
+#[test]
+fn parses_task_type_column_all_six_map() {
+    let content = "\
+| Name | Task Type | Priority | Tags | Status | Description |
+| --- | --- | --- | --- | --- | --- |
+| Ship it | bug | high | backend | in progress | wire the thing up |
+";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 1);
+    let t = &tasks[0];
+    assert_eq!(t.name, "Ship it");
+    assert_eq!(t.task_type.as_deref(), Some("bug"));
+    assert_eq!(t.priority.as_deref(), Some("high"));
+    assert_eq!(t.tags, vec!["backend".to_string()]);
+    assert_eq!(t.status.as_deref(), Some("in-production"));
+    assert_eq!(t.description.as_deref(), Some("wire the thing up"));
+}
+
+// F6 (b): header synonyms "Type" and "Kind" map to the same slot as
+// "Task Type".
+#[test]
+fn task_type_header_synonyms_map_to_same_slot() {
+    for header in ["Task Type", "Type", "Kind"] {
+        let content = format!(
+            "| Name | {header} |\n| --- | --- |\n| Solo | feature |\n"
+        );
+        let tasks = parse_tasks("TASKS.md", &content);
+        assert_eq!(tasks.len(), 1, "header {header:?}");
+        assert_eq!(tasks[0].task_type.as_deref(), Some("feature"), "header {header:?}");
+    }
+}
+
+// F6 (c): the near-collision guard — "task" alone (bare) still maps to NAME,
+// never to task_type. Distinguishes the whole-cell-equality match in
+// `map_columns` from a substring/prefix match.
+#[test]
+fn bare_task_header_maps_to_name_not_task_type() {
+    let content = "| Task | Priority |\n| --- | --- |\n| Ship it | high |\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].name, "Ship it");
+    assert_eq!(tasks[0].task_type, None);
+}
+
+// F6 (g): a table with no Task Type column still parses fine, task_type is
+// None, and nothing else is disturbed.
+#[test]
+fn table_without_task_type_column_parses_with_none() {
+    let content = "| Name | Priority |\n| --- | --- |\n| Solo | low |\n";
+    let tasks = parse_tasks("TASKS.md", content);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_type, None);
+    assert_eq!(tasks[0].priority.as_deref(), Some("low"));
+}
+
+// F6 (f): `create_canonical_table`'s HEADER is frozen — Task Type is an
+// OPTIONAL column the skill adds on top, it is never part of this internal
+// six-column shape. Asserted as a literal string so nobody widens it later
+// (WO02_CONTRACT.md:194).
+#[test]
+fn canonical_table_header_is_frozen_agent_shape_not_task_type() {
+    let dir = temp_project("canonical-header-frozen");
+    let root = dir.to_string_lossy().into_owned();
+
+    task_append(root, "TASKS.md".to_string(), "brand new task".to_string()).unwrap();
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    let header_line = on_disk.lines().nth(2).unwrap();
+    assert_eq!(header_line, "| Name | Status | Priority | Tags | Agent | Description |");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ---- parser: checklist tag/agent/priority extraction + done state ----------
 
 #[test]
@@ -318,6 +393,66 @@ fn task_append_into_existing_table_preserves_unmapped_columns_byte_exact() {
          | --- | --- | --- |\n\
          | Row A |   keep me exact  | low |\n\
          | Row B | | |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// F6 (e), part 1: appending (free text, via `task_append`) into a table that
+// HAS a Task Type column keeps that column present in the new row's shape —
+// blank, like every other cell the free-text grammar can't fill (there is no
+// `#type:`-shaped token; §"No auto-mint" already governs id/deps the same
+// way for this exact code path).
+#[test]
+fn task_append_into_table_with_task_type_column_leaves_it_blank() {
+    let dir = temp_project("append-table-with-task-type");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Task Type | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A | bug | low |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_append(root, "TASKS.md".to_string(), "Row B".to_string()).unwrap();
+    assert_eq!(item.name, "Row B");
+    assert_eq!(item.task_type, None);
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        "| Name | Task Type | Priority |\n\
+         | --- | --- | --- |\n\
+         | Row A | bug | low |\n\
+         | Row B | | |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// F6 (e), part 2: a table with no Task Type column is entirely unaffected —
+// same row shape as before this feature existed.
+#[test]
+fn task_append_into_table_without_task_type_column_is_unaffected() {
+    let dir = temp_project("append-table-no-task-type");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Priority |\n\
+         | --- | --- |\n\
+         | Row A | low |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let item = task_append(root, "TASKS.md".to_string(), "Row B".to_string()).unwrap();
+    assert_eq!(item.task_type, None);
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        "| Name | Priority |\n\
+         | --- | --- |\n\
+         | Row A | low |\n\
+         | Row B | |\n"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -707,6 +842,7 @@ fn task_update_checklist_roundtrip_unchanged_for_canonical_line() {
         tags: Some(item.tags.clone()),
         priority: item.priority.clone(),
         phase: None,
+        task_type: None,
         agent: item.agent.clone(),
         status: item.status.clone(),
         done: Some(item.done),
@@ -733,6 +869,7 @@ fn task_update_checklist_marker_change_only_flips_marker() {
         tags: Some(item.tags.clone()),
         priority: item.priority.clone(),
         phase: None,
+        task_type: None,
         agent: item.agent.clone(),
         status: Some("in-production".to_string()),
         done: None,
@@ -792,6 +929,37 @@ fn task_update_table_row_preserves_unmapped_cells_byte_exact() {
     assert_eq!(
         on_disk,
         "| Name | Notes | Priority |\n| --- | --- | --- |\n| New Name |   keep me exactly  | high |\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// F6 (d): a task_type-only patch rewrites ONLY the Task Type cell — every
+// other cell, including the unmapped Notes column, is byte-identical.
+#[test]
+fn task_update_task_type_patch_rewrites_only_that_cell() {
+    let dir = temp_project("update-task-type-cell");
+    fs::write(
+        dir.join("TASKS.md"),
+        "| Name | Task Type | Notes | Priority |\n| --- | --- | --- | --- |\n\
+         | Old Name | bug |   keep me exactly  | P2 |\n",
+    )
+    .unwrap();
+    let root = dir.to_string_lossy().into_owned();
+
+    let patch = TaskPatch {
+        name: Some("Old Name".to_string()),
+        priority: Some("P2".to_string()),
+        task_type: Some("feature".to_string()),
+        ..Default::default()
+    };
+    let updated = task_update(root, "TASKS.md".to_string(), 3, patch).unwrap();
+    assert_eq!(updated.task_type.as_deref(), Some("feature"));
+
+    let on_disk = fs::read_to_string(dir.join("TASKS.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        "| Name | Task Type | Notes | Priority |\n| --- | --- | --- | --- |\n\
+         | Old Name | feature |   keep me exactly  | medium |\n"
     );
     let _ = fs::remove_dir_all(&dir);
 }

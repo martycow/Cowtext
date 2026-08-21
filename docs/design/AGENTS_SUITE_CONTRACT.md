@@ -339,7 +339,16 @@ Frontend-owned schema; Rust only validates "JSON object with a numeric `version`
 
 - Key = the agent's `fileName` (with `.md`).
 - `nickname`: string, default `""`, trimmed, ≤ 40 chars.
-- `priority`: integer 1–5, default 3, clamped on read and write.
+- `priority`: integer 1–5, default 3, clamped on read and write. **WO12 D4a
+  (ratified):** direction is frozen as **1 = highest**, matching the `P0 =
+  critical` task-priority chip the user already reads elsewhere. It remains
+  display-only — the complete reader set is `OrchestratorView.tsx`,
+  `MemoryNodeCard.tsx`'s node-card footer and this sidecar's own round-trip;
+  no sort or dispatch path reads it (§10 still defers "any compile-time use
+  of `priority`/`influence`"). Both the New Agent dialog and the editor label
+  the control `Priority (1 = highest)` with a helper line stating it is the
+  user's own ranking and does not affect dispatch order or compiled context.
+  Storage format is unchanged by this decision.
 - `influence`: integer 0–100, default 50, clamped.
 - `avatarSeed`: string, default = `fileName` with the trailing `.md` removed. Changing it rerolls
   both the avatar and the calf; it is the only user-facing identity lever.
@@ -622,4 +631,7 @@ the scene, and any compile-time use of `priority`/`influence`.
 
 ## 11. Ratified deviations
 
-None yet. Append here (dated, with the reason) — never edit §2–§9 in place.
+- **2026-08-20, WO12 D4a** — `priority` direction frozen as 1 = highest (§5). Still
+  display-only, zero consumers beyond the three render sites named there; §10's deferral of
+  compile-time use of `priority`/`influence` is unaffected. Both creation and edit surfaces now
+  read `Priority (1 = highest)` plus a helper line.

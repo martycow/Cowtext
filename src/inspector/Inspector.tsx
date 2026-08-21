@@ -6,6 +6,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AlertTriangle,
   Bot,
   Check,
   Copy,
@@ -22,6 +23,7 @@ import {
   Trash2,
   Workflow,
   X,
+  Zap,
 } from "lucide-react";
 import {
   EDGE_KINDS,
@@ -33,6 +35,8 @@ import {
   suggestFilePath,
   useGraphStore,
   type AssembleStatus,
+  type BarnGraph,
+  type EdgeGuard,
   type MemoryEdge,
   type MemoryNode,
   type NodeRole,
@@ -44,6 +48,7 @@ import { useSettingsStore } from "../store/settings";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
 import { isStructuralEdgeKind } from "../canvas/edgeKind";
 import { EDGE_COLORS } from "../canvas/edgeColor";
+import { useGlobMatchCount } from "../canvas/globMatch";
 import { InspectorSection } from "./InspectorSection";
 import {
   AGENT_NODE_ORDER,
@@ -57,15 +62,26 @@ import {
   type OffGraphAgentSectionKey,
 } from "./sectionOrder";
 import { ProjectPanel } from "./ProjectPanel";
-import { useHighlightStore, useInspectorTabStore } from "../canvas/types";
+import { useFocusStore, useHighlightStore, useInspectorTabStore } from "../canvas/types";
 import { ROLE_DESCRIPTIONS, ROLE_GROUPS } from "../canvas/roleMeta";
+// WO13 E3 — T1's frozen resolver (§8.1/§8.3). Not yet landed at the time
+// this lane wrote against it (T1 is a parallel lane; `src/config/` does not
+// exist in the tree yet) — the import is expected to resolve once T1's pass
+// completes, same "build against the frozen signature, integration lands it
+// green" posture WO11 G2 used against R1's not-yet-landed git module.
+import { resolveLoad, type LoadResult } from "../config/resolveLoad";
+import { lintRun } from "../lint/api";
+import { LINT_CODE_LABELS, type LintItem } from "../lint/types";
 import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
+import { requestAssemble } from "../assemble/gate";
+import type { AssembleMode } from "../assemble/types";
 import { revealPath } from "../fs/api";
-import { flushAgentSaveFor, PRODUCER_FILE, saveAgentRaw, useAgentsStore } from "../store/agents";
+import { flushAgentSaveFor, saveAgentRaw, useAgentsStore } from "../store/agents";
 import type { AgentDoc } from "../agents/types";
 import { AgentEditor } from "../agents/AgentEditor";
 import { SkillEditor } from "../agents/SkillEditor";
 import {
+  fullPatch,
   normalizePriority,
   PRIORITY_LABELS,
   STATUS_LABELS,
@@ -178,7 +194,15 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
 
   const busy = status === "queued" || status === "running";
 
-  const run = (fn: (graphJson: string) => Promise<void>) => {
+  // F7: flush/serialize still happen up front (the preview the gate shows
+  // must describe the just-saved state), but the actual invoke — and the
+  // optimistic "queued" mark — now live inside `onApprove`, so a cancelled
+  // gate never touches the node's status.
+  const run = (
+    mode: AssembleMode,
+    gateInstruction: string | null,
+    fn: (graphJson: string) => Promise<void>,
+  ) => {
     setActionError(null);
     void (async () => {
       // Disk and prompt must agree — same flush discipline as Compile.
@@ -191,21 +215,31 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
         edges: s.edges,
         compileTargets: s.compileTargets,
       });
-      // Optimistic freeze BEFORE the invoke: Rust emits its own events from
-      // a concurrent task, and a fast-failing job can deliver its terminal
-      // status before the invoke promise settles — real events must always
-      // win over this optimistic mark, never be overwritten by it.
-      setAssembleStatus(node.id, "queued");
-      try {
-        await fn(graphJson);
-      } catch (e) {
-        // Enqueue rejected — roll back the optimistic mark unless a real
-        // event has already moved the status on.
-        if (useGraphStore.getState().assembleStatus[node.id] === "queued") {
-          setAssembleStatus(node.id, "idle");
-        }
-        throw e;
-      }
+      requestAssemble({
+        root,
+        graphJson,
+        nodeId: node.id,
+        mode,
+        instruction: gateInstruction,
+        onApprove: async () => {
+          // Optimistic freeze BEFORE the invoke: Rust emits its own events
+          // from a concurrent task, and a fast-failing job can deliver its
+          // terminal status before the invoke promise settles — real events
+          // must always win over this optimistic mark, never be overwritten
+          // by it.
+          setAssembleStatus(node.id, "queued");
+          try {
+            await fn(graphJson);
+          } catch (e) {
+            // Enqueue rejected — roll back the optimistic mark unless a real
+            // event has already moved the status on.
+            if (useGraphStore.getState().assembleStatus[node.id] === "queued") {
+              setAssembleStatus(node.id, "idle");
+            }
+            setActionError(String(e));
+          }
+        },
+      });
     })().catch((e: unknown) => setActionError(String(e)));
   };
 
@@ -248,7 +282,7 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
       </div>
       <div className="flex gap-2">
         <button
-          onClick={() => run((graphJson) => assembleNode(root, graphJson, node.id))}
+          onClick={() => run("assemble", null, (graphJson) => assembleNode(root, graphJson, node.id))}
           disabled={busy}
           title={
             node.brief === ""
@@ -261,7 +295,7 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
           Assemble
         </button>
         <button
-          onClick={() => run((graphJson) => summarizeNode(root, graphJson, node.id))}
+          onClick={() => run("summarize", null, (graphJson) => summarizeNode(root, graphJson, node.id))}
           disabled={busy}
           title="Compress the current file content"
           className={secondaryBtn}
@@ -277,14 +311,18 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
           placeholder="Refine: e.g. add a testing section"
           onKeyDown={(e) => {
             if (e.key === "Enter" && instruction.trim() !== "" && !busy) {
-              run((graphJson) => refineNode(root, graphJson, node.id, instruction.trim()));
+              run("refine", instruction.trim(), (graphJson) =>
+                refineNode(root, graphJson, node.id, instruction.trim()),
+              );
             }
           }}
           className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
         />
         <button
           onClick={() =>
-            run((graphJson) => refineNode(root, graphJson, node.id, instruction.trim()))
+            run("refine", instruction.trim(), (graphJson) =>
+              refineNode(root, graphJson, node.id, instruction.trim()),
+            )
           }
           disabled={busy || instruction.trim() === ""}
           className={secondaryBtn}
@@ -1115,7 +1153,7 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
         sectionKey="node.context"
         title="Context"
         icon={Layers}
-        hint={node.pinned ? "pinned" : undefined}
+        hint={node.rootLoad === "always" ? "pinned" : undefined}
       >
         <div className="flex items-center justify-between">
           <div>
@@ -1124,7 +1162,10 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
               Always in context, survives compile.
             </p>
           </div>
-          <Toggle checked={node.pinned} onChange={(v) => updateNode(node.id, { pinned: v })} />
+          <Toggle
+            checked={node.rootLoad === "always"}
+            onChange={(v) => updateNode(node.id, { rootLoad: v ? "always" : undefined })}
+          />
         </div>
       </InspectorSection>
     ),
@@ -1297,8 +1338,8 @@ function Segmented<T extends string>({
   );
 }
 
-/** Agent field: a select over Producer + known agent files, falling back to
- *  a free-text input when the task's raw `agent` string doesn't match any
+/** Agent field: a select over "Unassigned" + known agent files, falling back
+ *  to a free-text input when the task's raw `agent` string doesn't match any
  *  known file/display name — never silently drops a hand-written value. */
 function TaskAgentField({
   value,
@@ -1309,7 +1350,7 @@ function TaskAgentField({
   agents: AgentDoc[];
   onChange: (v: string) => void;
 }) {
-  const known = agents.filter((a) => a.fileName !== PRODUCER_FILE);
+  const known = agents;
   const labelFor = (a: AgentDoc) => (a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName);
   const knownLabels = known.map(labelFor);
   const isKnown = value === "" || knownLabels.includes(value);
@@ -1320,7 +1361,7 @@ function TaskAgentField({
         onChange={(e) => onChange(e.target.value === "custom" ? value : e.target.value)}
         className="h-control rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
       >
-        <option value="">Producer</option>
+        <option value="">Unassigned</option>
         {known.map((a) => (
           <option key={a.fileName} value={labelFor(a)}>
             {labelFor(a)}
@@ -1356,6 +1397,8 @@ function TaskPanel({ root }: { root: string }) {
   const [tags, setTags] = useState<string[]>([]);
   const [priority, setPriority] = useState<string | null>(null);
   const [phase, setPhase] = useState("");
+  // WO12 F6 — the Task Type column is table-only, exactly like `phase`.
+  const [taskType, setTaskType] = useState("");
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState<TaskStatus>("new");
   const [saving, setSaving] = useState(false);
@@ -1369,6 +1412,7 @@ function TaskPanel({ root }: { root: string }) {
     setTags(item.tags);
     setPriority(item.priority);
     setPhase(item.phase ?? "");
+    setTaskType(item.taskType ?? "");
     setAgent(item.agent ?? "");
     setStatus(statusOf(item));
     setSaveError(null);
@@ -1383,15 +1427,25 @@ function TaskPanel({ root }: { root: string }) {
   const save = () => {
     setSaving(true);
     setSaveError(null);
-    void update(item, {
-      name,
-      description,
-      tags,
-      priority,
-      phase: item.source === "table" ? phase : null,
-      agent: agent.trim() === "" ? null : agent.trim(),
-      status,
-    }).then((err) => {
+    // WO12 F6 — built on `fullPatch` so the patch starts complete: every
+    // mapped column defaults to the item's own value and only the fields
+    // this form edits are overridden. `task_update` clears any column an
+    // absent key omits, which is how `taskType` used to be destroyed by a
+    // save from here.
+    void update(
+      item,
+      fullPatch(item, {
+        name,
+        description,
+        tags,
+        priority,
+        phase: item.source === "table" ? phase : null,
+        taskType: item.source === "table" && taskType.trim() !== "" ? taskType.trim() : null,
+        agent: agent.trim() === "" ? null : agent.trim(),
+        status,
+        done: status === "done",
+      }),
+    ).then((err) => {
       setSaving(false);
       if (err !== null) setSaveError(err);
     });
@@ -1458,6 +1512,27 @@ function TaskPanel({ root }: { root: string }) {
           <Segmented value={status} options={STATUS_ORDER} labels={STATUS_LABELS} onChange={setStatus} />
         </div>
         <div>
+          <FieldLabel>Task Type</FieldLabel>
+          <input
+            list="task-panel-type-suggestions"
+            value={taskType}
+            disabled={item.source !== "table"}
+            onChange={(e) => setTaskType(e.target.value)}
+            placeholder="e.g. bug, feature, chore"
+            className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+          />
+          <datalist id="task-panel-type-suggestions">
+            <option value="bug" />
+            <option value="feature" />
+            <option value="chore" />
+            <option value="spike" />
+            <option value="docs" />
+          </datalist>
+          {item.source !== "table" && (
+            <p className="mt-1 text-xs text-content-muted">Checklist tasks don't carry a task type column.</p>
+          )}
+        </div>
+        <div>
           <FieldLabel>Phase</FieldLabel>
           <input
             value={phase}
@@ -1498,9 +1573,34 @@ function PropertiesTab({
 }) {
   const updateNode = useGraphStore((s) => s.updateNode);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
+  const setNeedsReview = useGraphStore((s) => s.setNeedsReview);
+  const nodes = useGraphStore((s) => s.nodes);
   const edgeCount = useGraphStore(
     (s) => s.edges.filter((e) => e.source === node.id || e.target === node.id).length,
   );
+
+  // WO13 N-F — "opening one prefills the guessed values and shows a single
+  // line explaining what was guessed and why." The node itself only stores
+  // THAT it was flagged (`needsReview: true`), never WHICH of §5.2's four
+  // rules fired — so this reads the node's own current shape and names the
+  // most likely cause rather than inventing certainty the wire doesn't
+  // carry. `node.deprecated` is unambiguous (rule 4); role guesses (rules
+  // 1-3) are a best-effort account, phrased as a guess, not a fact.
+  const reviewReason = (n: MemoryNode): string => {
+    if (n.deprecated !== undefined) {
+      const replacement = nodes.find((x) => x.id === n.deprecated?.replacedBy);
+      return `Migration marked this deprecated — a "supersedes" edge pointed at it${
+        replacement !== undefined ? `, replaced by "${replacement.title}"` : ""
+      }. Check the replacement is right.`;
+    }
+    if (n.role === "architecture") {
+      return "Migration guessed this role — its old type no longer exists in this build. Check “architecture” is still right.";
+    }
+    if (n.role === "workflow") {
+      return "Migration guessed this role — it was a “task” before, and tasks have a lifecycle this role doesn't track. Check “workflow” is still right.";
+    }
+    return "Migration flagged this node for review. Check its role and load setting still look right.";
+  };
 
   // WO11 C2 — the declared order (sectionOrder.ts, §5.3) is the only thing
   // that decides layout now: this object is a plain keyed lookup, built in
@@ -1510,6 +1610,20 @@ function PropertiesTab({
   const sections: Partial<Record<MemoryNodeSectionKey, ReactNode>> = {
     "node.metadata": (
       <InspectorSection sectionKey="node.metadata" title="Metadata" icon={Tag} hint={node.role}>
+        {node.needsReview === true && (
+          <div className="flex items-start gap-2 rounded border border-accent-border bg-accent-surface px-2 py-1.5">
+            <Zap size={13} strokeWidth={1.5} className="mt-0.5 flex-none text-accent-text" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs leading-snug text-accent-text">{reviewReason(node)}</p>
+              <button
+                onClick={() => setNeedsReview(node.id, false)}
+                className="mt-1 text-xs font-medium text-accent-text underline-offset-2 hover:underline"
+              >
+                Mark reviewed
+              </button>
+            </div>
+          </div>
+        )}
         {/* Keyed by node.id: without this React reuses the same TitleField
             instance across a node switch. commit()/retry() close over the
             `node` prop from the render that created them, and commitTitle is
@@ -1530,7 +1644,7 @@ function PropertiesTab({
         sectionKey="node.context"
         title="Context"
         icon={Layers}
-        hint={node.pinned ? "pinned" : `#${node.readOrder}`}
+        hint={node.rootLoad === "always" ? "pinned" : `#${node.readOrder}`}
       >
         <div className="flex items-center justify-between">
           <div>
@@ -1539,7 +1653,10 @@ function PropertiesTab({
               Always in context, survives compile.
             </p>
           </div>
-          <Toggle checked={node.pinned} onChange={(v) => updateNode(node.id, { pinned: v })} />
+          <Toggle
+            checked={node.rootLoad === "always"}
+            onChange={(v) => updateNode(node.id, { rootLoad: v ? "always" : undefined })}
+          />
         </div>
 
         <div>
@@ -1685,11 +1802,16 @@ function FileMarkdownTab({
   const [doc, setDoc] = useState("");
   const [savedDoc, setSavedDoc] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Defect 6 (file half) — the file's own on-disk content just changed
+  // underneath an already-open tab and there is no dirty edit in flight to
+  // protect; set once the reload below actually replaces `doc`/`savedDoc`.
+  const [staleNotice, setStaleNotice] = useState(false);
 
   useEffect(() => {
     let live = true;
     setState({ kind: "loading" });
     setSaveError(null);
+    setStaleNotice(false);
     invoke<string>("read_md_file", { root, relPath: node.filePath })
       .then((text) => {
         if (!live) return;
@@ -1709,6 +1831,48 @@ function FileMarkdownTab({
   }, [root, node.filePath]);
 
   const dirty = state.kind === "ready" && doc !== savedDoc;
+
+  // Defect 6 (file half) — Marty: "After agent's node was assembled it
+  // doesn't update Markdown preview." The load effect above only reruns on
+  // [root, node.filePath]; nothing previously re-read the file when
+  // `assemble` wrote it out from under an already-open tab. This is a
+  // read-only reaction to the terminal "assembled" status already tracked
+  // in the graph store (WO13 §3.3) — it never writes the file itself, so
+  // `assemble.rs`'s `write_atomic` stays the one writer (WO11 one-writer
+  // doctrine). A dirty local edit is never silently clobbered: it surfaces
+  // a "reload from disk" banner instead of auto-replacing the buffer.
+  const assembleStatusForNode = useGraphStore((s) => s.assembleStatus[node.id] ?? "idle");
+  const prevAssembleStatusRef = useRef(assembleStatusForNode);
+  const reloadFromDisk = useRef<() => void>(() => {});
+  reloadFromDisk.current = () => {
+    invoke<string>("read_md_file", { root, relPath: node.filePath })
+      .then((text) => {
+        setDoc(text);
+        setSavedDoc(text);
+        setState((prev) => ({
+          kind: "ready",
+          generation: prev.kind === "ready" ? prev.generation + 1 : 0,
+        }));
+        setStaleNotice(false);
+      })
+      .catch(() => {
+        // The file may have been deleted mid-assemble; leave the buffer as
+        // is rather than surface a second error path for a rare race.
+      });
+  };
+  useEffect(() => {
+    const prev = prevAssembleStatusRef.current;
+    prevAssembleStatusRef.current = assembleStatusForNode;
+    if (prev === assembleStatusForNode || assembleStatusForNode !== "assembled") return;
+    if (state.kind !== "ready") return;
+    if (doc !== savedDoc) {
+      // Unsaved edit in the buffer — don't discard it silently.
+      setStaleNotice(true);
+    } else {
+      reloadFromDisk.current();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assembleStatusForNode]);
 
   const save = () => {
     if (state.kind !== "ready") return;
@@ -1788,6 +1952,26 @@ function FileMarkdownTab({
           {saveError}
         </div>
       )}
+      {staleNotice && (
+        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate text-xs text-amber-text">
+            Assemble changed this file on disk. Your unsaved edits are still here.
+          </span>
+          <button
+            onClick={() => reloadFromDisk.current()}
+            className="h-control-sm flex-none rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+          >
+            Reload from disk
+          </button>
+          <button
+            onClick={() => setStaleNotice(false)}
+            title="Dismiss"
+            className="grid h-4 w-4 flex-none place-items-center text-amber-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={11} strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
       <div className="min-h-0 flex-1 bg-surface-inset">
         <CodeMirrorEditor
           docKey={`${node.id}:${node.filePath}:${state.generation}`}
@@ -1811,11 +1995,19 @@ function FileMarkdownTab({
  *  already awaited `flushAgentSaveFor` for this file, so `doc.content` here
  *  is guaranteed current, not a stale snapshot racing the queue.
  *
- *  Keyed by `node.filePath` in the parent (MarkdownTab) rather than resynced
- *  via an effect: switching to a DIFFERENT agent file is a hard remount, so
- *  there is no code path that can overwrite an in-progress edit by reacting
- *  to an unrelated store update — the same discipline `TitleField`/
- *  `FileField` already use elsewhere in this file for the same reason. */
+ *  Keyed by `node.filePath` in the parent (MarkdownTab) for a CROSS-file
+ *  switch — that hard remount is still what discards an in-progress edit
+ *  when the selection moves to a different agent, the same discipline
+ *  `TitleField`/`FileField` use elsewhere in this file. WO13 defect 6 (agent
+ *  half) adds a SAME-file reaction on top of that: `RailSections.tsx` (U3)
+ *  watches `assembleStatus` independently of whether this tab is even
+ *  mounted and calls `reloadAgentFromDisk`, which splices fresh
+ *  `doc.content` into the store, clears any STORE draft, and bumps
+ *  `reloadNonce` — but this component's `text` is local React state, not a
+ *  store draft, so nothing here updates on its own without the effect below
+ *  watching `reloadNonce`. Never a second writer: this never calls
+ *  `reloadAgentFromDisk` or any write action itself, only reads the nonce
+ *  U3's code already bumps. */
 function AgentMarkdownTab({
   node,
   atMentions,
@@ -1828,12 +2020,61 @@ function AgentMarkdownTab({
   const doc = useAgentsStore((s) =>
     s.agents.find((a) => sameRelPath(`.claude/agents/${a.fileName}`, node.filePath)),
   );
+  const reloadNonce = useAgentsStore((s) => (doc !== undefined ? s.reloadNonce[doc.fileName] : undefined) ?? 0);
   const [text, setText] = useState(doc?.content ?? "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Same idiom as FileMarkdownTab's `staleNotice`/`reloadFromDisk` pair —
+  // bumped only when `text` is programmatically replaced, so CodeMirror
+  // remounts (via `docKey` below, matching `AgentEditor`'s own
+  // `${fileName}:${reloadNonce}` remount idiom) exactly when the buffer
+  // content actually changed, never on every unrelated `reloadNonce` bump.
+  const [generation, setGeneration] = useState(0);
+  const [staleNotice, setStaleNotice] = useState(false);
+  const prevReloadNonceRef = useRef(reloadNonce);
 
   const savedContent = doc?.content ?? "";
   const dirty = doc !== undefined && text !== savedContent;
+
+  // `reloadAgentFromDisk` (U3's `RailSections.tsx`) has ALREADY spliced the
+  // fresh content into `doc.content` and bumped `reloadNonce` by the time
+  // this component notices either — so by the time the effect below runs,
+  // `savedContent` is the NEW (post-reload) value, not what `text` was
+  // edited against. `preReloadContentRef` is the pre-reload baseline,
+  // updated by the SECOND effect below — which, because effects run in
+  // declaration order within one commit, always fires AFTER the
+  // reload-detection effect in the same commit, so the detection effect
+  // still sees the OLD baseline when it needs it. Without this a user who
+  // made zero local edits would still see the buffer wrongly compared
+  // against the just-changed `savedContent` and get a spurious "dirty" flag.
+  const preReloadContentRef = useRef(savedContent);
+
+  useEffect(() => {
+    const prev = prevReloadNonceRef.current;
+    const baseline = preReloadContentRef.current;
+    prevReloadNonceRef.current = reloadNonce;
+    if (prev === reloadNonce || doc === undefined) return;
+    if (text === baseline) {
+      // No local edit was sitting on top of the pre-reload content —
+      // nothing to protect, adopt the fresh content.
+      setText(savedContent);
+      setGeneration((g) => g + 1);
+    } else {
+      // A real edit is sitting in `text` — don't discard it silently.
+      setStaleNotice(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  useEffect(() => {
+    preReloadContentRef.current = savedContent;
+  }, [savedContent]);
+
+  const reloadFromDisk = () => {
+    setText(savedContent);
+    setGeneration((g) => g + 1);
+    setStaleNotice(false);
+  };
 
   const save = () => {
     if (doc === undefined || !dirty) return;
@@ -1882,9 +2123,29 @@ function AgentMarkdownTab({
           {saveError}
         </div>
       )}
+      {staleNotice && (
+        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-3 py-1">
+          <span className="min-w-0 flex-1 truncate text-xs text-amber-text">
+            Assemble changed this file on disk. Your unsaved edits are still here.
+          </span>
+          <button
+            onClick={reloadFromDisk}
+            className="h-control-sm flex-none rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+          >
+            Reload from disk
+          </button>
+          <button
+            onClick={() => setStaleNotice(false)}
+            title="Dismiss"
+            className="grid h-4 w-4 flex-none place-items-center text-amber-text transition-opacity duration-fast hover:opacity-70"
+          >
+            <X size={11} strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
       <div className="min-h-0 flex-1 bg-surface-inset">
         <CodeMirrorEditor
-          docKey={`${doc.fileName}:agent-raw`}
+          docKey={`${doc.fileName}:agent-raw:${generation}`}
           value={text}
           onChange={setText}
           onSave={save}
@@ -1898,16 +2159,228 @@ function AgentMarkdownTab({
 
 // ── Edge panel ────────────────────────────────────────────────────────
 
-function EdgePanel({ edge }: { edge: MemoryEdge }) {
+/** WO13 E3 — one sentence naming the deciding edge, from {@link LoadResult}.
+ *  `isDeciding` is true when THIS edge (the one the Inspector has open) is
+ *  `load.decidingEdgeId`; `decidingEdgeLabel` names the edge that IS
+ *  deciding when it's a different one, so the answer never just says
+ *  "somewhere else" — re-selecting that edge is always one click away from
+ *  this sentence. Exhaustive over every `LoadReason` (11 members, §8.1) — a
+ *  reason added later without a case here is a compile error, not a
+ *  silently wrong sentence. */
+function loadExplanation(
+  load: LoadResult,
+  targetTitle: string,
+  isDeciding: boolean,
+  decidingEdgeLabel: string | null,
+): string {
+  const elsewhere = (what: string) =>
+    `"${targetTitle}" ${what} through a different edge${
+      decidingEdgeLabel !== null ? ` (${decidingEdgeLabel})` : ""
+    } — not this one.`;
+  switch (load.reason) {
+    case "root-always":
+      return `"${targetTitle}" is always in context — it's pinned to Always load.`;
+    case "imported":
+      return isDeciding
+        ? `This edge is why "${targetTitle}" is always in context — it's reached by an unguarded import from the always-loaded set.`
+        : elsewhere("is always in context");
+    case "guarded-import-glob":
+      return isDeciding
+        ? `This edge is why "${targetTitle}" loads only when a matching file is touched.`
+        : elsewhere("loads on a glob match");
+    case "guarded-import-description":
+      return isDeciding
+        ? `This edge is why "${targetTitle}" loads on demand, gated by this guard's description.`
+        : elsewhere("loads on demand, gated by a guard");
+    case "referenced":
+      return isDeciding
+        ? `This edge is why "${targetTitle}" loads on demand — nothing pins or imports it, but this reference reaches it.`
+        : elsewhere("loads on demand, reached by a reference");
+    case "role-command":
+      return `"${targetTitle}" only runs when invoked — its role locks it to on-invoke, regardless of edges.`;
+    case "role-skill":
+      return `"${targetTitle}" loads itself when relevant — its role locks it to on-demand, regardless of edges.`;
+    case "deprecated":
+      return `"${targetTitle}" is deprecated, so it's excluded from every compiled output regardless of edges.`;
+    case "unreachable-import":
+      return `"${targetTitle}" is only imported by a node that itself never reaches an agent, so it's excluded.`;
+    case "orphan":
+      return `"${targetTitle}" has no import or reference reaching it, so it's excluded from every compiled output.`;
+    case "unknown-node":
+      return "This edge points at a node Cowtext can't resolve.";
+  }
+}
+
+const GUARD_KIND_LABELS: Record<"none" | "glob" | "description", string> = {
+  none: "Unguarded",
+  glob: "File glob",
+  description: "Description",
+};
+
+/** Remounted per-edge (the call site keys it on `edge.id`), so this local
+ *  draft state never needs a resync effect — switching the selected edge is
+ *  a fresh mount, same discipline `AgentMarkdownTab` uses for the same
+ *  reason. Never persists an empty-`globs`/empty-`text` guard (§4.2: "the
+ *  UI must not be able to create one") — clicking a guard-type button only
+ *  changes what's typed into next; the store write happens on real content,
+ *  and clearing the content back out removes the guard rather than leaving
+ *  an invalid one. */
+function GuardEditor({
+  edge,
+  updateEdge,
+}: {
+  edge: MemoryEdge;
+  updateEdge: (id: string, patch: { guard?: EdgeGuard }) => void;
+}) {
+  const [kind, setKind] = useState<"none" | "glob" | "description">(edge.guard?.type ?? "none");
+  const [globsText, setGlobsText] = useState(
+    edge.guard?.type === "glob" ? edge.guard.globs.join("\n") : "",
+  );
+  const [descText, setDescText] = useState(
+    edge.guard?.type === "description" ? edge.guard.text : "",
+  );
+  // Fix-round (tester finding #5, edge spec E2) — U2's shared matcher
+  // (canvas/globMatch.ts), imported unmodified rather than re-derived: two
+  // glob matchers that could disagree is worse than none. Called
+  // unconditionally (rules of hooks), same as KindPicker's own draw-time
+  // guard field; rendered only while `kind === "glob"` below. Takes
+  // `globsText` with zero adaptation — `splitGlobPatterns` already uses
+  // this component's own newline-per-pattern convention.
+  const globMatch = useGlobMatchCount(globsText);
+
+  const commit = (nextKind: typeof kind, globs: string, desc: string) => {
+    if (nextKind === "none") {
+      updateEdge(edge.id, { guard: undefined });
+      return;
+    }
+    if (nextKind === "glob") {
+      const list = globs
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s !== "");
+      updateEdge(edge.id, { guard: list.length > 0 ? { type: "glob", globs: list } : undefined });
+      return;
+    }
+    const text = desc.trim();
+    updateEdge(edge.id, { guard: text !== "" ? { type: "description", text } : undefined });
+  };
+
+  return (
+    <div>
+      <FieldLabel>Guard</FieldLabel>
+      <div className="mb-1.5 flex gap-1.5">
+        {(["none", "glob", "description"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={kind === k}
+            onClick={() => {
+              setKind(k);
+              commit(k, globsText, descText);
+            }}
+            className={`h-control-sm flex-1 rounded border px-2 text-xs transition-colors duration-fast ${
+              kind === k
+                ? "border-accent bg-accent-surface text-accent-text"
+                : "border-border bg-surface-2 text-content-secondary hover:border-border-strong"
+            }`}
+          >
+            {GUARD_KIND_LABELS[k]}
+          </button>
+        ))}
+      </div>
+      {kind === "glob" && (
+        <textarea
+          value={globsText}
+          onChange={(e) => {
+            setGlobsText(e.target.value);
+            commit("glob", e.target.value, descText);
+          }}
+          rows={2}
+          placeholder={"src/net/**\none glob per line"}
+          className="min-h-[40px] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1 font-mono text-xs text-content placeholder:text-content-disabled focus:border-accent"
+        />
+      )}
+      {kind === "glob" && (
+        // Same wording as KindPicker's draw-time field, deliberately byte
+        // identical so the two surfaces read as one feature. "of `scanned`"
+        // is load-bearing (globMatch.ts): the scan behind this count is
+        // .md-only, so a source-file glob reads near-zero for population
+        // reasons, not because it's wrong — never render a bare count.
+        // Zero matches is a real, frequently-correct answer here, so this
+        // is neutral text-content-muted, never an amber warning treatment.
+        <p className="mt-1 font-mono text-2xs leading-snug text-content-muted">
+          {globMatch.invalid ? " " : `~matches ${globMatch.count} of ${globMatch.scanned} tracked files`}
+        </p>
+      )}
+      {kind === "description" && (
+        <input
+          value={descText}
+          onChange={(e) => {
+            setDescText(e.target.value);
+            commit("description", globsText, e.target.value);
+          }}
+          placeholder="working on the payments flow"
+          className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent"
+        />
+      )}
+      {kind === "none" && (
+        <p className="text-xs leading-snug text-content-muted">
+          Always in effect — no glob or description gates it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EdgePanel({ edge, root }: { edge: MemoryEdge; root: string }) {
   const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
+  const projectName = useGraphStore((s) => s.projectName);
+  const compileTargets = useGraphStore((s) => s.compileTargets);
   const updateEdge = useGraphStore((s) => s.updateEdge);
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
+  const setSelection = useGraphStore((s) => s.setSelection);
+  const requestFocus = useFocusStore((s) => s.requestFocus);
   const title = (id: string) => nodes.find((n) => n.id === id)?.title ?? "?";
 
   const structural = isStructuralEdgeKind(edge.kind);
 
   const routed = edge.waypoints !== undefined && edge.waypoints.length > 0;
   const colorKey = edge.color ?? "default";
+
+  const targetNode = nodes.find((n) => n.id === edge.target);
+
+  // WO13 E3 — resolveLoad's answer for the edge's TARGET, and whether this
+  // specific edge is the one deciding it (§8.1's `decidingEdgeId`).
+  const load = useMemo(() => {
+    const graph: BarnGraph = { version: GRAPH_VERSION, projectName, nodes, edges, compileTargets };
+    return resolveLoad(edge.target, graph);
+  }, [edge.target, projectName, nodes, edges, compileTargets]);
+  const isDeciding = load.decidingEdgeId === edge.id;
+  const decidingEdge =
+    load.decidingEdgeId !== undefined && !isDeciding
+      ? edges.find((e) => e.id === load.decidingEdgeId)
+      : undefined;
+  const decidingEdgeLabel = decidingEdge !== undefined ? `from "${title(decidingEdge.source)}"` : null;
+
+  // WO13 E3 — lint diagnostics touching this edge. `lintRun` is R2's; the
+  // same "unavailable" degrade ProblemsPanel uses, kept local so one edge's
+  // panel never needs to coordinate with the shared Problems panel's own
+  // fetch/collapse state.
+  const [lintItems, setLintItems] = useState<LintItem[]>([]);
+  useEffect(() => {
+    let live = true;
+    lintRun(root)
+      .then((p) => {
+        if (live) setLintItems(p.items.filter((i) => i.edgeIds?.includes(edge.id) === true));
+      })
+      .catch(() => {
+        if (live) setLintItems([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [root, edge.id]);
 
   // WO11 C2 — same declared-order model as the node panels (EDGE_ORDER,
   // sectionOrder.ts). §5.3's table names Metadata·Path·Actions; Appearance
@@ -1941,18 +2414,12 @@ function EdgePanel({ edge }: { edge: MemoryEdge }) {
           >
             {structural ? "structural" : "advisory"}
           </span>
+          {edge.kind === "sequence" && targetNode !== undefined && (
+            <p className="mt-1.5 font-mono text-2xs text-content-muted">
+              Order: step {targetNode.readOrder}
+            </p>
+          )}
         </div>
-        {edge.kind === "conditional" && (
-          <div>
-            <FieldLabel>Condition</FieldLabel>
-            <input
-              value={edge.condition ?? ""}
-              onChange={(e) => updateEdge(edge.id, { condition: e.target.value })}
-              placeholder="src/net/** or plain language"
-              className="h-control w-full rounded border border-border bg-surface-2 px-2 font-mono text-xs text-content placeholder:text-content-disabled focus:border-accent"
-            />
-          </div>
-        )}
         <div>
           <FieldLabel>Note</FieldLabel>
           <input
@@ -1962,6 +2429,69 @@ function EdgePanel({ edge }: { edge: MemoryEdge }) {
             className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent"
           />
         </div>
+      </InspectorSection>
+    ),
+    // WO13 E3 — "a user can answer 'why is this node always in context?'
+    // by selecting one edge": the guard editor plus the resolved policy
+    // sentence below it are deliberately in the SAME section, so cause
+    // (the guard) and effect (the resolved policy) read together.
+    "edge.load": (
+      <InspectorSection
+        sectionKey="edge.load"
+        title="Load"
+        icon={Zap}
+        hint={edge.kind !== "contradicts" ? load.policy : undefined}
+      >
+        {edge.kind !== "contradicts" && <GuardEditor edge={edge} updateEdge={updateEdge} />}
+        <div>
+          <FieldLabel>{`Resolved policy — ${title(edge.target)}`}</FieldLabel>
+          <p
+            className={`rounded border px-2 py-1.5 text-xs leading-relaxed ${
+              isDeciding
+                ? "border-accent-border bg-accent-surface text-accent-text"
+                : "border-border-subtle bg-surface-2 text-content-secondary"
+            }`}
+          >
+            {loadExplanation(load, title(edge.target), isDeciding, decidingEdgeLabel)}
+          </p>
+          {decidingEdge !== undefined && (
+            <button
+              onClick={() => {
+                setSelection([], [decidingEdge.id]);
+                requestFocus(decidingEdge.source);
+              }}
+              className="mt-1.5 text-xs text-accent-text underline-offset-2 hover:underline"
+            >
+              Select the deciding edge
+            </button>
+          )}
+        </div>
+        {lintItems.length > 0 && (
+          <div>
+            <FieldLabel>Lint</FieldLabel>
+            <ul className="flex flex-col gap-1">
+              {lintItems.map((item, i) => (
+                <li
+                  key={i}
+                  className={`flex items-start gap-1.5 rounded border px-2 py-1 text-xs leading-snug ${
+                    item.severity === "error"
+                      ? "border-danger bg-danger-surface text-danger-text"
+                      : "border-amber-border bg-amber-surface text-amber-text"
+                  }`}
+                >
+                  <AlertTriangle size={12} strokeWidth={1.5} className="mt-0.5 flex-none" />
+                  <span>
+                    <span className="font-mono text-2xs uppercase tracking-wider opacity-80">
+                      {LINT_CODE_LABELS[item.code]}
+                    </span>
+                    <br />
+                    {item.message}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </InspectorSection>
     ),
     // WO10 item 13 — the palette is closed and token-backed
@@ -2156,7 +2686,7 @@ function InspectorHeader({
   );
 }
 
-export function Inspector({ root }: { root: string }) {
+export function Inspector({ root, onOpenGit }: { root: string; onOpenGit: () => void }) {
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
@@ -2249,7 +2779,7 @@ export function Inspector({ root }: { root: string }) {
           )}
         </>
       ) : edge !== undefined ? (
-        <EdgePanel edge={edge} />
+        <EdgePanel key={edge.id} edge={edge} root={root} />
       ) : multi ? (
         <div className="flex flex-col gap-3 p-3">
           <p className="text-sm text-content-secondary">
@@ -2269,7 +2799,7 @@ export function Inspector({ root }: { root: string }) {
           <p className="text-xs text-content-muted">Files stay on disk.</p>
         </div>
       ) : projectSelected ? (
-        <ProjectPanel root={root} />
+        <ProjectPanel root={root} onOpenGit={onOpenGit} />
       ) : taskItem !== null ? (
         <TaskPanel root={root} />
       ) : agentsSel !== null ? (

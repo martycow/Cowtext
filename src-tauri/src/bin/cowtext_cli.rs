@@ -93,9 +93,9 @@ cowtext-cli lint — run the graph linter
 USAGE:
     cowtext-cli lint [--root <PATH>] [--json]
 
-Runs every lint check (cycle, missing-file, dangling-edge, conflicts-with,
+Runs every lint check (cycle, missing-file, dangling-edge, contradicts,
 duplicate-title, near-duplicate-content, README duplication,
-stale-last-verified, superseded-but-pinned) against the project's current
+stale-last-verified) against the project's current
 graph and prints findings grouped by severity.
 
 EXIT CODE POLICY: warnings alone never fail a CI job; only error-severity
@@ -339,7 +339,7 @@ fn cmd_compile_check(root: &Path, json: bool) -> u8 {
     };
 
     let graph_json = serialize_graph(&graph);
-    let preview = match compile_preview(root_str.clone(), graph_json) {
+    let preview = match compile_preview(root_str.clone(), graph_json, Vec::new()) {
         Ok(p) => p,
         Err(e) => return compile_check_error(&root_str, json, e),
     };

@@ -66,14 +66,23 @@ export type SkillSectionKey = "skill.skill" | "skill.actions";
 
 export const SKILL_ORDER: readonly SkillSectionKey[] = ["skill.skill", "skill.actions"];
 
-export type EdgeSectionKey = "edge.metadata" | "edge.appearance" | "edge.path" | "edge.actions";
+export type EdgeSectionKey =
+  | "edge.metadata"
+  | "edge.load"
+  | "edge.appearance"
+  | "edge.path"
+  | "edge.actions";
 
 // §5.3's table names only Metadata · Path · Actions. Appearance (WO10 item
 // 13, landed after that table's prose was written) is kept — dropping it
 // here would delete a shipped feature, which is a worse outcome than the
 // table being one section short. Documented deviation, not a defect.
+// WO13 E3 adds "Load" — the resolved load policy + its reason + any lint
+// diagnostics touching this edge, right after Metadata so "why is this node
+// always in context" reads before appearance/routing cosmetics.
 export const EDGE_ORDER: readonly EdgeSectionKey[] = [
   "edge.metadata",
+  "edge.load",
   "edge.appearance",
   "edge.path",
   "edge.actions",

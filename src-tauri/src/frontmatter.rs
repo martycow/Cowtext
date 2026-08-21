@@ -13,7 +13,20 @@ mod tests;
 use serde::{Deserialize, Serialize};
 
 /// Known-key subset of the frontmatter. A total value: callers always send
-/// all five (contract §4) — `None` / empty means "delete this key".
+/// all ten (contract §4, extended WO13_CONTRACT.md §14.4) — `None` / empty
+/// means "delete this key".
+///
+/// WO13 §14.4 promotes five new known keys, in this canonical append order
+/// after `skills`: `disallowedTools` (list) · `permissionMode` (scalar) ·
+/// `maxTurns` (numeric scalar, rendered unquoted — the general scalar
+/// renderer already emits a plain digit string unquoted, so no special
+/// case is needed) · `memory` (scalar, enum `user|project|local` per the
+/// docs verdict, WO13_CONTRACT.md §3.0 — validated by the caller, not
+/// here) · `color` (scalar, enum `red|blue|green|yellow|purple|orange|
+/// pink|cyan`, same non-validation stance as `model`). `mcpServers`,
+/// `hooks`, `background`, `effort`, `isolation`, `initialPrompt` stay
+/// backlogged and must keep round-tripping as `FmLine::Extra` — see
+/// `frontmatter/tests.rs`'s round-trip fixture for all eleven keys at once.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FmFields {
@@ -24,6 +37,12 @@ pub struct FmFields {
     pub tools: Vec<String>,
     #[serde(default)]
     pub skills: Vec<String>,
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
+    pub permission_mode: Option<String>,
+    pub max_turns: Option<String>,
+    pub memory: Option<String>,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,16 +52,26 @@ enum KnownKey {
     Model,
     Tools,
     Skills,
+    DisallowedTools,
+    PermissionMode,
+    MaxTurns,
+    Memory,
+    Color,
 }
 
 impl KnownKey {
-    /// Canonical append order (contract §3.2.5).
-    const ORDER: [KnownKey; 5] = [
+    /// Canonical append order (contract §3.2.5, extended §14.4).
+    const ORDER: [KnownKey; 10] = [
         KnownKey::Name,
         KnownKey::Description,
         KnownKey::Model,
         KnownKey::Tools,
         KnownKey::Skills,
+        KnownKey::DisallowedTools,
+        KnownKey::PermissionMode,
+        KnownKey::MaxTurns,
+        KnownKey::Memory,
+        KnownKey::Color,
     ];
 
     fn as_str(self) -> &'static str {
@@ -52,6 +81,11 @@ impl KnownKey {
             KnownKey::Model => "model",
             KnownKey::Tools => "tools",
             KnownKey::Skills => "skills",
+            KnownKey::DisallowedTools => "disallowedTools",
+            KnownKey::PermissionMode => "permissionMode",
+            KnownKey::MaxTurns => "maxTurns",
+            KnownKey::Memory => "memory",
+            KnownKey::Color => "color",
         }
     }
 
@@ -62,6 +96,11 @@ impl KnownKey {
             "model" => Some(KnownKey::Model),
             "tools" => Some(KnownKey::Tools),
             "skills" => Some(KnownKey::Skills),
+            "disallowedTools" => Some(KnownKey::DisallowedTools),
+            "permissionMode" => Some(KnownKey::PermissionMode),
+            "maxTurns" => Some(KnownKey::MaxTurns),
+            "memory" => Some(KnownKey::Memory),
+            "color" => Some(KnownKey::Color),
             _ => None,
         }
     }
@@ -143,6 +182,11 @@ impl ParsedDoc {
                         KnownKey::Model => out.model = Some(scalar_value(&k.value_raw)),
                         KnownKey::Tools => out.tools = list_value(&k.value_raw).0,
                         KnownKey::Skills => out.skills = list_value(&k.value_raw).0,
+                        KnownKey::DisallowedTools => out.disallowed_tools = list_value(&k.value_raw).0,
+                        KnownKey::PermissionMode => out.permission_mode = Some(scalar_value(&k.value_raw)),
+                        KnownKey::MaxTurns => out.max_turns = Some(scalar_value(&k.value_raw)),
+                        KnownKey::Memory => out.memory = Some(scalar_value(&k.value_raw)),
+                        KnownKey::Color => out.color = Some(scalar_value(&k.value_raw)),
                     }
                 }
             }
@@ -463,15 +507,34 @@ fn rendered_new_value(key: KnownKey, f: &FmFields, lines: &[FmLine]) -> Result<O
         KnownKey::Model => scalar_new_value(f.model.as_deref()),
         KnownKey::Tools => Ok(list_new_value(&f.tools, find_list_form(lines, key))),
         KnownKey::Skills => Ok(list_new_value(&f.skills, find_list_form(lines, key))),
+        KnownKey::DisallowedTools => {
+            Ok(list_new_value(&f.disallowed_tools, find_list_form(lines, key)))
+        }
+        // `maxTurns` renders unquoted: a plain digit string never starts
+        // with `[{#"'` and never contains `: `, so `render_scalar_value`'s
+        // existing quoting rule already leaves it bare — no special case.
+        KnownKey::PermissionMode => scalar_new_value(f.permission_mode.as_deref()),
+        KnownKey::MaxTurns => scalar_new_value(f.max_turns.as_deref()),
+        KnownKey::Memory => scalar_new_value(f.memory.as_deref()),
+        KnownKey::Color => scalar_new_value(f.color.as_deref()),
     }
 }
 
 fn has_any_nonempty(f: &FmFields) -> bool {
-    [&f.name, &f.description, &f.model]
-        .iter()
-        .any(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()))
+    [
+        &f.name,
+        &f.description,
+        &f.model,
+        &f.permission_mode,
+        &f.max_turns,
+        &f.memory,
+        &f.color,
+    ]
+    .iter()
+    .any(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()))
         || !f.tools.is_empty()
         || !f.skills.is_empty()
+        || !f.disallowed_tools.is_empty()
 }
 
 /// The value for `key` already on disk, in the same parsed/trimmed shape
@@ -536,6 +599,15 @@ fn should_touch_key(key: KnownKey, f: &FmFields, lines: &[FmLine]) -> bool {
         KnownKey::Model => scalar_changed(f.model.as_deref(), lines, key) || existing_value_is_quoted(lines, key),
         KnownKey::Tools => current_list(lines, key) != f.tools,
         KnownKey::Skills => current_list(lines, key) != f.skills,
+        KnownKey::DisallowedTools => current_list(lines, key) != f.disallowed_tools,
+        KnownKey::PermissionMode => {
+            scalar_changed(f.permission_mode.as_deref(), lines, key) || existing_value_is_quoted(lines, key)
+        }
+        KnownKey::MaxTurns => {
+            scalar_changed(f.max_turns.as_deref(), lines, key) || existing_value_is_quoted(lines, key)
+        }
+        KnownKey::Memory => scalar_changed(f.memory.as_deref(), lines, key) || existing_value_is_quoted(lines, key),
+        KnownKey::Color => scalar_changed(f.color.as_deref(), lines, key) || existing_value_is_quoted(lines, key),
     }
 }
 

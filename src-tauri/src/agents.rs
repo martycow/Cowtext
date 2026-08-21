@@ -188,15 +188,6 @@ fn validate_md_component(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The reserved default-agent file (TASKBOARD_BATCH_CONTRACT.md §4) — same
-/// protection class as `CLAUDE.md`. `agent_create("Producer")` is the only
-/// sanctioned way to materialize it; rename/delete/convert never touch it.
-const PRODUCER_FILE_NAME: &str = "producer.md";
-
-fn is_producer_file(name: &str) -> bool {
-    name.trim().to_ascii_lowercase() == PRODUCER_FILE_NAME
-}
-
 fn agents_dir(root: &Path) -> PathBuf {
     root.join(".claude").join("agents")
 }
@@ -404,9 +395,18 @@ fn move_avatar_best_effort(root: &Path, old_stem: &str, new_stem: &str) {
     let _ = fs::rename(&src, &dest);
 }
 
+/// WO13_CONTRACT.md §3.0 (D9 docs verdict): a sub-agent file whose YAML
+/// parses but carries no `description` is skipped and never loaded at all —
+/// stronger than merely "never delegated". A blank `description: ` here
+/// would ship a freshly created agent that Claude Code silently ignores
+/// until the user fills it in. The placeholder is deliberately generic
+/// (this command has no `description` input to draw on) and is exactly the
+/// kind of weak, non-trigger-shaped text the agent modal's own B3 weak-
+/// description flag (U3, WO13_CONTRACT.md §14.3) is designed to catch on
+/// the rail once the real one is written.
 fn agent_template(slug: &str) -> String {
     format!(
-        "---\nname: {slug}\ndescription: \nmodel: sonnet\ntools: Read, Grep, Glob\nskills: []\n---\n\n# {slug}\n\n## Duties\n\n## Boundaries\n"
+        "---\nname: {slug}\ndescription: TODO - describe when this agent should be used, and when not to.\nmodel: sonnet\ntools: Read, Grep, Glob\nskills: []\n---\n\n# {slug}\n\n## Duties\n\n## Boundaries\n"
     )
 }
 
@@ -764,16 +764,10 @@ pub fn agent_save(
 pub fn agent_rename(root: String, file_name: String, new_name: String) -> Result<String, String> {
     validate_md_component(&file_name)?;
     validate_component(&new_name)?;
-    if is_producer_file(&file_name) {
-        return Err("Reserved agent: producer".to_string());
-    }
     let root_path = checked_root(&root)?;
     let _guard = agent_fs_guard();
     let slug = crate::preset::slugify(&new_name)?;
     let new_file_name = format!("{slug}.md");
-    if is_producer_file(&new_file_name) {
-        return Err("Reserved agent: producer".to_string());
-    }
     let src = resolve_within_root(&root_path, &format!(".claude/agents/{file_name}"))?;
     let dest = resolve_within_root(&root_path, &format!(".claude/agents/{new_file_name}"))?;
 
@@ -793,9 +787,6 @@ pub fn agent_rename(root: String, file_name: String, new_name: String) -> Result
 #[tauri::command]
 pub fn agent_delete(root: String, file_name: String) -> Result<(), String> {
     validate_md_component(&file_name)?;
-    if is_producer_file(&file_name) {
-        return Err("Reserved agent: producer".to_string());
-    }
     let root_path = checked_root(&root)?;
     let _guard = agent_fs_guard();
     let path = resolve_within_root(&root_path, &format!(".claude/agents/{file_name}"))?;
@@ -911,9 +902,6 @@ pub fn agent_convert(root: String, rel_path: String, new_name: String) -> Result
 
     let slug = crate::preset::slugify(&new_name)?;
     let file_name = format!("{slug}.md");
-    if is_producer_file(&file_name) {
-        return Err("Reserved agent: producer".to_string());
-    }
     let dir = agents_dir(&root_path);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(&file_name);

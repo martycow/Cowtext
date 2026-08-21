@@ -14,11 +14,15 @@ export function gitStatus(root: string): Promise<GitStatus> {
   return invoke<GitStatus>("git_status", { root });
 }
 
-/** `git init` and nothing else — no commit, no remote, no config, no first
- *  `add`. A no-op (still returns fresh status) when `root` is already a
- *  repo. */
-export function gitInit(root: string): Promise<GitStatus> {
-  return invoke<GitStatus>("git_init", { root });
+/** `git init` and nothing else beyond an optional default-branch choice —
+ *  no commit, no remote, no config, no first `add`. A no-op (still returns
+ *  fresh status, HEAD left untouched) when `root` is already a repo — even
+ *  when `branch` is non-null (D1b: re-running the wizard on a project you
+ *  already initialized must never silently move that repo's HEAD).
+ *  `branch: null` reproduces the pre-D1b behaviour: bare `git init`, name
+ *  left to `init.defaultBranch` / git's own built-in default. */
+export function gitInit(root: string, branch: string | null): Promise<GitStatus> {
+  return invoke<GitStatus>("git_init", { root, branch });
 }
 
 /** Writes `<root>/.gitignore` verbatim — this is a write into the user's

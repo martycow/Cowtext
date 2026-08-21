@@ -17,6 +17,9 @@ export interface TaskItem {
   tags: string[];
   priority: string | null;
   phase: string | null;
+  /** Header-driven "Task Type" cell (F6): synonyms `Task Type`|`Type`|`Kind`.
+   *  Table-only, like `phase` — always `null` for checklist tasks. */
+  taskType: string | null;
   agent: string | null;
   done: boolean;
   status: string | null;
@@ -61,6 +64,8 @@ export interface TaskPatch {
   tags?: string[] | null;
   priority?: string | null;
   phase?: string | null;
+  /** See {@link TaskItem.taskType}. */
+  taskType?: string | null;
   agent?: string | null;
   status?: string | null;
   done?: boolean | null;

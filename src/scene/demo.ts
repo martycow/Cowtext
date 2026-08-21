@@ -10,12 +10,12 @@ import type { BarnEvent, BarnEventKind } from "./types";
 /** Stand-in nodes rendered when the loaded graph has none — the demo must
  *  run without a backend or an open project. */
 export const DEMO_NODES: MemoryNode[] = [
-  { id: "demo-a", title: "Rules", role: "rules", brief: "", filePath: "context/rules.md", readOrder: 1, pinned: true, position: { x: 0, y: 0 } },
-  { id: "demo-b", title: "Agent", role: "agent", brief: "", filePath: "context/persona.md", readOrder: 2, pinned: false, position: { x: 0, y: 0 } },
-  { id: "demo-c", title: "Architecture", role: "architecture", brief: "", filePath: "context/architecture.md", readOrder: 3, pinned: false, position: { x: 0, y: 0 } },
-  { id: "demo-d", title: "API reference", role: "reference", brief: "", filePath: "context/api-reference.md", readOrder: 4, pinned: false, position: { x: 0, y: 0 } },
-  { id: "demo-e", title: "Current task", role: "task", brief: "", filePath: "context/current-task.md", readOrder: 5, pinned: false, position: { x: 0, y: 0 } },
-  { id: "demo-f", title: "Release workflow", role: "workflow", brief: "", filePath: "context/release-workflow.md", readOrder: 6, pinned: false, position: { x: 0, y: 0 } },
+  { id: "demo-a", title: "Rules", role: "rule", brief: "", filePath: "context/rules.md", readOrder: 1, rootLoad: "always", position: { x: 0, y: 0 } },
+  { id: "demo-b", title: "Agent", role: "agent", brief: "", filePath: "context/persona.md", readOrder: 2, position: { x: 0, y: 0 } },
+  { id: "demo-c", title: "Architecture", role: "architecture", brief: "", filePath: "context/architecture.md", readOrder: 3, position: { x: 0, y: 0 } },
+  { id: "demo-d", title: "API reference", role: "architecture", brief: "", filePath: "context/api-reference.md", readOrder: 4, position: { x: 0, y: 0 } },
+  { id: "demo-e", title: "Current task", role: "workflow", brief: "", filePath: "context/current-task.md", readOrder: 5, position: { x: 0, y: 0 } },
+  { id: "demo-f", title: "Release workflow", role: "workflow", brief: "", filePath: "context/release-workflow.md", readOrder: 6, position: { x: 0, y: 0 } },
 ];
 
 interface DemoStep {

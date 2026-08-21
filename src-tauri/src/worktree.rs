@@ -119,11 +119,25 @@ fn stderr_tail(stderr: &[u8]) -> String {
 }
 
 /// One `git -C <path> rev-parse --is-inside-work-tree --absolute-git-dir
-/// --git-common-dir --abbrev-ref HEAD` invocation (contract §4.1, byte-exact
-/// flag set). Non-zero exit (which includes "not a git repository", and also
-/// covers a repo with no commits yet, where `--abbrev-ref HEAD` itself fails
-/// — an accepted simplification per the frozen contract) -> `Ok` with
-/// `isRepo: false`, never `Err`. `git` missing entirely -> `Err`.
+/// --git-common-dir` invocation, followed by a second, independent `git -C
+/// <path> symbolic-ref --short HEAD` for the branch name (contract §4.1,
+/// amended — ratified deviation, see `docs/design/WO01_BLOCK_F_CONTRACT.md`
+/// §11 D8 and this lane's amendment note there).
+///
+/// D8 root cause: `git rev-parse` exits 128 for the WHOLE invocation when
+/// any one of its arguments fails to resolve, and `--abbrev-ref HEAD` fails
+/// on an unborn HEAD — so the old composite call (which included
+/// `--abbrev-ref HEAD`) misreported *every* commitless repository as "not a
+/// git repository", including every repo Cowtext's own `git_init` had just
+/// created (it deliberately makes no first commit; see `git.rs`). Splitting
+/// the branch lookup into its own call means a commitless repo (or a
+/// detached HEAD, where `symbolic-ref` also fails) only loses `branch`, not
+/// `isRepo`.
+///
+/// Non-zero exit from the three-flag call (i.e. a genuine "not a git
+/// repository") -> `Ok` with `isRepo: false`, never `Err`. `git` missing
+/// entirely -> `Err`. The error string and the `WorktreeInfo` wire shape are
+/// UNCHANGED by this amendment.
 #[tauri::command]
 pub fn worktree_check(path: String) -> Result<WorktreeInfo, String> {
     let p = PathBuf::from(&path);
@@ -133,9 +147,7 @@ pub fn worktree_check(path: String) -> Result<WorktreeInfo, String> {
         .arg("rev-parse")
         .arg("--is-inside-work-tree")
         .arg("--absolute-git-dir")
-        .arg("--git-common-dir")
-        .arg("--abbrev-ref")
-        .arg("HEAD");
+        .arg("--git-common-dir");
     no_console(&mut cmd);
     let output = cmd.output().map_err(|_| "git not found on PATH".to_string())?;
     let display = display_path(&p);
@@ -157,14 +169,9 @@ pub fn worktree_check(path: String) -> Result<WorktreeInfo, String> {
     }
     let git_dir = lines.next().unwrap_or("");
     let common_dir = lines.next().unwrap_or("");
-    let branch_raw = lines.next().unwrap_or("").trim();
 
     let is_worktree = normalize_git_path(&p, git_dir) != normalize_git_path(&p, common_dir);
-    let branch = if branch_raw.is_empty() || branch_raw == "HEAD" {
-        None
-    } else {
-        Some(branch_raw.to_string())
-    };
+    let branch = branch_name(&p);
 
     Ok(WorktreeInfo {
         path: display,
@@ -174,7 +181,36 @@ pub fn worktree_check(path: String) -> Result<WorktreeInfo, String> {
     })
 }
 
-fn validate_branch(branch: &str) -> Result<(), String> {
+/// `git -C <path> symbolic-ref --short HEAD` — `None` on a non-zero exit
+/// (detached HEAD, or an unborn HEAD on a commitless repo), never on a
+/// spawn failure being treated as a hard error here: the caller already
+/// knows `git` is on PATH by the time it calls this (the composite
+/// `rev-parse` above already succeeded).
+fn branch_name(p: &Path) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(p).arg("symbolic-ref").arg("--short").arg("HEAD");
+    no_console(&mut cmd);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Branch-name validation shared with `git.rs`'s `git_init` (D1b). Refuses
+/// empty/whitespace names, the `worktree_add` character set
+/// `~^:?*[\`, a leading `-` (git reads `-foo` as a flag, not a name — most
+/// concretely on `checkout -b -foo`), a `..` anywhere (git's own
+/// `check-ref-format` rule, and the same substring `worktree_add`'s stderr
+/// match already special-cases for "already exists"), and a trailing
+/// `.lock` (collides with git's own ref-lock file naming and is rejected by
+/// `check-ref-format` too).
+pub(crate) fn validate_branch(branch: &str) -> Result<(), String> {
     if branch.trim().is_empty() {
         return Err("branch name cannot be empty".to_string());
     }
@@ -183,6 +219,15 @@ fn validate_branch(branch: &str) -> Result<(), String> {
     }
     if branch.chars().any(|c| INVALID_BRANCH_CHARS.contains(&c)) {
         return Err(format!("branch name contains invalid characters: {branch}"));
+    }
+    if branch.starts_with('-') {
+        return Err(format!("branch name cannot start with '-': {branch}"));
+    }
+    if branch.contains("..") {
+        return Err(format!("branch name cannot contain '..': {branch}"));
+    }
+    if branch.ends_with(".lock") {
+        return Err(format!("branch name cannot end with '.lock': {branch}"));
     }
     Ok(())
 }

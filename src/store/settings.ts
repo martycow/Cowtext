@@ -2,6 +2,7 @@
 // Persisted via Rust read_app_settings/write_app_settings (app_config_dir/settings.json).
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { pushToast } from "./toasts";
 
 /** One entry in the recent-projects list (startup screen). */
 export interface RecentProject {
@@ -243,7 +244,11 @@ function persistNow(): void {
     (e: unknown) => {
       // Surfaced in the UI (persistError) — a failed write also means the
       // claude override was never applied Rust-side for this session.
-      console.error("write_app_settings failed:", e);
+      pushToast({
+        severity: "danger",
+        title: "Settings failed to save",
+        detail: String(e),
+      });
       useSettingsStore.setState({ persistError: String(e) });
     },
   );
@@ -288,7 +293,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         if (raw !== null) merged = mergeSettings(JSON.parse(raw) as unknown);
       } catch (e: unknown) {
         // Parse or IPC failure → defaults; the app must still start.
-        console.error("read_app_settings failed:", e);
+        pushToast({
+          severity: "danger",
+          title: "Settings failed to load",
+          detail: String(e),
+        });
       }
       set({ ...merged, loaded: true });
     })();

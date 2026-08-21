@@ -1,18 +1,47 @@
-// Add-agent dialog (WO01 Block F §8.3) — picks an optional agent file, a
-// name, and a working folder; nudges toward a worktree but only truly blocks
-// on "not a git repository" or "an agent already holds this folder" (the
-// guardrail Rust re-enforces regardless). Same modal chrome, focus trap and
-// Esc-to-close discipline as HooksModal/ReviewModal — no new UI primitive.
+// Run-session dialog (F3 — WO12 acceptance round 2). The single launch
+// surface in the app: picks an optional agent file, a name, and a working
+// folder, prefilled from whatever the user was just looking at, then
+// launches a real Claude Code session. Nudges toward a worktree but only
+// truly blocks on "not a git repository" or "an agent already holds this
+// folder" (the guardrail Rust re-enforces regardless). Same modal chrome,
+// focus trap and Esc-to-close discipline as HooksModal/ReviewModal — no new
+// UI primitive.
+//
+// Frozen export (WO12 contract): `RunSessionDialog({ root, onClose })`. This
+// used to be three surfaces — RosterBar's bare launch button, the
+// Orchestrator's per-agent launch action, TaskContextModal's Launch button —
+// each with its own prefill path. All three prefill paths are preserved
+// HERE, derived from context at mount, not as props: per-agent
+// workspace/ceiling defaults (`meta.defaultCwd`/`meta.defaultTokenCeiling`,
+// previously reached only from the Orchestrator), task-context injection +
+// tasklinks provenance (previously reached only from TaskContextModal's
+// Launch button), and free agent choice including "(none)".
 
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
-import { useAgentsStore } from "../store/agents";
-import { useSessionsStore } from "../store/sessions";
+import { metaOrDefault, useAgentsStore } from "../store/agents";
+import { MAX_SESSIONS, useSessionsStore } from "../store/sessions";
+import { useTasksStore } from "../store/tasks";
+import { useTaskLinksStore } from "../store/tasklinks";
+import { GRAPH_VERSION, serializeGraph, useGraphStore } from "../store/graph";
+import { formatTokenCount, tokensForBytes } from "../store/tokens";
+import { taskContextPreview } from "../taskctx/api";
+import type { AgentDoc } from "../agents/types";
 import { worktreeAdd, worktreeCheck, type WorktreeInfo } from "./api";
 
 function agentStem(fileName: string): string {
   return fileName.replace(/\.md$/i, "");
+}
+
+/** Local copy of OrchestratorView's private helper — modals/dialogs don't
+ *  import across feature dirs for a three-line pure function (established
+ *  idiom, see TaskContextModal's PixelMarch). */
+function agentLabel(doc: AgentDoc, nickname: string): string {
+  if (nickname.trim() !== "") return nickname;
+  const named = doc.fields.name?.trim();
+  if (named !== undefined && named !== "") return named;
+  return agentStem(doc.fileName);
 }
 
 function slugify(s: string): string {
@@ -24,38 +53,36 @@ function slugify(s: string): string {
   return slug === "" ? "agent" : slug;
 }
 
-/** WO06 §4.3 — when `taskId`/`taskContext` are supplied (from
- *  `TaskContextModal`'s Launch button), the dialog spawns THROUGH
- *  `spawnForTask` instead of `spawn`, so the session boots with the
- *  pre-compiled subgraph body and the effective ceiling already resolved by
- *  the caller. All four are optional and default to the pre-WO06 shape, so
- *  every existing call site (RosterBar's plain "Spawn agent") is unaffected. */
-export function AddAgentDialog({
-  root,
-  onClose,
-  taskId = null,
-  taskContext = null,
-  tokenCeiling = null,
-  onSpawned,
-}: {
-  root: string;
-  onClose: () => void;
-  taskId?: string | null;
-  taskContext?: string | null;
-  tokenCeiling?: number | null;
-  /** Fires after a successful spawn, Cowtext-side session id — only ever
-   *  used by the task-launch flow. */
-  onSpawned?: (sessionId: string) => void;
-}) {
-  const agents = useAgentsStore((s) => s.agents);
-  const sessions = useSessionsStore((s) => s.sessions);
-  const forTask = taskId !== null && taskContext !== null;
+/** Local copy of OrchestratorView's private helper — same idiom as
+ *  `agentLabel` above. */
+function formatCeiling(v: number | null): string {
+  if (v === null) return "inherit";
+  if (v === 0) return "unbounded";
+  return v >= 1000 ? `${Math.round(v / 1000)}k` : String(v);
+}
 
-  const [agentFileName, setAgentFileName] = useState<string | null>(null);
+export function RunSessionDialog({ root, onClose }: { root: string; onClose: () => void }) {
+  const agents = useAgentsStore((s) => s.agents);
+  const agentMeta = useAgentsStore((s) => s.meta);
+  const sessions = useSessionsStore((s) => s.sessions);
+
+  // ── Agent: prefilled from the current selection, otherwise "(none)" ────
+  const [agentFileName, setAgentFileName] = useState<string | null>(() => {
+    const sel = useAgentsStore.getState().selection;
+    return sel !== null && sel.kind === "agent" ? sel.key : null;
+  });
+  const meta = metaOrDefault(agentMeta, agentFileName ?? "");
+
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
 
-  const [cwd, setCwd] = useState<string | null>(null);
+  // ── Folder: agent's own default, else the project root ─────────────────
+  const [cwd, setCwd] = useState<string | null>(() => {
+    const sel = useAgentsStore.getState().selection;
+    const initialFile = sel !== null && sel.kind === "agent" ? sel.key : null;
+    const initialMeta = metaOrDefault(useAgentsStore.getState().meta, initialFile ?? "");
+    return initialMeta.defaultCwd !== "" ? initialMeta.defaultCwd : root;
+  });
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
   const [worktreeBusy, setWorktreeBusy] = useState(false);
   const [worktreeError, setWorktreeError] = useState<string | null>(null);
@@ -65,19 +92,34 @@ export function AddAgentDialog({
   const [worktreeAddBusy, setWorktreeAddBusy] = useState(false);
   const [worktreeAddError, setWorktreeAddError] = useState<string | null>(null);
 
-  const [spawning, setSpawning] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
+  // ── Task: prefilled from the board's current selection, optional ───────
+  const [taskId, setTaskId] = useState<string | null>(() => {
+    const sel = useTasksStore.getState().selected;
+    return sel !== null && sel.taskId !== null ? sel.taskId : null;
+  });
+  const [taskName, setTaskName] = useState<string | null>(() => {
+    const sel = useTasksStore.getState().selected;
+    return sel !== null && sel.taskId !== null ? sel.name : null;
+  });
+  const [taskCtx, setTaskCtx] = useState<{ body: string; bytes: number } | null>(null);
+  const [taskCtxError, setTaskCtxError] = useState<string | null>(null);
+  const linksRoot = useTaskLinksStore((s) => s.root);
+  const loadLinks = useTaskLinksStore((s) => s.load);
+  const link = useTaskLinksStore((s) => (taskId !== null ? s.linkFor(taskId) : null));
+
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   // Trust-adjacent dialog: focus starts on Cancel so Enter never silently
-  // spawns an agent before the folder is even checked.
+  // launches a session before the folder is even checked.
   useEffect(() => {
     (cancelRef.current ?? panelRef.current)?.focus();
   }, []);
 
-  const canClose = !spawning;
+  const canClose = !running;
   useEffect(() => {
     if (!canClose) return;
     const onKey = (e: KeyboardEvent) => {
@@ -90,8 +132,63 @@ export function AddAgentDialog({
   // Agent selection drives the Name default until the user edits it by hand.
   useEffect(() => {
     if (nameTouched) return;
-    setName(agentFileName === null ? "" : agentStem(agentFileName));
-  }, [agentFileName, nameTouched]);
+    if (agentFileName === null) {
+      setName("");
+      return;
+    }
+    const doc = agents.find((a) => a.fileName === agentFileName);
+    const m = metaOrDefault(agentMeta, agentFileName);
+    setName(doc !== undefined ? agentLabel(doc, m.nickname) : agentStem(agentFileName));
+  }, [agentFileName, nameTouched, agents, agentMeta]);
+
+  useEffect(() => {
+    if (linksRoot !== root) void loadLinks(root);
+  }, [root, linksRoot, loadLinks]);
+
+  // Best-effort task-context preview, mirroring TaskContextModal's own
+  // fetch — resolves the compiled body `spawnForTask` needs. A failure here
+  // does not block the launch; it just falls back to a plain (task-less)
+  // launch and says so.
+  useEffect(() => {
+    if (taskId === null) {
+      setTaskCtx(null);
+      setTaskCtxError(null);
+      return;
+    }
+    let live = true;
+    const s = useGraphStore.getState();
+    const graphJson = serializeGraph({
+      version: GRAPH_VERSION,
+      projectName: s.projectName,
+      nodes: s.nodes,
+      edges: s.edges,
+      compileTargets: s.compileTargets,
+    });
+    taskContextPreview(root, taskId, graphJson)
+      .then((result) => {
+        if (!live) return;
+        if (result.errors.length > 0) {
+          setTaskCtx(null);
+          setTaskCtxError("subgraph unavailable");
+        } else {
+          setTaskCtx({ body: result.body, bytes: result.bytes });
+          setTaskCtxError(null);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        setTaskCtx(null);
+        setTaskCtxError(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [root, taskId]);
+
+  const clearTask = () => {
+    setTaskId(null);
+    setTaskName(null);
+  };
 
   const checkFolder = (path: string) => {
     setCwd(path);
@@ -111,8 +208,17 @@ export function AddAgentDialog({
       });
   };
 
+  // Mount-only: validates whatever folder was prefilled above (agent default
+  // or project root) so a prefilled Run is actually clickable, not just
+  // displayed. `checkFolder` itself already re-runs on every manual Browse,
+  // so this deliberately does not re-fire on every `cwd` change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (cwd !== null) checkFolder(cwd);
+  }, []);
+
   const pickFolder = () => {
-    void open({ directory: true, title: "Agent working folder" }).then((picked) => {
+    void open({ directory: true, title: "Working folder" }).then((picked) => {
       if (typeof picked !== "string") return;
       checkFolder(picked);
     });
@@ -148,6 +254,16 @@ export function AddAgentDialog({
     worktreeInfo !== null && sessions.some((s) => s.alive && s.cwd === worktreeInfo.path);
   const trimmedName = name.trim();
   const nameValid = trimmedName.length >= 1 && trimmedName.length <= 40;
+  const atCap = sessions.filter((s) => s.alive).length >= MAX_SESSIONS;
+
+  const linkCeiling = link?.tokenCeiling ?? null;
+  const effectiveCeiling: number | null =
+    agentFileName !== null && meta.defaultTokenCeiling !== null
+      ? meta.defaultTokenCeiling
+      : taskId !== null && linkCeiling !== null
+        ? linkCeiling
+        : null;
+
   const canAdd =
     nameValid &&
     cwd !== null &&
@@ -155,34 +271,37 @@ export function AddAgentDialog({
     worktreeInfo.isRepo &&
     !dupCwd &&
     !worktreeBusy &&
-    !spawning;
+    !running &&
+    !atCap;
 
-  const doAdd = () => {
+  const forTask = taskId !== null && taskCtx !== null;
+
+  const doRun = () => {
     if (!canAdd || cwd === null) return;
-    setSpawning(true);
-    setSpawnError(null);
-    if (forTask && taskId !== null && taskContext !== null) {
+    setRunning(true);
+    setRunError(null);
+    if (forTask && taskId !== null && taskCtx !== null) {
       void useSessionsStore
         .getState()
-        .spawnForTask(root, agentFileName, trimmedName, cwd, taskId, taskContext, tokenCeiling)
+        .spawnForTask(root, agentFileName, trimmedName, cwd, taskId, taskCtx.body, effectiveCeiling)
         .then((result) => {
-          setSpawning(false);
+          setRunning(false);
           if ("error" in result) {
-            setSpawnError(result.error);
+            setRunError(result.error);
             return;
           }
-          onSpawned?.(result.id);
+          void useTaskLinksStore.getState().recordSession(root, taskId, result.id);
           onClose();
         });
       return;
     }
     void useSessionsStore
       .getState()
-      .spawn(root, agentFileName, trimmedName, cwd)
+      .spawn(root, agentFileName, trimmedName, cwd, effectiveCeiling)
       .then((err) => {
-        setSpawning(false);
+        setRunning(false);
         if (err !== null) {
-          setSpawnError(err);
+          setRunError(err);
           return;
         }
         onClose();
@@ -203,12 +322,12 @@ export function AddAgentDialog({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Spawn agent"
+        aria-label="Run session"
         tabIndex={-1}
         className="flex max-h-[80vh] w-[480px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
-          <span className="text-[15px] font-semibold">{forTask ? "Launch for task" : "Spawn agent"}</span>
+          <span className="text-[15px] font-semibold">Run session</span>
           <div className="min-w-0 flex-1" />
           <button
             onClick={onClose}
@@ -347,16 +466,55 @@ export function AddAgentDialog({
             )}
           </div>
 
-          {spawnError !== null && (
-            <p className="break-words font-mono text-xs text-danger-text">{spawnError}</p>
+          <div>
+            <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
+              Token ceiling
+            </label>
+            <span className="font-mono text-xs text-content-secondary">{formatCeiling(effectiveCeiling)}</span>
+          </div>
+
+          {taskId !== null && (
+            <div>
+              <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
+                Task
+              </label>
+              <div className="flex h-control items-center gap-2 rounded border border-border bg-surface-2 px-2">
+                <span className="min-w-0 flex-1 truncate text-sm text-content" title={taskName ?? undefined}>
+                  {taskName}
+                </span>
+                {taskCtx !== null && (
+                  <span className="flex-none font-mono text-2xs text-content-muted">
+                    ≈{formatTokenCount(tokensForBytes(taskCtx.bytes))} tok
+                  </span>
+                )}
+                <button
+                  onClick={clearTask}
+                  title="Run without this task's context"
+                  className="grid h-4 w-4 flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+                >
+                  <X size={11} strokeWidth={1.5} />
+                </button>
+              </div>
+              {taskCtxError !== null && (
+                <p className="mt-1.5 break-words font-mono text-xs text-amber-text">
+                  {taskCtxError} — running without it
+                </p>
+              )}
+            </div>
+          )}
+
+          {runError !== null && (
+            <p className="break-words font-mono text-xs text-danger-text">{runError}</p>
           )}
         </div>
 
         <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">
           <span className="min-w-0 flex-1 truncate text-sm text-content-secondary">
-            {forTask
-              ? "spawns a real Claude Code session with the task's context injected"
-              : "spawns a real Claude Code session in that folder"}
+            {atCap
+              ? `agent limit reached (${MAX_SESSIONS})`
+              : forTask
+                ? "runs a real Claude Code session with the task's context injected"
+                : "runs a real Claude Code session in that folder"}
           </span>
           <button
             ref={cancelRef}
@@ -367,11 +525,12 @@ export function AddAgentDialog({
             Cancel
           </button>
           <button
-            onClick={doAdd}
+            onClick={doRun}
             disabled={!canAdd}
+            title={atCap ? `agent limit reached (${MAX_SESSIONS})` : undefined}
             className="flex h-control flex-none items-center rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
           >
-            {spawning ? "· · ·" : forTask ? "Launch" : "Add"}
+            {running ? "· · ·" : "Run"}
           </button>
         </div>
       </div>

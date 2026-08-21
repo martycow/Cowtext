@@ -8,9 +8,9 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (73); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` |
+| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (75); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` (unchanged) |
 | `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
-| `src-tauri/src/project.rs` | `.md` scan, graph read/write (schema **v4**), `write_atomic`, `resolve_within_root`, `checked_root` |
+| `src-tauri/src/project.rs` | `.md` scan, graph read/write (schema **v5**), `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/project_meta.rs` | `.cowtext/project.json` v1 sidecar, `context/project.md` renderer, `project_init` scaffolder |
 | `src-tauri/src/compile.rs` | Five adapters (claude/agents/cursor/copilot/gemini), validation, topological order, write allowlist |
 | `src-tauri/src/import.rs`, `lint.rs` | Importer (CLAUDE.md/AGENTS.md/.cursor rules → proposed changeset, never clobbers) · Linter v1 (cycles, duplication, stale, conflicts → Problems) |
@@ -20,6 +20,8 @@
 | `src-tauri/src/settings.rs` | App settings persistence via `app_config_dir` (atomic, frontend owns shape) |
 | `src-tauri/src/preset.rs` | Preset save/list/read/export/apply (never-clobber) |
 | `src-tauri/src/handoff.rs` | `HANDOFF.md` generation via ClaudeRunner, GENERATED header |
+| `src-tauri/src/resolve_load.rs` | Load policy: `resolveLoad` decider unifying three prior implementations (effective_pinned, taskctx walk, tokens.ts logic) into one authoritative function |
+| `src-tauri/src/fsbatch.rs` | Batch FS apply with all-or-nothing rollback and inverse batch for Undo (`fs_apply_batch` command) |
 | `src/store/` | Zustand stores: `useProjectStore`, `useGraphStore` (graph.ts), `useEventsStore` (events.ts), `useSettingsStore` (settings.ts) |
 | `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, plus five pure modules — `portSlots` (pins/slots), `edgePath` (router), `edgeEdit` (waypoints), `labelSlots` (label collisions), `edgeVerb`/`edgeColor` (label + palette) |
 | `src/inspector/` | Inspector panel, `InspectorSection` (collapsible components), `EventLog`, `HooksModal`, AssembleSection |
@@ -32,7 +34,7 @@
 | `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
 | `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
 
-## Invoke commands (73)
+## Invoke commands (75)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -40,11 +42,12 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Group | Commands |
 |---|---|
 | project | `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs` |
+| fs | `fs_apply_batch` |
 | git | `git_status`, `git_init`, `gitignore_write` |
 | agents | `agents_scan`, `agent_create`, `agent_save`, `agent_rename`, `agent_delete`, `agent_convert`, `agent_memory_ensure`, `agent_avatar_set`, `agent_avatar_read`, `agent_avatar_clear`, `agent_memory_status`, `skill_create`, `skill_save`, `skill_rename`, `skill_delete`, `agents_meta_write` |
 | compile | `compile_preview`, `compile_write` |
 | import / lint | `import_scan`, `import_apply`, `lint_run` |
-| assemble | `assemble_node`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
+| assemble | `assemble_node`, `assemble_preview`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status` |
 | settings | `read_app_settings`, `write_app_settings` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
@@ -60,7 +63,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | Event | Payload | Flow |
 |---|---|---|
 | `barn://event` | `BarnEvent { kind, filePath?, sessionId, ts }` | hooks_server → emit → `useEventsStore.pushEvent` → canvas pulse + barn animation |
-| `assemble://status` | `AssembleProgress { nodeId, mode, status, error }` | assemble.rs → emit → `useGraphStore.setAssembleStatus` |
+| `assemble://status` | `AssembleProgress { nodeId, status, phase, startedAt, error }` | assemble.rs → emit → `useGraphStore.setAssembleStatus` |
 | `fs://change` | `FsChange { relPath, modifiedMs, sizeBytes, kind }` | watcher.rs → emit → `useProjectStore.applyFsChange` → lens updates |
 | `agent://event` | `{ id, kind, status?, tool?, text?, usage?, ts }` | sessions.rs (headless resume-loop) → emit → event stream, inspector transcript, status badges |
 
@@ -79,50 +82,40 @@ React Flow and PixiJS never import each other.
 | Named Calf | Subagent sprite in the barn with stable identity across sessions via fnv1a32 hash of sessionId + ordinal, displaying unique coat pattern + accent role + tiny prop |
 | Roster bar | Bottom strip showing all live agent sessions (avatars, names, status dots, current tool); click a card to open agent panel with transcript stream and real token usage |
 | Identity hash | fnv1a32(seed) → avatar patch grid (8×8 mirrored), accent role (7 options via h2 % 7), calf patch bits (2–7 via popcount), visual identity tied to agent/calf name/type |
-| Node role | One of 13: `agent`, `rules`, `architecture`, `workflow`, `task`, `reference`, `glossary`, `command`, `invariant`, `trap`, `skill`, `snippet`, `style` |
-| Edge kinds | **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `conditional` (glob/NL condition), `supersedes`, `conflicts-with` |
+| Node role | One of 14 (v5): `agent`, `rule`, `invariant`, `trap`, `architecture`, `decision`, `workflow`, `command`, `skill`, `env`, `tool`, `glossary`, `example`, `style`. (v4 renames: `rules`→`rule`, `task`→`workflow`, `reference`→`architecture`, `snippet`→`example`; new: `decision`, `env`, `tool`) |
+| Edge kinds | 5 (v5): **Structural** (cycle validation + topological order): `imports` (inline), `sequence` (order only), `overrides` (target-before-source). **Advisory** (linter only): `references` (soft link), `contradicts` (symmetric; v4 `conflicts-with`). (v5 replaces `conditional`→`imports` + typed `guard`, `supersedes`→node `deprecated` field) |
 | Pinned / effective-pinned | Always-in-context flag; effective set = pinned + transitive `imports` closure — **excludes `overrides`** (affects compile order, not pinned set) |
 | readOrder | Manual tie-break inside topological order (Kahn, pops by `(readOrder, id)`) |
-| BarnGraph | `graph.json` shape: `version: 4` (v1→v2 = persona→agent; v2→v3 = roles 7→13, edges 4→7, tags/owner/meta, edge color; v3→v4 = edge `waypoints`), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
+| rootLoad | v5 node field (replaces v4's `pinned: bool`): `{ "always" }` literal to mark nodes that load in every context; absent ⇒ on-demand. Single-variant optional enum enforces two-state safety (WO13) |
+| deprecated | v5 node field: `{ replacedBy, since?, reason? }` structure stamped by migration on superseded nodes (via former v4 `supersedes` edges) or by user-initiated deprecation in the UI; `since` is YYYY-MM-DD string (user/TS side only, never stamped by migration) |
+| needsReview | v5 node field: `true` iff migration rewrote the role (v4→v5 renames) or the node was superseded; omitted from output when `false` |
+| guard | v5 edge field (replaces v4's free-text `condition`): typed as `{ type: "glob", globs: [...] }` or `{ type: "description", text: ... }`; conditional edges become `imports` + guard during migration; illegal on `contradicts` |
+| resolveLoad | Function unifying three prior implementations (`effective_pinned`, taskctx walk, tokens.ts logic) into one authoritative load-policy decider: given a node, returns whether it loads in root context or on-demand |
+| BarnGraph | `graph.json` shape: **`version: 5`** (v1→v2 = persona→agent; v2→v3 = roles 7→13, edges 4→7, tags/owner/meta, edge color; v3→v4 = edge `waypoints`; v4→v5 = roles 13→14, edges 7→5, node `rootLoad`/`deprecated`/`needsReview`, edge `guard`), `projectName`, `nodes`, `edges`, `compileTargets`; schema change ⇒ version bump + migration |
 | Waypoints | Per-edge hand-edited route (v4): flow-space corners the wire passes through; absent ⇒ the automatic route. Connector stubs are never editable |
 | Contact finger / pin | One 4px bar on a connector. Count = that port's connection count (floor 1, cap 9) on the 8px `SLOT_PITCH`; height = `portHeight` (44px at five — the frozen WO09 value) |
 | Edge tone | `selected` (accent, lifted above every wire) > `related` (touches the selected node) > rest (kind colour, or the author's palette override) |
 | Project sidecar | `.cowtext/project.json` v1: name/brief/type/requirements/hardRules/audience/architecture/constraints, rendered into the pinned `context/project.md` so it reaches the agent through compile |
-| Inspector section | One collapsible titled component (Position / Metadata / Context / Relations / File / Assemble / Actions); collapse persists in `AppSettings.collapsedSections` |
-| Compile | One graph → `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/*.mdc` / `.github/copilot-instructions.md` / `GEMINI.md`; never writes without diff-preview approval |
-| Compile target | `"claude" | "agents" | "cursor" | "copilot" | "gemini"` in `graph.json`; cursor/copilot/gemini off by default |
-| GENERATED header | First line of every compiled file; absence marks a file handwritten; `compile_write` refuses content without it |
-| Write allowlist | `compile_write` accepts only compile-output shapes — never a general write primitive |
-| Errors XOR files | `compile_preview` returns validation errors or preview files, never both |
-| Assemble / Refine / Summarize | Brief → full file via headless `claude -p` (stdin prompt, `--output-format json`); variants re-run with instruction / compress |
-| Brief | One-line node description that Assemble expands; presets keep briefs, not content |
-| Hooks (trust boundary) | `PostToolUse`/`UserPromptSubmit`/`Stop` curl entries written into the user project's `.claude/settings.json` — always behind a confirmation diff |
-| BarnEvent | Normalized live event from Claude Code hooks; drives event log, canvas pulse, barn |
-| resolveNodeId | events-store helper mapping `filePath` → node (normalize, root-strip, case-insensitive) |
-| The Barn | Pixi 8 isometric scene (2:1 tiles, Barnlight-29 palette); cow = the agent, calves = subagents |
-| Demo mode | `DemoPlayer` loops fake BarnEvents through the real store; DEMO badge, filtered from live |
-| Calm mode | One toggle: no sound + reduced motion; day-one requirement |
-| SFX cue | Named sound fired via `play()` in `sfx.ts`; all gating (mute/calm/ducking/cooldown/voice pool) lives inside `play()` |
-| Preset | Graph structure + briefs (no content); apply never clobbers existing files |
-| Handoff | `claude -p` fills a session-summary template → `HANDOFF.md` + Chat/Code/Design clipboard variants |
-| App settings | `app_config_dir/settings.json`: volumes, mute, calm, `claudeBinaryPath` (live override via `set_claude_override`) |
-| Path guard / FS boundary | All FS goes through Rust; webview-supplied paths resolved within root, `..`/absolute rejected |
-| Atomic write | Temp file + rename into place; both write commands use it |
-| Trust boundary | Any write into a user project's `.claude/settings.json` — confirmation diff, never silent |
-| Ports | 1420 = Vite dev (strictPort, pinned in two files); 4923 = hooks server |
-| "Blue is you, amber is the cow" | Scarf blue = user-initiated; hay amber = agent activity; never mixed on one control |
-| Capabilities | Tauri deny-by-default; new plugin permissions go in `src-tauri/capabilities/default.json` |
-| Lens | Canvas view mode: `none` (off), `activity` (node brightness by read recency, 60 min window), `weight` (node brightness by file size), `live` (binary pulse on recent write, 60s window) |
-| LensMode | Canvas lens setting: `'none' \| 'activity' \| 'weight' \| 'live'`, persisted in app settings, last field in AppSettings interface, version stays 1 |
-| Watcher | notify-based file system monitor (src-tauri/src/watcher.rs): watches project for `.md` file changes, emits `fs://change` events via Tauri, hand-rolled 300ms debounce with starvation guards |
-| fs://change event | Real-time file system change: `{ relPath, modifiedMs, sizeBytes, kind: create\|modify\|remove }`, emitted by watcher.rs, drives Activity/Weight/Live lens brightness updates and real-time node-list refresh |
-| Manager mode | App setting that hides the Barn view and never loads the Pixi scene — pure context-graph + agents UI (toggle in SettingsModal) |
-| Status bar | Bottom strip showing node/edge counts, external file changes, and items queued for review; updates live from graph and review stores |
-| @mention chip | Inline editor decoration for `@rel/path/to/node.md` syntax (N1 feature): resolved mentions light up as accent-colored clickable chip, unresolved as muted; click focuses the node, shift-click adds a references edge |
-| Agent avatar | Custom image for an agent (`.cowtext/avatars/<stem>.<ext>`): magic-byte validated (PNG/JPEG/WebP/GIF), ≤ 512 KB, no sidecar key, identicon fallback, moved by `agent_rename`, removed by `agent_delete` |
-| Agent memory status | Read-only probe of `.claude/agent-memory/<stem>/MEMORY.md` (exists, healthy UTF-8, non-empty); distinct from project scan (intentionally outside it) |
-| One writer per file | Doctrine: any UI surface that writes a file which a store-level save queue also writes MUST route through that queue. A second write path is a lost update, not a race — a lock cannot fix human-time stale reads. Extends to the Rust chokepoint: `write_md_file` rejects agent paths, enforcement not comment. |
-| Standing rule (path safety) | No bare `===` and no bare `.split("/")` on a `.md` path in `src/` — use `canonPath`/`sameRelPath` on both sides to handle Windows backslash variants |
+| Inspector section | Collapsible titled component (collapse state persisted in `AppSettings.collapsedSections`) |
+| Compile | One graph → five targets; never writes without diff-preview approval |
+| GENERATED header | First line of compiled files; absence marks handwritten; `compile_write` refuses without it |
+| Assemble / Refine / Summarize | Brief → full via `claude -p` (stdin, `--output-format json`) |
+| Brief | One-line node description Assemble expands; presets preserve briefs not content |
+| Hooks | `PostToolUse`/`UserPromptSubmit`/`Stop` curl entries; always behind confirmation diff |
+| BarnEvent | Normalized live event driving event log, canvas pulse, barn |
+| The Barn | Pixi 8 iso scene (2:1 tiles, Barnlight-29); cow = agent, calves = subagents |
+| Calm mode | One toggle: no sound + reduced motion |
+| Preset | Graph structure + briefs (no content); apply never clobbers |
+| Handoff | Session-summary template → `HANDOFF.md` + clipboard variants |
+| App settings | `app_config_dir/settings.json`: volumes, mute, calm, `claudeBinaryPath` override |
+| Ports | 1420 = Vite dev; 4923 = hooks server |
+| "Blue is you, amber is the cow" | User-initiated (blue) vs agent activity (amber); never mixed |
+| Lens | Canvas view: `none` / `activity` (60m recency) / `weight` (file size) / `live` (60s pulse) |
+| Watcher | notify-based `.md` change monitor; emits `fs://change` events via Tauri |
+| Agent avatar | Custom image for an agent (`.cowtext/avatars/<stem>.<ext>`): magic-byte validated, ≤ 512 KB, identicon fallback |
+| Agent memory status | Read-only probe of `.claude/agent-memory/<stem>/MEMORY.md` (exists, healthy UTF-8, non-empty) |
+| One writer per file | Doctrine: any UI surface that writes a file which a store-level save queue also writes MUST route through that queue. `write_md_file` rejects agent paths. |
+| Toast | Time-bounded notification (default 4s info/success, 7s warning, sticky danger): `useToastsStore.push`, `ToastHost` stack, role/aria per severity (danger/warning=alert/assertive, info/success=status/polite) |
 
 Cross-references like "FEATURES n.n" resolve to the Feature inventory section of
 `docs/tasks/BACKLOG.md` (formerly `docs/FEATURES.md`, archived).

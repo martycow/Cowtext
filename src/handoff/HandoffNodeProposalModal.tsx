@@ -21,6 +21,7 @@ import { X } from "lucide-react";
 import { FieldLabel } from "../agents/AgentEditor";
 import { NODE_ROLES, useGraphStore, type NodeRole } from "../store/graph";
 import { useSessionsStore } from "../store/sessions";
+import { pushToast } from "../store/toasts";
 import { handoffNodePropose } from "./api";
 import type { HandoffNodeProposal, HandoffSessionInput } from "./types";
 
@@ -160,7 +161,7 @@ export function HandoffNodeProposalModal({
     setPhase("committing");
     setErrText(null);
     (async () => {
-      const role: NodeRole = isNodeRole(proposal.role) ? proposal.role : "reference";
+      const role: NodeRole = isNodeRole(proposal.role) ? proposal.role : "architecture";
       const newId = await useGraphStore.getState().createNodeFrom({
         title: proposal.title,
         role,
@@ -188,7 +189,13 @@ export function HandoffNodeProposalModal({
       setPhase("done");
     })().catch((e: unknown) => {
       if (!liveRef.current) {
-        console.error("handoff node commit failed after close:", e);
+        // Unreachable via UI now (close is blocked while committing), but a
+        // commit failure must never vanish without a trace.
+        pushToast({
+          severity: "danger",
+          title: "Handoff node commit failed",
+          detail: String(e),
+        });
         return;
       }
       setErrText(String(e));

@@ -113,6 +113,41 @@ export function normalizePriority(raw: string | null): TaskPriority | null {
   }
 }
 
+/** Builds a COMPLETE `TaskPatch` from `item`, then applies `overrides`.
+ *
+ *  `task_update` is a full-field replace, not a merge: its doc comment
+ *  (tasks.rs §R3) states that an absent key — like an explicit `null` —
+ *  means "clear this field" for every mapped column. So any caller that
+ *  sends a partial patch silently wipes every column it failed to mention,
+ *  and each new column (F6's `taskType`) multiplies the blast radius of a
+ *  hand-maintained field list.
+ *
+ *  Every mutation that is not a full-form edit MUST go through this helper;
+ *  full-form editors (the Inspector's TaskPanel) build on it too and pass
+ *  their edited values as `overrides`, so a newly added column defaults to
+ *  "preserve" instead of "destroy".
+ *
+ *  `phase`/`taskType` are table-only fields: the checklist regenerator
+ *  ignores them, and they are always `null` on a checklist item anyway, so
+ *  passing them through unconditionally is safe for both sources.
+ *  Reserved `id:`/`needs:` tokens are never present in `item.tags` (Rust
+ *  lifts them into `taskId`/`dependsOn` at parse time and re-emits them
+ *  from the current line), so this can never smuggle one back in. */
+export function fullPatch(item: TaskItem, overrides: TaskPatch = {}): TaskPatch {
+  return {
+    name: item.name,
+    description: item.description,
+    tags: item.tags,
+    priority: item.priority,
+    phase: item.phase,
+    taskType: item.taskType,
+    agent: item.agent,
+    status: statusOf(item),
+    done: item.done,
+    ...overrides,
+  };
+}
+
 /** Unique tags across every scanned task, case-insensitively deduped
  *  (first-seen casing wins), sorted alphabetically (localeCompare). */
 export function allTags(tasks: TaskItem[]): string[] {
@@ -242,8 +277,14 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }
   },
 
+  // WO12 F6: the board's status control is the everyday way a card moves
+  // between columns, and `task_update` replaces every mapped cell — a
+  // two-key `{status, done}` patch cleared Name/Description/Tags/Priority/
+  // Phase/Agent/Task Type on every drag (and, with Name cleared, the
+  // backend rejected the write outright: "Task name cannot be empty").
+  // Re-send the item's own values for everything except the status.
   setStatus: async (item, status) => {
-    return get().update(item, { status, done: status === "done" });
+    return get().update(item, fullPatch(item, { status, done: status === "done" }));
   },
 
   toggle: async (item, done) => {
@@ -268,21 +309,14 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   // marker-only surgery, but a table row has no marker — task_toggle
   // genuinely refuses it server-side. Routing a table row through the same
   // full-field patch the Inspector's TaskPanel already uses means every
-  // mapped cell (name/description/tags/priority/phase/agent) is re-sent
-  // explicitly; omitting one (esp. `phase`) would clear it, since an absent
-  // TaskPatch key means "clear this field", same trap set_cell documents.
+  // mapped cell (name/description/tags/priority/phase/taskType/agent) is
+  // re-sent explicitly; omitting one (esp. `phase`) would clear it, since an
+  // absent TaskPatch key means "clear this field", same trap set_cell
+  // documents. WO12 F6: that hand-maintained list had already gone stale
+  // once (`taskType`) — it now comes from `fullPatch`.
   toggleAny: async (item, done) => {
     if (item.source === "checklist") return get().toggle(item, done);
-    return get().update(item, {
-      name: item.name,
-      description: item.description,
-      tags: item.tags,
-      priority: item.priority,
-      phase: item.phase,
-      agent: item.agent,
-      status: done ? "done" : "new",
-      done,
-    });
+    return get().update(item, fullPatch(item, { status: done ? "done" : "new", done }));
   },
 
   ensureId: async (item) => {

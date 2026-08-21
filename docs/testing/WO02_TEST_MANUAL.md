@@ -205,13 +205,13 @@ bug (or this manual is stale; either way, note it).
 34. Set **Priority** to **CRITICAL** (the segmented control shows `none · Low ·
     Medium · High · CRITICAL` — CRITICAL is the only one rendered shouting in
     caps, per `PRIORITY_LABELS`).
-35. Leave Agent as `Producer`. Since File = `TASKS.md`, a **Status** segmented
+35. Leave Agent as `Unassigned`. Since File = `TASKS.md`, a **Status** segmented
     control is visible too — leave it on `New`.
 36. Press **Create**.
     *Expected:* dialog closes; the TASKS segment now shows one swimlane
     ("No sprint") with the card **`Ship the demo`** in the **New** column.
     The card's chip row shows a **danger-red `CRITICAL` chip**, `#release-notes`
-    `#demo` tags, and the Producer chip.
+    `#demo` tags, and the Unassigned chip.
 37. Verify the write on disk:
 
     ```powershell
@@ -236,7 +236,7 @@ bug (or this manual is stale; either way, note it).
 ### D3. Second task — table-aware append (row insertion, not a fresh table)
 
 38. Press **New task** again. Name = `Fix the tooltip`, File = `TASKS.md`,
-    Priority = `Medium`, no tags, Agent = Producer, Status = New. Create.
+    Priority = `Medium`, no tags, Agent = Unassigned, Status = New. Create.
     *Expected:* the board now shows **two** cards in the New column
     (`Ship the demo` above `Fix the tooltip`, by line order).
 39. Verify on disk that the second task became a **new row in the existing

@@ -1,4 +1,4 @@
-# Task-Board Batch Manual Test Script — Board, Undo, Hierarchy, Producer, Tokens, Barn Hover
+# Task-Board Batch Manual Test Script — Board, Undo, Hierarchy, Agents, Tokens, Barn Hover
 
 Hand-run manual for Marty's 7-item batch (TASKBOARD_BATCH_CONTRACT.md). Written against the
 code as of 2026-08-18 (`src/tasks/*`, `src/store/{tasks,tokens,graph}.ts`, `src-tauri/src/tasks.rs`,
@@ -41,8 +41,9 @@ code as of 2026-08-18 (`src/tasks/*`, `src/store/{tasks,tokens,graph}.ts`, `src-
    is created (with a `# Sprint` header) and the card appears with a **P0** (danger) badge.
 5. Card menu → **Move to… → BACKLOG**. *Expected:* the line leaves SPRINT.md and lands at
    the end of BACKLOG.md (file created); board refreshes.
-6. Filter bar: agent select **Producer**. *Expected:* tasks with `@producer` AND tasks with
-   no agent at all remain; text filter narrows further.
+6. Filter bar: agent select **Unassigned**. *Expected:* only tasks with no agent at all
+   remain (`@producer` is now an ordinary agent name and does NOT match); text filter
+   narrows further.
 7. **External-edit refresh:** with the modal open, append `- [ ] From outside` to TASKS.md
    in another editor and save. *Expected:* the board refreshes itself within ~1.5 s
    (watcher → fs://change → debounced reload), no button pressed.
@@ -65,11 +66,12 @@ code as of 2026-08-18 (`src/tasks/*`, `src/store/{tasks,tokens,graph}.ts`, `src-
     (`context/`, `docs/`…) as collapsible headers with chevrons, files indented beneath;
     collapse/expand works; AGENTS/SKILLS sections unchanged below.
 
-## E. Producer + tokens (3 min)
+## E. Agents + tokens (3 min)
 
-13. AGENTS section: **Producer** is ALWAYS the first row. In a project without
-    `.claude/agents/producer.md` it renders as a virtual "click to create" row; clicking
-    materializes the real file. Rename/delete on producer.md → error "Reserved agent: producer".
+13. AGENTS section: no agent is pre-defined. An empty project lists NO agents at all — no
+    virtual "Producer" row, no "click to create" placeholder. `producer.md`, if a user
+    creates one, is an ordinary agent: it sorts by fileName like any other and rename /
+    delete / convert all succeed on it.
 14. Top bar shows `≈N tok pinned` (hover title says estimate + ~200k window); pin/unpin a
     node → the number moves. Agent editor identity header shows `≈N tok context`; wiring an
     imports edge from the agent's node to a fat node grows it.
@@ -94,6 +96,6 @@ code as of 2026-08-18 (`src/tasks/*`, `src/store/{tasks,tokens,graph}.ts`, `src-
 | B Board | | |
 | C Undo/redo | | |
 | D Hierarchy | | |
-| E Producer/tokens | | |
+| E Agents/tokens | | |
 | F Barn hover | | |
 | G Regression | | |

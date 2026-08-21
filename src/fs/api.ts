@@ -34,3 +34,24 @@ export function probeProjectDirs(paths: string[]): Promise<boolean[]> {
 export function hooksStatus(root: string): Promise<HooksStatus> {
   return invoke<HooksStatus>("hooks_status", { root });
 }
+
+/** One entry in a batch passed to `fs_apply_batch` (WO13_CONTRACT.md §12.1).
+ *  `content: null` deletes the path. Mirrors src-tauri `fsbatch::BatchEntry`
+ *  1:1 — `content` is always present on the wire (never omitted), so this
+ *  stays `string | null`, not an optional field. */
+export interface BatchEntry {
+  relPath: string;
+  content: string | null;
+}
+
+/** All-or-nothing multi-file write/delete (WO13_CONTRACT.md §12.1, the
+ *  75th invoke). Resolves to the INVERSE of the batch that was applied —
+ *  applying the returned value undoes the call. Rejects the whole batch,
+ *  leaving the tree byte-unchanged, on any single failure: a bad path, the
+ *  one-writer guard (`.claude/settings.json`, `.claude/agents/*.md`,
+ *  anything under `.claude/skills/`), an unsupported shape (not `.md` and
+ *  not `.cursor/rules/*.mdc`), a duplicate `relPath`, or an I/O failure
+ *  partway through. */
+export function fsApplyBatch(root: string, entries: BatchEntry[]): Promise<BatchEntry[]> {
+  return invoke<BatchEntry[]>("fs_apply_batch", { root, entries });
+}

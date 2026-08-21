@@ -89,10 +89,11 @@ fn save_and_read_reject_invalid_presets() {
     assert!(save_inner(&dir, "x", &wrong_kind)
         .unwrap_err()
         .contains("kind"));
-    // Wrong version — 1..4 are all accepted (persona→agent role rename, the
-    // WO03 v3 schema bump, then the WO10 v4 edge-waypoints bump), so this
-    // must be a version outside that range.
-    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 5");
+    // Wrong version — 1..5 are all accepted (persona→agent role rename, the
+    // WO03 v3 schema bump, the WO10 v4 edge-waypoints bump, then the WO13
+    // v5 rootLoad/guard/deprecated bump), so this must be a version outside
+    // that range.
+    let wrong_version = preset_json("X", 0).replace("\"version\": 1", "\"version\": 6");
     assert!(save_inner(&dir, "x", &wrong_version)
         .unwrap_err()
         .contains("version"));
@@ -111,6 +112,26 @@ fn save_and_read_accept_version_2_presets() {
     let path = save_inner(&dir, "V2", &v2).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), v2);
     assert_eq!(preset_read(path).unwrap(), v2);
+    assert_eq!(list_inner(&dir).unwrap()[0].node_count, 2);
+}
+
+#[test]
+fn save_and_read_accept_version_5_presets() {
+    // WO13_CONTRACT.md §5.7: v5 presets (rootLoad/guard/deprecated/
+    // needsReview, in lockstep with graph v5) must be accepted and stored
+    // byte-verbatim, exactly like every earlier version — Rust never
+    // inspects the node/edge shape beyond `kind`/`version`/`nodes`.
+    let dir = temp_dir("v5");
+    let v5 = preset_json("V5", 2)
+        .replace("\"version\": 1", "\"version\": 5")
+        .replacen(
+            "\"pinned\": false",
+            "\"rootLoad\": \"always\", \"needsReview\": true",
+            1,
+        );
+    let path = save_inner(&dir, "V5", &v5).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), v5);
+    assert_eq!(preset_read(path).unwrap(), v5);
     assert_eq!(list_inner(&dir).unwrap()[0].node_count, 2);
 }
 

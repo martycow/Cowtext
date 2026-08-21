@@ -35,6 +35,28 @@ export interface ToolGroup {
   tools: string[];
 }
 
+/** WO13_CONTRACT.md Block C — the three risk tiers the Restrict grid groups
+ *  capabilities into, distinguished by icon + rule in `ToolPicker.tsx`
+ *  ("never by colour alone"). `read` never mutates anything off-machine;
+ *  `mutate` writes files or spawns bounded, self-contained work; `elevate`
+ *  is unrestricted code execution or agent-spawning — the two ways an
+ *  agent's blast radius stops being predictable from this list alone. */
+export type ToolTier = "read" | "mutate" | "elevate";
+
+export const TOOL_TIER_ORDER: readonly ToolTier[] = ["read", "mutate", "elevate"];
+
+export const TOOL_TIER_LABEL: Record<ToolTier, string> = {
+  read: "Read-only",
+  mutate: "Mutating",
+  elevate: "Elevated",
+};
+
+/** Rendered as an always-visible line under the Elevated group header
+ *  (WO13_CONTRACT.md Block C: "not a tooltip"), never merely implied by
+ *  colour. */
+export const ELEVATED_CONSEQUENCE =
+  "Shell access and agent-spawning — this agent can run arbitrary commands on this machine, or dispatch other agents that can. Review before granting.";
+
 /** A user-facing ability, expressed as the tool names that grant it.
  *  `label` answers "what can this agent DO?" — the question a user is
  *  actually answering when they tick a box. */
@@ -47,6 +69,8 @@ export interface Capability {
   /** Every tool name that contributes to this ability. Order matters only
    *  for display in the Advanced list. */
   tools: readonly string[];
+  /** WO13 Block C risk tier — see `ToolTier`. */
+  tier: ToolTier;
 }
 
 /** The capability rows, in the order the picker shows them.
@@ -64,44 +88,60 @@ export const CAPABILITIES: readonly Capability[] = [
     label: "Read files",
     hint: "Open files, list them, search their contents",
     tools: ["Read", "Glob", "Grep", "NotebookRead"],
-  },
-  {
-    key: "write",
-    label: "Write to files",
-    hint: "Create and edit files on disk",
-    tools: ["Edit", "Write", "NotebookEdit"],
-  },
-  {
-    key: "execute",
-    label: "Run commands",
-    hint: "Shell access — build, test, git, anything",
-    tools: ["Bash", "PowerShell", "BashOutput", "KillShell"],
+    tier: "read",
   },
   {
     key: "web",
     label: "Search the web",
     hint: "Fetch pages and run web searches",
     tools: ["WebFetch", "WebSearch"],
-  },
-  {
-    key: "subagents",
-    label: "Use subagents",
-    hint: "Spawn other agents and manage their work",
-    tools: ["Agent", "Task", "TaskOutput", "TaskStop", "SendMessage"],
-  },
-  {
-    key: "skills",
-    label: "Use skills",
-    hint: "Invoke skills and slash commands",
-    tools: ["Skill", "SlashCommand", "ToolSearch"],
+    tier: "read",
   },
   {
     key: "plan",
     label: "Plan and ask",
     hint: "Track todos, enter plan mode, ask the user questions",
     tools: ["TodoWrite", "ExitPlanMode", "AskUserQuestion"],
+    tier: "read",
+  },
+  {
+    key: "write",
+    label: "Write to files",
+    hint: "Create and edit files on disk",
+    tools: ["Edit", "Write", "NotebookEdit"],
+    tier: "mutate",
+  },
+  {
+    key: "skills",
+    label: "Use skills",
+    hint: "Invoke skills and slash commands",
+    tools: ["Skill", "SlashCommand", "ToolSearch"],
+    tier: "mutate",
+  },
+  {
+    key: "execute",
+    label: "Run commands",
+    hint: "Shell access — build, test, git, anything",
+    tools: ["Bash", "PowerShell", "BashOutput", "KillShell"],
+    tier: "elevate",
+  },
+  {
+    key: "subagents",
+    label: "Use subagents",
+    hint: "Spawn other agents and manage their work",
+    tools: ["Agent", "Task", "TaskOutput", "TaskStop", "SendMessage"],
+    tier: "elevate",
   },
 ];
+
+/** WO13 Block C — capabilities grouped by risk tier, in `TOOL_TIER_ORDER`,
+ *  preserving each tier's original relative order. The Restrict grid reads
+ *  this directly so a tier can never silently go missing a member. */
+export function capabilitiesByTier(): Record<ToolTier, Capability[]> {
+  const out: Record<ToolTier, Capability[]> = { read: [], mutate: [], elevate: [] };
+  for (const c of CAPABILITIES) out[c.tier].push(c);
+  return out;
+}
 
 /** Grouped by what the tool lets an agent DO — retained as the Advanced
  *  list's section headers, and still the flat vocabulary `isKnownTool`
@@ -125,7 +165,15 @@ export function isKnownTool(name: string): boolean {
 }
 
 /** An MCP tool is legitimate but un-enumerable — worth telling apart from a
- *  typo, so the picker can mark one as "custom" instead of "unknown". */
+ *  typo, so the picker can mark one as "custom" instead of "unknown".
+ *
+ *  WO13_CONTRACT.md §3.0 (D9) — `tools:` and `disallowedTools:` both accept
+ *  `mcp__<server>` AND `mcp__<server>__*`. A plain prefix test already
+ *  accepts both forms (`"mcp__server__*".startsWith("mcp__")` is true), so
+ *  no change was needed here beyond confirming it — do not tighten this to
+ *  a stricter pattern that would reject the `__*` suffix. Applied to
+ *  `disallowedTools` entries the same way in `ToolPicker.tsx`'s
+ *  `ToolsField`, per the same ruling. */
 export function isMcpTool(name: string): boolean {
   return name.startsWith("mcp__");
 }

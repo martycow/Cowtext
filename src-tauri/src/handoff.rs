@@ -58,7 +58,13 @@ struct NodeIn {
     brief: String,
     file_path: String,
     read_order: i64,
-    pinned: bool,
+    /// v5 (WO13 D11b fix): the wire field is `rootLoad?: "always"`, not the
+    /// v4 `pinned: bool` this used to read — `pinned` is gone from every v5
+    /// node, so `#[serde(default)] pinned: bool` silently deserialized
+    /// `false` forever and the "pinned" annotation below went dead with no
+    /// test failure (the audit's D11 class: a private tolerant projection,
+    /// invisible to the compiler once the wire field it names is renamed).
+    root_load: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -114,7 +120,7 @@ fn build_handoff_prompt(graph: &GraphIn, events: &[EventIn], now_ms: u64) -> Str
     let mut nodes: Vec<&NodeIn> = graph.nodes.iter().collect();
     nodes.sort_by(|a, b| (a.read_order, &a.id).cmp(&(b.read_order, &b.id)));
     for n in &nodes {
-        let pinned = if n.pinned { ", pinned" } else { "" };
+        let pinned = if n.root_load.as_deref() == Some("always") { ", pinned" } else { "" };
         let brief = if n.brief.is_empty() {
             String::new()
         } else {
@@ -277,7 +283,14 @@ pub struct HandoffNodeProposal {
     pub title: String,
     /// "context/handoff/<slug>.md", collision-free (…-2, …-3, …).
     pub rel_path: String,
-    /// ALWAYS "reference".
+    /// ALWAYS "architecture" (WO13 D11b fix: `reference` is a role deleted
+    /// in v5 — this module's own hardcoded value went stale the same way
+    /// `project.rs::migrate_graph`'s unknown-role fallback and
+    /// `import.rs::infer_role`'s catch-all both moved to `architecture`;
+    /// see WO13_CONTRACT.md §6.2. Previously caught only by
+    /// `HandoffNodeProposalModal.tsx:164` validating and silently
+    /// substituting `architecture` client-side — a safety net doing the
+    /// producer's work, and one that never stamped `needsReview`).
     pub role: String,
     /// One line, ≤ 120 chars.
     pub brief: String,
@@ -354,7 +367,7 @@ pub fn handoff_node_propose(
     Ok(HandoffNodeProposal {
         title,
         rel_path,
-        role: "reference".to_string(),
+        role: "architecture".to_string(),
         brief,
         content,
         meta,

@@ -1,17 +1,26 @@
-mod agents;
+pub mod agents;
 mod assemble;
-// `compile`/`import`/`lint`/`project` are `pub`: the `cowtext-cli` binary
-// (WO03 Lane C, src/bin/cowtext_cli.rs) is a separate crate target that
-// links against this one as a library (`cowtext_lib`) — a private `mod`
-// here makes its `pub fn`s invisible outside this crate root (E0603), so
-// each module that a non-GUI consumer needs to call must be re-exported at
-// this level too. `import` joins the other three non-GUI-callable modules
-// for symmetry: `project.rs`'s own module doc already names `import.rs`
-// alongside `compile.rs`/`lint.rs`/`cowtext-cli` as the four peer
-// consumers of the shared graph model, so a future `cowtext-cli import`
-// subcommand should not need a second lib.rs visibility pass to unlock it.
+// `compile`/`import`/`lint`/`project`/`agents`/`tasks`/`taskctx` are `pub`:
+// the `cowtext-cli` binary (WO03 Lane C, src/bin/cowtext_cli.rs) and the
+// `cowtext-mcp` binary (F8, src/bin/cowtext_mcp.rs) are separate crate
+// targets that link against this one as a library (`cowtext_lib`) — a
+// private `mod` here makes its `pub fn`s invisible outside this crate root
+// (E0603), so each module that a non-GUI consumer needs to call must be
+// re-exported at this level too. `import` joins the other non-GUI-callable
+// modules for symmetry: `project.rs`'s own module doc already names
+// `import.rs` alongside `compile.rs`/`lint.rs`/`cowtext-cli` as the four
+// peer consumers of the shared graph model, so a future `cowtext-cli
+// import` subcommand should not need a second lib.rs visibility pass to
+// unlock it. `agents`/`tasks`/`taskctx` were bumped for `cowtext-mcp`,
+// which calls `agents::agents_scan`, `tasks::{tasks_scan, task_toggle,
+// task_append, task_update}`, and `taskctx::task_context_preview` headless,
+// exactly as `cowtext-cli` calls `compile`/`lint`/`project`. `git`,
+// `hooks`, `handoff`, `preset`, `worktree`, `project_meta`, `tasklinks`
+// stay private — no non-GUI consumer needs them yet, and a smaller blast
+// radius is the point.
 pub mod compile;
 mod frontmatter;
+mod fsbatch;
 mod git;
 mod handoff;
 mod hooks;
@@ -21,11 +30,12 @@ pub mod lint;
 mod preset;
 pub mod project;
 mod project_meta;
+mod resolve_load;
 mod sessions;
 mod settings;
-mod taskctx;
+pub mod taskctx;
 mod tasklinks;
-mod tasks;
+pub mod tasks;
 mod watcher;
 mod worktree;
 
@@ -81,6 +91,7 @@ pub fn run() {
             compile::compile_preview,
             compile::compile_write,
             assemble::assemble_node,
+            assemble::assemble_preview,
             assemble::refine_node,
             assemble::summarize_node,
             assemble::assemble_status,
@@ -123,7 +134,8 @@ pub fn run() {
             handoff::handoff_node_propose,
             project_meta::project_meta_read,
             project_meta::project_meta_write,
-            project_meta::project_init
+            project_meta::project_init,
+            fsbatch::fs_apply_batch
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -15,11 +15,14 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  type Connection,
+  type OnConnectStartParams,
 } from "@xyflow/react";
 import { FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
-import { useGraphStore } from "../store/graph";
+import { EDGE_KINDS, useGraphStore, type NodeRole } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { revealPath } from "../fs/api";
+import { legalityFor } from "../config/edgeRules";
 import { MemoryNodeCard } from "./MemoryNodeCard";
 import { LensControl } from "./LensControl";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
@@ -28,7 +31,7 @@ import { KindPicker } from "./KindPicker";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
-import { useFocusStore, type CanvasEdge, type CanvasNode } from "./types";
+import { useDenyTargetStore, useFocusStore, type CanvasEdge, type CanvasNode } from "./types";
 import {
   NODE_CARD_H,
   NODE_CARD_W,
@@ -43,6 +46,21 @@ const NodeWizard = lazy(() =>
 const nodeTypes = { memory: MemoryNodeCard };
 const edgeTypes = { memory: MemoryEdgeView };
 
+// D3b/D6 fix: these were inline object/array literals on the <ReactFlow>
+// props below. @xyflow/react's StoreUpdater (index.js:184-243 fieldsToTrack,
+// 283-317) compares five of these props by reference every render and calls
+// store.setState for each one that changed identity — from a passive effect,
+// so a run of transient renders escalates straight into React's nested-update
+// abort instead of settling. connectionLineStyle/deleteKeyCode/
+// multiSelectionKeyCode/proOptions aren't in fieldsToTrack but a fresh
+// identity for the key-code arrays forces useKeyPress to tear down and
+// resubscribe its listeners every render for no reason — hoist those too.
+const FIT_VIEW_OPTIONS = { maxZoom: 1, padding: 0.2 };
+const CONNECTION_LINE_STYLE = { stroke: "var(--accent)", strokeWidth: 3 };
+const DELETE_KEYS = ["Delete", "Backspace"];
+const MULTI_SELECT_KEYS = ["Control", "Meta"];
+const PRO_OPTIONS = { hideAttribution: false };
+
 function CanvasInner() {
   const domainNodes = useGraphStore((s) => s.nodes);
   const domainEdges = useGraphStore((s) => s.edges);
@@ -50,7 +68,6 @@ function CanvasInner() {
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
   const deleteEdges = useGraphStore((s) => s.deleteEdges);
   const beginConnection = useGraphStore((s) => s.beginConnection);
-  const setSelection = useGraphStore((s) => s.setSelection);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const selectedEdgeIds = useGraphStore((s) => s.selectedEdgeIds);
   const focusNodeId = useFocusStore((s) => s.nodeId);
@@ -133,7 +150,7 @@ function CanvasInner() {
           zIndex: isSelected ? 1000 : 0,
           data: {
             kind: e.kind,
-            condition: e.condition,
+            guard: e.guard,
             note: e.note,
             step: e.kind === "sequence" ? orderById.get(e.target) : undefined,
             color: e.color,
@@ -150,6 +167,13 @@ function CanvasInner() {
   // canvas (hierarchy row, Problems panel, relations grid). The projection
   // effect above only runs when the graph itself changes, so without this a
   // selection made in another panel would not light up until the next edit.
+  // FOLLOW-UP (deferred, D3b/D6 lane): a single-writer selection refactor —
+  // seed `selected` from the store in the projection effect above and delete
+  // this effect entirely — was scoped out on purpose to keep this fix small
+  // and reviewable. This effect is the other half of the store-leads-RF
+  // oscillator; onSelectionChange's equality guard below is what stops it
+  // from looping today, not this comment, so don't remove the guard thinking
+  // this effect is the fix.
   useEffect(() => {
     const nodeSel = new Set(selectedNodeIds);
     const edgeSel = new Set(selectedEdgeIds);
@@ -239,7 +263,7 @@ function CanvasInner() {
         id: "fit-view",
         label: "Fit view",
         icon: Maximize2,
-        onSelect: () => void fitView({ maxZoom: 1, padding: 0.2 }),
+        onSelect: () => void fitView(FIT_VIEW_OPTIONS),
       },
       { kind: "separator", id: "sep-1" },
       {
@@ -258,6 +282,144 @@ function CanvasInner() {
     ];
     paneMenu.openAt(e, items);
   };
+
+  // D3b/D6 fix: hoisted to useCallback so identity is stable across renders
+  // (see the fieldsToTrack comment by the module-scope constants above) —
+  // deps are the store actions, which are stable Zustand references, but
+  // listed anyway to keep exhaustive-deps honest rather than suppressed.
+  const onNodeDragStop = useCallback(
+    (_e: unknown, _node: CanvasNode, dragged: CanvasNode[]) => {
+      for (const n of dragged) {
+        moveNode(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) });
+      }
+    },
+    [moveNode],
+  );
+
+  const onNodesDelete = useCallback(
+    (deleted: CanvasNode[]) => deleteNodes(deleted.map((n) => n.id)),
+    [deleteNodes],
+  );
+
+  const onEdgesDelete = useCallback(
+    (deleted: CanvasEdge[]) => deleteEdges(deleted.map((e) => e.id)),
+    [deleteEdges],
+  );
+
+  const onConnect = useCallback(
+    (c: Connection) => beginConnection({ source: c.source, target: c.target }),
+    [beginConnection],
+  );
+
+  // ── Draw-time legality feedback (WO13_CONTRACT.md §7.3, E4) ────────────
+  // The edge's KIND isn't chosen until the KindPicker opens, which happens
+  // only after a connection completes — so while the pointer is still down,
+  // legality can only ask "is there ANY kind this pair could legally use."
+  // A pair where every kind denies (today, only a `@deprecated` target) is
+  // refused outright by `isValidConnection` below; KindPicker.tsx does the
+  // finer per-kind check once a kind is actually being picked.
+  const [connectFrom, setConnectFrom] = useState<{ nodeId: string; role: NodeRole } | null>(null);
+  const [denyCursor, setDenyCursor] = useState<{ x: number; y: number; reason: string } | null>(null);
+
+  const anyKindLegal = useCallback(
+    (sourceRole: NodeRole, targetRole: NodeRole, targetDeprecated: boolean) =>
+      EDGE_KINDS.some((k) => legalityFor(sourceRole, k, targetRole, targetDeprecated).legality !== "deny"),
+    [],
+  );
+
+  const isValidConnection = useCallback(
+    (c: Connection | CanvasEdge) => {
+      if (c.source === c.target) return false;
+      const graphNodes = useGraphStore.getState().nodes;
+      const s = graphNodes.find((n) => n.id === c.source);
+      const t = graphNodes.find((n) => n.id === c.target);
+      if (s === undefined || t === undefined) return false;
+      return anyKindLegal(s.role, t.role, t.deprecated !== undefined);
+    },
+    [anyKindLegal],
+  );
+
+  const onConnectStart = useCallback((_e: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
+    const nodeId = params.nodeId;
+    if (nodeId === null) {
+      setConnectFrom(null);
+      return;
+    }
+    const node = useGraphStore.getState().nodes.find((n) => n.id === nodeId);
+    setConnectFrom(node !== undefined ? { nodeId, role: node.role } : null);
+  }, []);
+
+  const onConnectEnd = useCallback(() => {
+    setConnectFrom(null);
+    setDenyCursor(null);
+    useDenyTargetStore.getState().clearDeny();
+  }, []);
+
+  // Hit-tests the node under the pointer while a connection is live and, if
+  // every kind would deny it, writes the reason to `useDenyTargetStore` (the
+  // dimmed card, one subscriber) and to local state (the cursor tooltip
+  // rendered below). RF gives no per-hover callback for the drag target, so
+  // this reads the DOM directly the same way RF's own node wrapper exposes
+  // itself: `data-id` on the `.react-flow__node` element.
+  useEffect(() => {
+    if (connectFrom === null) return;
+    const onMove = (e: PointerEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const nodeEl = el?.closest<HTMLElement>(".react-flow__node") ?? null;
+      const targetId = nodeEl?.getAttribute("data-id") ?? null;
+      const target =
+        targetId !== null && targetId !== connectFrom.nodeId
+          ? useGraphStore.getState().nodes.find((n) => n.id === targetId)
+          : undefined;
+      if (target === undefined || anyKindLegal(connectFrom.role, target.role, target.deprecated !== undefined)) {
+        setDenyCursor(null);
+        useDenyTargetStore.getState().clearDeny();
+        return;
+      }
+      // Several kinds may deny with different reasons; `legalityFor` does
+      // not expose the winning rule's specificity score to callers, so the
+      // longest reason stands in as "the most specific one" — in the
+      // current rule set (§7.3) an all-kind denial is always the single
+      // `@deprecated` rule, so every kind agrees on the reason anyway.
+      const reason = EDGE_KINDS.map(
+        (k) => legalityFor(connectFrom.role, k, target.role, target.deprecated !== undefined).reason,
+      ).reduce((best, r) => (r.length > best.length ? r : best), "");
+      setDenyCursor({ x: e.clientX, y: e.clientY, reason });
+      useDenyTargetStore.getState().setDeny(target.id, reason);
+    };
+    window.addEventListener("pointermove", onMove);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      useDenyTargetStore.getState().clearDeny();
+    };
+  }, [connectFrom, anyKindLegal]);
+
+  // D3b/D6 fix (primary cause): this used to be a fresh inline arrow every
+  // render. @xyflow/react's SelectionListenerInner keys its effect on
+  // [selectedNodes, selectedEdges, onSelectionChange] (index.js:157-166) —
+  // selectedNodes/selectedEdges are stable (compared by id), but the old
+  // inline arrow was not, so the effect degraded from edge-triggered ("RF
+  // selection changed") to level-triggered on every CanvasInner render,
+  // firing with values that lag the RF store by one commit. Combined with
+  // the store→RF effect above (:153) that produced a permanent two-state
+  // oscillator on every OFF-canvas selection (rail, hierarchy, adopt), which
+  // is why this stable callback alone is not enough — the equality guard
+  // below is required too, because setSelection (store/graph.ts) clears the
+  // project/agent/task selections unconditionally before its own early
+  // return (WO11 G3), so even a single converged echo would wipe a
+  // selection made one commit earlier by another panel.
+  const onSelectionChange = useCallback(
+    ({ nodes: ns, edges: es }: { nodes: CanvasNode[]; edges: CanvasEdge[] }) => {
+      const nodeIds = ns.map((n) => n.id);
+      const edgeIds = es.map((e) => e.id);
+      const s = useGraphStore.getState();
+      const same = (a: string[], b: string[]) =>
+        a.length === b.length && a.every((v, i) => v === b[i]);
+      if (same(s.selectedNodeIds, nodeIds) && same(s.selectedEdgeIds, edgeIds)) return;
+      s.setSelection(nodeIds, edgeIds);
+    },
+    [],
+  );
 
   return (
     <div
@@ -278,34 +440,38 @@ function CanvasInner() {
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onNodeDragStop={(_e, _node, dragged) => {
-          for (const n of dragged) {
-            moveNode(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) });
-          }
-        }}
-        onNodesDelete={(deleted) => deleteNodes(deleted.map((n) => n.id))}
-        onEdgesDelete={(deleted) => deleteEdges(deleted.map((e) => e.id))}
-        onSelectionChange={({ nodes: ns, edges: es }) =>
-          setSelection(
-            ns.map((n) => n.id),
-            es.map((e) => e.id),
-          )
-        }
-        onConnect={(c) => beginConnection({ source: c.source, target: c.target })}
+        onNodeDragStop={onNodeDragStop}
+        onNodesDelete={onNodesDelete}
+        onEdgesDelete={onEdgesDelete}
+        // RF dep-array mechanism: SelectionListenerInner effectively keys its
+        // change-detection effect on this prop's identity alongside the
+        // (id-compared, stable) selectedNodes/selectedEdges arrays — an
+        // inline arrow here turns every render into a spurious "selection
+        // changed" firing. Keep this a stable useCallback (see definition
+        // above); do not revert to an inline arrow.
+        onSelectionChange={onSelectionChange}
+        onConnect={onConnect}
+        onConnectStart={onConnectStart}
+        onConnectEnd={onConnectEnd}
+        // §7.3 E4: refuses the drop outright when NO kind could legally
+        // connect this pair (today, only a `@deprecated` target) — the
+        // pointer-tracked reason above is what explains why, while the drag
+        // is still live.
+        isValidConnection={isValidConnection}
         // Step, not bezier: the drag preview has to look like the wire it
         // will become, and the finished wire is orthogonal (canvas/edgePath).
         connectionLineType={ConnectionLineType.Step}
-        connectionLineStyle={{ stroke: "var(--accent)", strokeWidth: 3 }}
+        connectionLineStyle={CONNECTION_LINE_STYLE}
         connectionRadius={44}
-        deleteKeyCode={["Delete", "Backspace"]}
+        deleteKeyCode={DELETE_KEYS}
         selectionKeyCode="Shift"
-        multiSelectionKeyCode={["Control", "Meta"]}
+        multiSelectionKeyCode={MULTI_SELECT_KEYS}
         zoomOnDoubleClick={false}
         minZoom={0.2}
         maxZoom={2}
         fitView
-        fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
-        proOptions={{ hideAttribution: false }}
+        fitViewOptions={FIT_VIEW_OPTIONS}
+        proOptions={PRO_OPTIONS}
       >
         {/* Dot grid over the 6px dither in styles/index.css — the two
             together are the only textured surface in the app. No bgColor:
@@ -358,6 +524,18 @@ function CanvasInner() {
           </Panel>
         )}
       </ReactFlow>
+      {/* §7.3 E4: the denial reason, following the pointer while a
+          connection drag hovers an all-kind-denied target. `position:
+          fixed` against viewport coordinates — this div is a sibling of the
+          transformed RF viewport, not a descendant of it. */}
+      {denyCursor !== null && (
+        <div
+          className="pointer-events-none fixed z-tooltip max-w-[240px] border-2 border-danger bg-danger-surface px-2 py-1 font-mono text-2xs leading-snug text-danger-text shadow-plate-sm"
+          style={{ left: denyCursor.x + 14, top: denyCursor.y + 14 }}
+        >
+          {denyCursor.reason}
+        </div>
+      )}
       <KindPicker />
       {paneMenu.menu !== null && (
         <ContextMenu

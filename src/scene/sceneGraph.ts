@@ -90,34 +90,43 @@ const DECOR_ITEMS: DecorSpec[] = [
   { id: "mouse-hole", tile: { tx: 0, ty: 0 }, make: makeMouseHole, label: "A tiny mouse hole — someone else lives here too", tall: false },
 ];
 
-/** v3 (WO03): 13 roles map onto the 3 existing PropView shapes (no new
- *  sprites — palette.ts/props.ts are out of this lane's file zone). Grouped
- *  by function, mirroring the pre-existing ties within bookshelf/crate:
+/** WO13 §14.6: 14 roles map onto the 3 existing PropView shapes (no new
+ *  sprites — palette.ts/props.ts stay in this lane's zone but this round is
+ *  fallout, not a redesign). Grouped by function, mirroring the pre-existing
+ *  ties within bookshelf/crate:
  *  cabinet = governance/guardrail content (rules to follow, invariants that
  *  must hold, traps/hazards to avoid — all filed as official caution notices
  *  alongside the agent's own rules); bookshelf = browsable reference/knowledge
- *  (architecture, reference, glossary, skill manuals, style guides); crate =
- *  active/work items (tasks, workflows, invocable commands, reusable
- *  snippets — loose papers, not bound volumes). `invariant`/`trap` fall back
- *  to the cabinet's default (straw) accent same as `rules` — an intentional
- *  near-duplicate for the closest-matching existing role, not a bug. */
+ *  (architecture, decision records, glossary, skill manuals, style guides,
+ *  worked examples, tool docs — anything you pull off a shelf to consult, not
+ *  to act on); crate = active/work items (workflows, invocable commands, env
+ *  setup — loose papers you're mid-task with, not bound volumes). `decision`
+ *  joins `architecture` on the shelf (a decision record is read the same way
+ *  a design doc is — reference material, not a live task). `env`/`tool` join
+ *  the crate/shelf split by how "actionable" they are: `env` is a running
+ *  setup you're actively working inside → crate; `tool` is a reference doc
+ *  about a capability → shelf. `example` joins the shelf (worked reference,
+ *  same as a style guide). `invariant`/`trap` fall back to the cabinet's
+ *  default (straw) accent same as `rule` — an intentional near-duplicate for
+ *  the closest-matching existing role, not a bug. */
 function propForRole(role: NodeRole): PropView {
   switch (role) {
-    case "rules":
+    case "rule":
     case "agent":
     case "invariant":
     case "trap":
       return makeCabinet(role);
     case "architecture":
-    case "reference":
+    case "decision":
     case "glossary":
     case "skill":
     case "style":
+    case "example":
+    case "tool":
       return makeBookshelf();
-    case "task":
     case "workflow":
     case "command":
-    case "snippet":
+    case "env":
       return makeCrate();
   }
 }

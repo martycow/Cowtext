@@ -8,17 +8,32 @@ All seven phases (0–6) accepted 2026-08-18; WO01 fully closed; WO02 committed 
 
 | Name | Status | Priority | Tags | Agent | Created | Description |
 |---|---|---|---|---|---|---|
+| WO13 acceptance walk (manual A-I, WO13 audit findings + zone-violation incidents) | new | critical | wo13, qa, acceptance |  | 2026-08-21 | Walk all nine lanes + audit + fix round. Zone-violation process incidents recorded; tech-lead §4 proposals (PreToolUse manifests, Stage 0 seams, no-snapshot-restore rule) require implementation decision. Four grid gaps opened. All 16 defects (D1–D16, Amendment 4) fixed; gates green (770/770 Rust + 163/163 Vitest). Standing lesson: gate is the authority, not the enumeration — three exception lists were incomplete. |
 | WO01 full acceptance walk (manual sections A-F + N) | new | high | wo01, qa, acceptance |  | 2026-08-18 | Review all WO01 manual sections and N-suite steps. Two known issues documented: MAJOR Windows notify rename, MINOR flush TOCTOU. |
 | WO02 acceptance walk (manual A-H, 61 steps) | new | high | wo02, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO02_TEST_MANUAL.md. WO02 committed as 103ac80; gates green. |
 | WO03 acceptance walk (manual A-H, 583 lines incl. CSP production-build step) | new | critical | wo03, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO03_TEST_MANUAL.md: 71 steps A–H including CSP production-build verification (replaced old v0.1.0 gate). All 14 defects fixed; audit observations recorded. Gates re-run green. |
-| WO10 acceptance walk (manual A-L, 17 sections, 87 steps) | new | critical | wo10, qa, acceptance |  | 2026-08-20 | Walk docs/testing/WO10_TEST_MANUAL.md: all 16 items of the 08/20 brainstorm list plus the four unbuilt 08/19 project items. Section K creates two scratch projects and runs last. Gates green at landing (553 Rust tests, 66/66 invokes). |
-| Global edge router (08/19 2:10PM item 2, partly met) | new | medium | wo10, canvas, backlog |  | 2026-08-20 | routeEdge still sidesteps at most the two endpoint cards — no global obstacle set, no edge-vs-edge avoidance. WO10 made hand-editing the answer where the router is wrong (graph v4 waypoints); a real router is still open. |
 | WO06 acceptance walk (manual A-K, 7 sections, WO02 regression at end) | new | high | wo06, qa, acceptance |  | 2026-08-19 | Walk docs/testing/WO06_TEST_MANUAL.md: B–H sections cover task DAG, blockage, O1/O2/O3 board defects, per-task subgraph injection, token budgets, handoff → node. Manual was authored pre-fixes (snapshots of audit findings); actual codebase is feature-complete (542 tests, 63/63 reachable). Awaiting Marty's walk. |
+| WO12 acceptance walk (manual A-M, 12 lanes) | new | high | wo12, qa, acceptance |  | 2026-08-20 | Walk all 12 lanes: git-truth, assemble-depth, canvas-loop, toast-shell, agent-questions, wizards-project-agent, tasks-format-skill, starter-presets, node-surfaces, run-button-sessions, mcp-server, app-shell. Two PARTIAL items flagged (D3a role filter, F6 task_type field destruction). Gates green (624 lib + 16 MCP tests, 74/74 invokes). |
+| Global edge router (08/19 2:10PM item 2, partly met) | new | medium | wo10, canvas, backlog |  | 2026-08-20 | routeEdge still sidesteps at most the two endpoint cards — no global obstacle set, no edge-vs-edge avoidance. WO10 made hand-editing the answer where the router is wrong (graph v4 waypoints); a real router is still open. |
 
-## Done — WO03 dispatch (2026-08-19)
+## Done — WO13 close-out (2026-08-21)
 
 | Name | Status | Priority | Tags | Agent | Created | Description |
 |---|---|---|---|---|---|---|
+| WO13 final gates + docs close-out | done | critical | wo13, project-manager, feature-complete |  | 2026-08-21 | All nine WO13 lanes delivered; gates green 2026-08-21. Invoke 74→75 (fs_apply_batch). Schema v4→v5, three refactors (roles 13→14, edges 7→5, agent modal), Vitest 163/163, Rust 770/770. Audit 16 defects (D1–D16, Amendment 4) all fixed, two zone-violation incidents recorded, four grid gaps opened. docs/TERMINOLOGY.md updated (14 roles, 5 edge kinds, v5 schema, resolveLoad, guard, rootLoad, deprecated, needsReview, AssembleProgress shape), .claude/skills/cowtext-terminology/SKILL.md corrected (75 invoke, AssembleProgress {nodeId, status, phase, startedAt, error}), CLAUDE.md Status line rewritten (invoke 63→75, standing lesson on gate authority), ACTIVITY_LOG.md entry added. Acceptance walk pending. |
+
+## Done — WO12 dispatch (2026-08-20)
+
+| Name | Status | Priority | Tags | Agent | Created | Description |
+|---|---|---|---|---|---|---|
+| Dispatch WO12 — Marty acceptance round 2 | done | critical | wo12, ultracode, feature-complete |  | 2026-08-20 | /ultracode dispatch per docs/design/WO12_CONTRACT.md: 12 lanes all delivered. Git init + branch choice, dead checkbox, assemble preview gate, selection oscillator fix, toasts, agent questions, task type column, starter preset, role filter, Run button, MCP server, app shell. Invoke 73→74. Two PARTIAL items: D3a (role filter UI-only), F6 (task_type destroyed by other edits). 624 lib + 16 MCP tests. No code-level gate failures. |
+
+## Done — WO03+WO06+WO09+WO10+WO11 dispatches (2026-08-19/20)
+
+| Name | Status | Priority | Tags | Agent | Created | Description |
+|---|---|---|---|---|---|---|
+| WO11 acceptance walk (manual A-M, 1072 steps) | done | critical | wo11, qa, acceptance |  | 2026-08-20 | Walked docs/testing/WO11_TEST_MANUAL.md: 16 defects found in audit, all fixed (8 HIGH/MAJOR + 8 MEDIUM/LOW). Three unproven crashes remain open (B2/C1/F1) but code defects on those paths fixed; ErrorBoundary installed. One-writer doctrine, TOCTOU serialization via AGENT_FS mutex, path-safety standing rule documented. 604 Rust tests, 73/73 invoke commands. Marty acceptance walk overdue but blockers cleared. |
+| WO10 acceptance walk (manual A-L, 17 sections, 87 steps) | done | critical | wo10, qa, acceptance |  | 2026-08-20 | Walked docs/testing/WO10_TEST_MANUAL.md: canvas v4 graph waypoints, dynamic connector pins, collision-swept labels, per-edge colour, three-tone emphasis, viewport spawn/focus, project wizard new/convert/edit. 553 Rust tests, 66/66 invokes. Acceptance criteria met. |
 | Dispatch WO03 — L1 moat hardening | done | critical | wo03, ultracode, compiler |  | 2026-08-19 | /ultracode dispatch per docs/design/WO03_CONTRACT.md: 7 lanes A–G all delivered. Graph v3 (roles 7→13, edges 4→7, tags/owner/meta/color), compile targets 3→5, cowtext-cli, importer MVP, linter v1. Invoke 51→54. 14 defects found/fixed (2 CRITICAL + 2 not-in-audit). Manual written: 71 steps A–H. Awaiting acceptance walk. |
 
 ## Done — acceptance walks (2026-08-18)

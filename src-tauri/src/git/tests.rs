@@ -67,6 +67,44 @@ fn git_status_on_bare_init_with_no_commits_reports_no_commits() {
     assert!(!status.has_commits, "a freshly-initialized repo has no HEAD yet");
 }
 
+/// WO13 fix (a): `probe_status`'s `is_repo` used to walk upward via a plain
+/// `--is-inside-work-tree` check, so a project folder nested under an
+/// unrelated outer repo misreported as "already a repo" — even though it
+/// has no `.git` of its own. `is_repo_at`'s `--show-toplevel` comparison
+/// must tell the two apart.
+#[test]
+fn git_status_reports_not_a_repo_for_a_dir_merely_nested_inside_an_outer_repo() {
+    let root = temp_dir("statusnestedouter");
+    let outer = root.join("outer");
+    init_repo_with_commit(&outer);
+    let nested = outer.join("nested-project");
+    fs::create_dir_all(&nested).unwrap();
+
+    let status = git_status(nested.to_string_lossy().into_owned()).unwrap();
+    assert!(
+        !status.is_repo,
+        "a folder nested inside an outer repo is not itself a repo until it gets its own .git"
+    );
+    assert!(!nested.join(".git").exists());
+}
+
+/// WO13 fix (b): a freshly-initialized, commitless repo has an unborn
+/// HEAD — `probe_status`'s branch lookup must still name it, not report
+/// `None` until the first commit.
+#[test]
+fn git_status_on_commitless_repo_still_reports_the_unborn_branch_name() {
+    let root = temp_dir("statuscommitless");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(git(&repo, &["init", "-q"]).status.success());
+    assert!(git(&repo, &["symbolic-ref", "HEAD", "refs/heads/trunk"]).status.success());
+
+    let status = git_status(repo.to_string_lossy().into_owned()).unwrap();
+    assert!(status.is_repo);
+    assert!(!status.has_commits);
+    assert_eq!(status.branch.as_deref(), Some("trunk"));
+}
+
 #[test]
 fn git_status_rejects_a_non_directory_root() {
     let root = temp_dir("badroot");
@@ -119,7 +157,7 @@ fn git_init_with_git_missing_from_path_errors_cleanly() {
     let bogus = format!("cowtext-no-such-git-{}", std::process::id());
     set_git_bin_override(Some(&bogus));
 
-    let result = git_init(dir.to_string_lossy().into_owned());
+    let result = git_init(dir.to_string_lossy().into_owned(), None);
 
     set_git_bin_override(None);
 
@@ -135,7 +173,7 @@ fn git_init_on_a_clean_directory_creates_a_repo() {
     let before = git_status(dir.to_string_lossy().into_owned()).unwrap();
     assert!(!before.is_repo);
 
-    let status = git_init(dir.to_string_lossy().into_owned()).unwrap();
+    let status = git_init(dir.to_string_lossy().into_owned(), None).unwrap();
     assert!(status.is_repo);
     assert!(!status.has_commits, "init alone must not create a commit");
     assert!(dir.join(".git").is_dir());
@@ -147,17 +185,123 @@ fn git_init_on_an_already_initialized_repo_is_a_no_op() {
     let repo = root.join("repo");
     init_repo_with_commit(&repo);
 
-    let status = git_init(repo.to_string_lossy().into_owned()).unwrap();
+    let status = git_init(repo.to_string_lossy().into_owned(), None).unwrap();
     assert!(status.is_repo);
     assert!(status.has_commits, "re-running init must not touch existing history");
+}
+
+/// WO13 fix (a): a project folder nested under an unrelated outer repo must
+/// get its OWN `.git` and the branch the user actually chose — not be
+/// silently swallowed into a no-op because the outer repo's toplevel was
+/// mistaken for `root`'s own. The outer repo's HEAD must stay untouched.
+#[test]
+fn git_init_inside_an_outer_repo_creates_its_own_nested_repo_with_the_chosen_branch() {
+    let root = temp_dir("initnestedouter");
+    let outer = root.join("outer");
+    init_repo_with_commit(&outer);
+    let outer_branch_before = {
+        let out = git(&outer, &["symbolic-ref", "--short", "HEAD"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    let nested = outer.join("nested-project");
+    fs::create_dir_all(&nested).unwrap();
+
+    let status = git_init(nested.to_string_lossy().into_owned(), Some("feature-x".to_string())).unwrap();
+    assert!(status.is_repo, "the nested dir must get its own repo, not report the outer one");
+    assert!(nested.join(".git").is_dir(), "git init must actually run at the nested path");
+    assert_eq!(status.branch.as_deref(), Some("feature-x"));
+
+    let out = git(&outer, &["symbolic-ref", "--short", "HEAD"]);
+    let outer_branch_after = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert_eq!(outer_branch_after, outer_branch_before, "the outer repo's own HEAD must be untouched");
 }
 
 #[test]
 fn git_init_rejects_a_non_directory_root() {
     let root = temp_dir("initbadroot");
     let missing = root.join("does-not-exist");
-    let err = git_init(missing.to_string_lossy().into_owned()).unwrap_err();
+    let err = git_init(missing.to_string_lossy().into_owned(), None).unwrap_err();
     assert!(err.contains("Not a directory"), "{err}");
+}
+
+/// D1b: an explicit branch choice is honoured on a fresh directory — the
+/// two-step `init` + `symbolic-ref HEAD refs/heads/<name>` must actually
+/// move HEAD before the first commit exists. Verified via a direct
+/// `git symbolic-ref --short HEAD` call (the acceptance criterion's own
+/// wording: "`git branch --show-current` after init matches the choice"),
+/// AND via `status.branch` — WO13 fixed `probe_status` to use
+/// `symbolic-ref --short HEAD` itself (the same unborn-HEAD failure mode
+/// D8 fixed in `worktree.rs`), so the two must now agree.
+#[test]
+fn git_init_with_explicit_branch_name_sets_head_to_that_branch() {
+    let dir = temp_dir("initbranchmain");
+    let status = git_init(dir.to_string_lossy().into_owned(), Some("main".to_string())).unwrap();
+    assert!(status.is_repo);
+    assert_eq!(status.branch.as_deref(), Some("main"), "WO13: unborn branch must be visible in GitStatus too");
+
+    let out = git(&dir, &["symbolic-ref", "--short", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "main");
+}
+
+#[test]
+fn git_init_with_explicit_master_branch_name_sets_head_to_that_branch() {
+    let dir = temp_dir("initbranchmaster");
+    let status = git_init(dir.to_string_lossy().into_owned(), Some("master".to_string())).unwrap();
+    assert!(status.is_repo);
+
+    let out = git(&dir, &["symbolic-ref", "--short", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "master");
+}
+
+/// D1b: `branch: None` must reproduce the pre-amendment behaviour
+/// byte-for-byte — bare `git init`, no `symbolic-ref` call at all, whatever
+/// name git itself would have chosen.
+#[test]
+fn git_init_with_none_branch_reproduces_todays_behaviour() {
+    let dir = temp_dir("initnobranch");
+    let status = git_init(dir.to_string_lossy().into_owned(), None).unwrap();
+    assert!(status.is_repo);
+    assert!(dir.join(".git").is_dir());
+}
+
+/// D1b: the name is validated BEFORE any filesystem mutation — an invalid
+/// branch name must never leave a `.git` directory behind.
+#[test]
+fn git_init_rejects_invalid_branch_name_before_any_fs_mutation() {
+    let dir = temp_dir("initbadbranch");
+    let err = git_init(dir.to_string_lossy().into_owned(), Some("bad branch".to_string())).unwrap_err();
+    assert!(err.contains("whitespace"), "{err}");
+    assert!(!dir.join(".git").exists(), "no repo should have been created");
+}
+
+#[test]
+fn git_init_rejects_invalid_branch_name_with_leading_dash_before_any_fs_mutation() {
+    let dir = temp_dir("initbadbranchdash");
+    let err = git_init(dir.to_string_lossy().into_owned(), Some("-weird".to_string())).unwrap_err();
+    assert!(!dir.join(".git").exists(), "no repo should have been created");
+    assert!(err.contains('-'), "{err}");
+}
+
+/// D1b: re-initializing an existing repo with a branch argument must NOT
+/// move HEAD — the wizard re-running `git init` on a project you already
+/// initialized (and possibly already committed to and switched branches on)
+/// must never silently relocate it.
+#[test]
+fn git_init_on_existing_repo_does_not_move_head_even_with_a_branch_argument() {
+    let root = temp_dir("initexistingbranch");
+    let repo = root.join("repo");
+    init_repo_with_commit(&repo);
+    let out = git(&repo, &["symbolic-ref", "--short", "HEAD"]);
+    let original_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+    let status = git_init(
+        repo.to_string_lossy().into_owned(),
+        Some("some-other-branch".to_string()),
+    )
+    .unwrap();
+    assert_eq!(status.branch.as_deref(), Some(original_branch.as_str()));
+    assert!(status.has_commits, "existing history must be untouched");
 }
 
 // ── gitignore_write ──────────────────────────────────────────────────

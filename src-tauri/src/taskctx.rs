@@ -29,12 +29,27 @@
 //! landing-order rationale for a private copy no longer applied, so both
 //! calls were switched to the shared implementation instead of reconciled
 //! by hand.
+//!
+//! WO13_CONTRACT.md §8.4: this module's subgraph base used to seed from the
+//! removed `node.pinned` field and then run its OWN hand-rolled `imports`
+//! walk — a second, drifting implementation of the load-policy closure
+//! `resolve_load.rs` now owns. Both are collapsed: the seed test keys on
+//! `rootLoad == Always` and the walk itself is
+//! `crate::resolve_load::always_closure(..., RoleLock::Apply)` — the exact
+//! function `compile.rs`'s own `effective_pinned` replacement calls, so a
+//! task's injected subgraph and the compiled root file agree on what
+//! "always in context" means, including guarded-import exclusion,
+//! deprecated-node exclusion and the `command`/`skill` destination lock
+//! (Amendment 1). This module codes against `always_closure`'s FROZEN
+//! signature (§8.3) without waiting for lane R1's body — the call panics
+//! via `unimplemented!()` until R1 lands, an accepted cross-lane state
+//! before integration.
 
 #[cfg(test)]
 mod tests;
 
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use crate::project::{checked_root, resolve_within_root, write_atomic};
 
@@ -155,54 +170,74 @@ pub fn task_context_preview(
         }
     }
 
-    // base = seeds ∪ ancestry ∪ { every pinned node } (§4.1).
+    // base = seeds ∪ ancestry ∪ { every node whose rootLoad == Always }
+    // (§4.1, keyed on `rootLoad` per §8.4 — `pinned` no longer exists on
+    // the wire).
     let mut base: BTreeSet<String> = BTreeSet::new();
     for id in seeds.iter().chain(ancestry_ids.iter()) {
         base.insert(id.clone());
     }
     for n in &graph.nodes {
-        if n.pinned {
+        if n.root_load == Some(crate::project::RootLoad::Always) {
             base.insert(n.id.clone());
         }
     }
 
-    // effective = transitive closure of base over `imports` edges only,
-    // forward direction (source imports target) — mirrors `compile.rs`'s
-    // own `effective_pinned` walk, just seeded from `base` instead of the
-    // pinned-only set. A seed/ancestor/pinned id that no longer names a
-    // live node (stale sidecar entry, deleted node) contributes nothing —
-    // silently dropped, not an error (WO03-D6 "report, don't refuse"
-    // posture generalized here).
-    let node_index: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-    let mut imports_adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in &graph.edges {
-        if e.kind == crate::project::EdgeKind::Imports {
-            imports_adj
-                .entry(e.source.as_str())
-                .or_default()
-                .push(e.target.as_str());
-        }
-    }
-
-    let mut effective: BTreeSet<String> = BTreeSet::new();
-    let mut queue: Vec<String> = Vec::new();
-    for id in base {
-        if node_index.contains(id.as_str()) && effective.insert(id.clone()) {
-            queue.push(id);
-        }
-    }
-    let mut i = 0;
-    while i < queue.len() {
-        let cur = queue[i].clone();
-        i += 1;
-        if let Some(targets) = imports_adj.get(cur.as_str()) {
-            for &t in targets {
-                if effective.insert(t.to_string()) {
-                    queue.push(t.to_string());
+    // effective = AlwaysClosure seeded from `base`, delegated to the ONE
+    // shared resolver (§8.2, §8.4) instead of a hand-rolled `imports` walk.
+    // This also fixes two behaviors the old local walk got wrong: it
+    // followed EVERY `imports` edge including guarded ones (§8.2's boxed
+    // warning — a migrated `conditional` edge must not silently pin its
+    // whole subtree into a task's injected context either), and it never
+    // excluded deprecated or `command`/`skill`-role nodes from propagating
+    // always-ness. `RoleLock::Apply`: a task's injected subgraph is Claude
+    // Code context, so a command node must not be inlined into it either
+    // (§8.3). A seed/ancestor/root-always id that no longer names a live
+    // node (stale sidecar entry, deleted node) contributes nothing —
+    // silently dropped by the resolver, not an error (WO03-D6 "report,
+    // don't refuse" posture, same as before this change).
+    let node_facts: Vec<crate::resolve_load::NodeFacts> = graph
+        .nodes
+        .iter()
+        .map(|n| crate::resolve_load::NodeFacts {
+            id: n.id.clone(),
+            role: match n.role {
+                crate::project::NodeRole::Command => crate::resolve_load::LoadRole::Command,
+                crate::project::NodeRole::Skill => crate::resolve_load::LoadRole::Skill,
+                _ => crate::resolve_load::LoadRole::Other,
+            },
+            root_always: n.root_load == Some(crate::project::RootLoad::Always),
+            deprecated: n.deprecated.is_some(),
+        })
+        .collect();
+    let edge_facts: Vec<crate::resolve_load::EdgeFacts> = graph
+        .edges
+        .iter()
+        .map(|e| crate::resolve_load::EdgeFacts {
+            id: e.id.clone(),
+            source: e.source.clone(),
+            target: e.target.clone(),
+            kind: match e.kind {
+                crate::project::EdgeKind::Imports => crate::resolve_load::LoadEdgeKind::Imports,
+                crate::project::EdgeKind::References => crate::resolve_load::LoadEdgeKind::References,
+                _ => crate::resolve_load::LoadEdgeKind::Other,
+            },
+            guard: match &e.guard {
+                None => crate::resolve_load::GuardKind::None,
+                Some(crate::project::EdgeGuard::Glob { .. }) => crate::resolve_load::GuardKind::Glob,
+                Some(crate::project::EdgeGuard::Description { .. }) => {
+                    crate::resolve_load::GuardKind::Description
                 }
-            }
-        }
-    }
+            },
+        })
+        .collect();
+    let base_ids: Vec<&str> = base.iter().map(String::as_str).collect();
+    let effective: BTreeSet<String> = crate::resolve_load::always_closure(
+        &node_facts,
+        &edge_facts,
+        &base_ids,
+        crate::resolve_load::RoleLock::Apply,
+    );
 
     if effective.is_empty() {
         return Ok(empty_context(task_id, vec![TaskContextError::EmptySubgraph]));
@@ -248,7 +283,7 @@ pub fn task_context_preview(
     let sub_json = crate::project::serialize_graph(&sub_graph);
     let node_ids: Vec<String> = effective.into_iter().collect();
 
-    let preview = crate::compile::compile_preview(root, sub_json)?;
+    let preview = crate::compile::compile_preview(root, sub_json, Vec::new())?;
     if !preview.errors.is_empty() {
         let errors = preview.errors.into_iter().map(map_validation_error).collect();
         return Ok(empty_context(task_id, errors));

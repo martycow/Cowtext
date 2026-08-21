@@ -629,6 +629,47 @@ fn map_line_result_success_empty_text_skips_text_event() {
     assert_eq!(mapped.events, vec![status_event("as0", SessionStatus::Idle, 1000)]);
 }
 
+// ── COWTEXT_ASK marker: agent question surface (F2) ────────────────────
+
+#[test]
+fn map_line_result_with_cowtext_ask_marker_emits_text_and_question() {
+    let line = r#"{"type":"result","subtype":"success","result":"Here is my plan.\nCOWTEXT_ASK: Should I use Postgres or SQLite?"}"#;
+    let mapped = map_line("as0", line, 1000);
+    let text = mapped.events.iter().find(|e| e.kind == AgentEventKind::Text).expect("text event must survive");
+    assert_eq!(text.text.as_deref(), Some("Here is my plan.\nCOWTEXT_ASK: Should I use Postgres or SQLite?"));
+    let question = mapped.events.iter().find(|e| e.kind == AgentEventKind::Question).expect("question event");
+    assert_eq!(question.text.as_deref(), Some("Should I use Postgres or SQLite?"));
+}
+
+#[test]
+fn map_line_result_without_cowtext_ask_marker_emits_no_question() {
+    let line = r#"{"type":"result","subtype":"success","result":"All done, no questions."}"#;
+    let mapped = map_line("as0", line, 1000);
+    assert!(mapped.events.iter().all(|e| e.kind != AgentEventKind::Question), "{:?}", mapped.events);
+}
+
+#[test]
+fn map_line_result_with_two_marker_lines_emits_only_the_first_question() {
+    let line = r#"{"type":"result","subtype":"success","result":"COWTEXT_ASK: First question?\nCOWTEXT_ASK: Second question?"}"#;
+    let mapped = map_line("as0", line, 1000);
+    let questions: Vec<&AgentEvent> = mapped.events.iter().filter(|e| e.kind == AgentEventKind::Question).collect();
+    assert_eq!(questions.len(), 1, "{questions:?}");
+    assert_eq!(questions[0].text.as_deref(), Some("First question?"));
+}
+
+#[test]
+fn map_line_result_cowtext_ask_marker_trims_surrounding_whitespace_but_keeps_trailing_period() {
+    let line = r#"{"type":"result","subtype":"success","result":"   COWTEXT_ASK:   Should I proceed with the migration.   "}"#;
+    let mapped = map_line("as0", line, 1000);
+    let question = mapped.events.iter().find(|e| e.kind == AgentEventKind::Question).expect("question event");
+    assert_eq!(question.text.as_deref(), Some("Should I proceed with the migration."));
+}
+
+#[test]
+fn agent_event_kind_question_serializes_to_question() {
+    assert_eq!(serde_json::to_string(&AgentEventKind::Question).unwrap(), "\"question\"");
+}
+
 #[test]
 fn map_line_result_error_subtype_emits_error_then_waiting() {
     let line = r#"{"type":"result","subtype":"error_max_turns","result":"ran out of turns"}"#;

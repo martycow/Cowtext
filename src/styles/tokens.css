@@ -67,21 +67,40 @@
 
   /* ── Node roles — colour is REDUNDANT coding.
         The pixel glyph is the primary identifier; lightness is
-        staggered so the set survives deuteranopia in greyscale. */
+        staggered so the set survives deuteranopia in greyscale.
+        v5 (WO13): 14 roles. `--role-rules` renamed to `--role-rule`;
+        `--role-decision`/`--role-env`/`--role-tool`/`--role-example` are
+        new (WO13_CONTRACT.md §14.5). */
   --role-agent:        #E4784F;  /* 5.5:1 on surface-2 */
-  --role-rules:        #E3C25F;  /* 9.3:1 */
+  --role-rule:         #E3C25F;  /* 9.3:1 */
   --role-architecture: #56B4E9;  /* 7.0:1 */
   --role-workflow:     #3FBF92;  /* 7.0:1 */
-  --role-task:         #8A8BEE;  /* 5.4:1 */
-  --role-reference:    #C58BC9;  /* 6.1:1 */
+  --role-decision:     #6FA8DC;  /* 6.6:1 — near architecture, same structure group */
   --role-glossary:     #A9A296;  /* 6.4:1 — deliberately achromatic */
   /* v3 (WO03) — six more roles, same redundant-coding rule. */
   --role-command:      #4FB8C4;  /* ~6.9:1 */
   --role-invariant:    #9B82E8;  /* ~5.2:1 */
   --role-trap:         #E36F86;  /* ~5.3:1 */
   --role-skill:        #B8C24A;  /* ~8.3:1 */
-  --role-snippet:      #8CA0B8;  /* ~6.0:1 — desaturated, sits near glossary */
   --role-style:        #D46FAE;  /* ~5.1:1 */
+  /* v5 (WO13) — three more new-with-no-v4-predecessor roles. */
+  --role-env:          #7FBF7F;  /* ~7.5:1 — near workflow, same process group */
+  --role-tool:         #C79A5B;  /* ~6.2:1 — warm, distinct from env/workflow */
+  --role-example:      #8CA0B8;  /* ~6.0:1 — desaturated, sits near glossary (was --role-snippet) */
+
+  /* ── Legacy identity-ramp aliases (WO13_CONTRACT.md §14.5) — NOT node
+        roles. `src/identity/identity.ts` (write-forbidden) carries a
+        frozen, deliberately un-imported 7-member Role list resolved
+        through `var(--role-<name>)`: agent, rules, architecture, workflow,
+        task, reference, glossary. Deleting these three would blank the
+        accent colour on every existing user's avatars and calves —
+        `accentIdx = h2 % 7` picks one of the 7 by hash, so all 7 names
+        must keep resolving to a real colour forever, even though `rules`,
+        `task` and `reference` are no longer node roles. Values unchanged
+        from pre-WO13. */
+  --role-rules:        #E3C25F;  /* legacy identity-ramp alias, = --role-rule */
+  --role-task:         #8A8BEE;  /* legacy identity-ramp alias, no v5 role equivalent */
+  --role-reference:    #C58BC9;  /* legacy identity-ramp alias, no v5 role equivalent */
 
   /* ── Barn plate — the graph canvas only (WO-C "16-bit" pass).
         The canvas is the one surface that leaves the flat-panel ramp: hard
@@ -107,17 +126,22 @@
   /* ── Edges — neutral by rule. Kind is read from line style
         and marker, never from hue (hue belongs to roles). Solid stroke =
         STRUCTURAL (affects compile order — imports/sequence/overrides);
-        dashed/dotted = advisory / lint-only (references/conditional/
-        supersedes/conflicts-with). Warmed and brightened for the Barn
-        canvas: 2px hard lines need more value than 1.5px hairlines did,
-        and every value below is still a warm neutral — no kind owns a hue. */
+        dashed/dotted = advisory / lint-only (references/contradicts).
+        Warmed and brightened for the Barn canvas: 2px hard lines need more
+        value than 1.5px hairlines did, and every value below is still a
+        warm neutral — no kind owns a hue.
+        v5 (WO13 §14.5): 5 kinds. `conditional`/`supersedes` tokens removed
+        (those edge kinds no longer exist — migration converts them, see
+        graph.ts's migrateGraph); `--edge-conflicts-with` renamed
+        `--edge-contradicts`, same value. A guarded structural edge renders
+        DASHED in its own kind's colour (no separate token) — the visual
+        distinction the old `conditional` kind provided, without the menu
+        choice (edge spec E2). */
   --edge-imports:     #9C8757;  /* 2px solid, filled pixel arrow */
   --edge-references:  #6A5B44;  /* 2px dash 4 4, open circle */
-  --edge-conditional: #7E6C4E;  /* 2px dash 2 4, + condition chip */
   --edge-sequence:    #B49A70;  /* 2px solid, chevron + step tag */
   --edge-overrides:      #C2A55E;  /* 2.5px solid, arrow + bar — structural, "wins" */
-  --edge-supersedes:     #574A38;  /* 2px dash 8 4, hollow square — advisory */
-  --edge-conflicts-with:  #A08A6A;  /* 2px dash 2 2, cross marker — advisory */
+  --edge-contradicts:  #A08A6A;  /* 2px dash 2 2, cross marker — advisory; no arrowhead, symmetric */
   --edge-selected:    var(--accent);
   /* Every wire touching the selected node (WO10 item 1). Deliberately the
      BORDER accent, not the accent itself: one step below `--edge-selected`,
@@ -136,7 +160,12 @@
   --edge-c-green:     var(--success);
   --edge-c-red:       var(--danger);
   --edge-c-violet:    var(--role-invariant);
-  --edge-c-slate:     var(--role-snippet);
+  /* v5 (WO13 §14.5, F3): was `var(--role-snippet)` — `snippet` is removed
+     (renamed `example`). Inlined the literal rather than repointing to
+     `--role-example`, per the file's own rule above: hue on the canvas
+     belongs to roles, and the edge-colour palette should never have
+     depended on a role token in the first place. */
+  --edge-c-slate:     #8CA0B8;
 
   /* ── Typography ───────────────────────────────────────── */
   --font-ui:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;

@@ -16,12 +16,19 @@ export function normalizeDir(raw: string): string {
   return parts.join("/");
 }
 
-/** Slug a display name into a filename-safe stem — same algorithm as
+/** Slug a display name into a filename-safe stem — same base algorithm as
  *  store/graph.ts#slugify (private there), duplicated for the same reason
- *  as dedupePath below: a pure four-line helper isn't worth importing
- *  store internals for. */
+ *  as dedupePath below: a pure helper isn't worth importing store internals
+ *  for. WO13 (Vitest coverage §15: `wizard/paths.test.ts` — spaces, case,
+ *  diacritics, collisions) added the NFD decompose-and-strip-combining-marks
+ *  pass so "café" slugs to "cafe", not "caf" — without it, "é" fails the
+ *  `[a-z0-9]` test as one more non-matching character, and being adjacent to
+ *  nothing else non-matching still just vanishes rather than degrading to
+ *  its base letter. */
 export function slugForFile(name: string): string {
   const slug = name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");

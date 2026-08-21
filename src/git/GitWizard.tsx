@@ -37,18 +37,44 @@ const PRIMARY_BTN =
 const ADDED_MARKER = "# --- added by Cowtext ---";
 
 /** 15px checkbox, matching CompileModal's `ApproveCheckbox` (DESIGN_SPEC:
- *  15px, r-xs, blue — every use here is a user-initiated choice). */
+ *  15px, r-xs, blue — every use here is a user-initiated choice).
+ *
+ *  D1a fix: `interactive` defaults to `true` (a standalone `<button
+ *  role="checkbox">`, the "I've reviewed this diff" call site's shape,
+ *  unchanged). Set `interactive={false}` when this square is nested inside
+ *  another `<button>` (the preset chips) — it then renders a
+ *  `<span role="presentation">` with identical pixel geometry and glyph but
+ *  no click handler of its own and no `<button>` tag, so there is exactly
+ *  one interactive element (the outer chip) instead of a nested pair whose
+ *  two `onClick`s net-cancelled each other via bubbling. */
 function CheckSquare({
   checked,
   disabled,
   label,
   onToggle,
+  interactive = true,
 }: {
   checked: boolean;
   disabled?: boolean;
   label: string;
-  onToggle: () => void;
+  onToggle?: () => void;
+  interactive?: boolean;
 }) {
+  const className = `grid h-[15px] w-[15px] flex-none place-items-center rounded-xs border transition-colors duration-fast disabled:opacity-50 ${
+    checked
+      ? "border-accent bg-accent"
+      : "border-border-strong bg-surface-1 hover:border-accent-border"
+  }`;
+  const glyph = checked && <Check size={11} strokeWidth={3} className="text-content-inverse" />;
+
+  if (!interactive) {
+    return (
+      <span role="presentation" className={className}>
+        {glyph}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
@@ -57,13 +83,9 @@ function CheckSquare({
       aria-label={label}
       disabled={disabled}
       onClick={onToggle}
-      className={`grid h-[15px] w-[15px] flex-none place-items-center rounded-xs border transition-colors duration-fast disabled:opacity-50 ${
-        checked
-          ? "border-accent bg-accent"
-          : "border-border-strong bg-surface-1 hover:border-accent-border"
-      }`}
+      className={className}
     >
-      {checked && <Check size={11} strokeWidth={3} className="text-content-inverse" />}
+      {glyph}
     </button>
   );
 }
@@ -111,6 +133,21 @@ function DiffView({ hunks }: { hunks: DiffHunk[] }) {
       </div>
     </div>
   );
+}
+
+/** Mirrors `validate_branch` in `src-tauri/src/worktree.rs` (D1b: the same
+ *  rule set `git_init`'s branch argument is validated against server-side).
+ *  A client-side pre-check only — Rust re-validates and is the source of
+ *  truth; this just avoids offering an Init button that would round-trip
+ *  into a guaranteed error. */
+const INVALID_BRANCH_CHARS = ["~", "^", ":", "?", "*", "[", "\\"];
+function isValidBranchName(name: string): boolean {
+  if (name === "" || /\s/.test(name)) return false;
+  if (INVALID_BRANCH_CHARS.some((c) => name.includes(c))) return false;
+  if (name.startsWith("-")) return false;
+  if (name.includes("..")) return false;
+  if (name.endsWith(".lock")) return false;
+  return true;
 }
 
 /** Composition rule, frozen (§5.10): existing content preserved verbatim and
@@ -179,6 +216,14 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
   const [extraText, setExtraText] = useState("");
   const [reviewed, setReviewed] = useState(false);
 
+  // D1b: default-branch choice offered at init time. Default "main" per
+  // contract; the resolved name (never null from this UI — the segmented
+  // control always picks one of the three) is what gets sent to `gitInit`.
+  const [branchChoice, setBranchChoice] = useState<"main" | "master" | "custom">("main");
+  const [customBranch, setCustomBranch] = useState("");
+  const resolvedBranch = branchChoice === "custom" ? customBranch.trim() : branchChoice;
+  const branchIsValid = isValidBranchName(resolvedBranch);
+
   const canClose = phase !== "initializing" && phase !== "writing";
 
   const load = () => {
@@ -216,9 +261,10 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
   }, [canClose, onClose]);
 
   const doInit = () => {
+    if (!branchIsValid) return;
     setPhase("initializing");
     setErrText(null);
-    gitInit(root)
+    gitInit(root, resolvedBranch)
       .then((s) => {
         setStatus(s);
         setPhase("ready");
@@ -360,9 +406,52 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                 <p className="truncate rounded border border-border-subtle bg-surface-inset px-2.5 py-1.5 font-mono text-xs text-content-secondary" title={root}>
                   {root}
                 </p>
+                <div>
+                  <p className="mb-1.5 font-mono text-2xs uppercase tracking-wider text-content-muted">
+                    default branch
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex h-control-sm flex-none overflow-hidden rounded border border-border">
+                      {(["main", "master", "custom"] as const).map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setBranchChoice(opt)}
+                          disabled={phase === "initializing"}
+                          className={`h-full px-2.5 font-mono text-xs transition-colors duration-fast disabled:opacity-50 ${
+                            branchChoice === opt
+                              ? "bg-accent-surface text-accent-text"
+                              : "bg-surface-2 text-content-muted hover:bg-surface-3"
+                          }`}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                    {branchChoice === "custom" && (
+                      <input
+                        type="text"
+                        value={customBranch}
+                        onChange={(e) => setCustomBranch(e.target.value)}
+                        disabled={phase === "initializing"}
+                        placeholder="branch-name"
+                        className="h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 font-mono text-xs text-content placeholder:text-content-disabled focus:border-accent disabled:opacity-50"
+                      />
+                    )}
+                  </div>
+                  {branchChoice === "custom" && !branchIsValid && (
+                    <p className="mt-1 text-2xs leading-snug text-content-muted">
+                      Branch name can&apos;t be empty, contain whitespace or any of{" "}
+                      <span className="font-mono">~^:?*[\</span>, start with{" "}
+                      <span className="font-mono">-</span>, contain{" "}
+                      <span className="font-mono">..</span>, or end with{" "}
+                      <span className="font-mono">.lock</span>.
+                    </p>
+                  )}
+                </div>
                 <button
                   onClick={doInit}
-                  disabled={phase === "initializing"}
+                  disabled={phase === "initializing" || !branchIsValid}
                   className={`${PRIMARY_BTN} self-start`}
                 >
                   {phase === "initializing" ? "· · ·" : "Initialize a git repository here"}
@@ -400,6 +489,9 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                     {GITIGNORE_PRESETS.map((p) => (
                       <button
                         key={p.key}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={selectedPresets.has(p.key)}
                         onClick={() => togglePreset(p.key)}
                         className={`flex h-control-sm items-center gap-1.5 rounded border px-2 font-mono text-xs transition-colors duration-fast ${
                           selectedPresets.has(p.key)
@@ -410,7 +502,7 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                         <CheckSquare
                           checked={selectedPresets.has(p.key)}
                           label={p.label}
-                          onToggle={() => togglePreset(p.key)}
+                          interactive={false}
                         />
                         {p.label}
                       </button>

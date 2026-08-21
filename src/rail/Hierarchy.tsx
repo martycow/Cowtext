@@ -509,12 +509,19 @@ export function FileRail({
   root,
   onEditProject,
   onOpenGit,
+  onNeedsReview,
 }: {
   root: string;
   onEditProject: () => void;
   onOpenGit: () => void;
+  /** WO13 N-F — the persistent half of "review-needed nodes findable in one
+   *  action from the canvas": the migration banner's own Review button is
+   *  the first entry point and is dismissible, so this chip is the one that
+   *  survives dismissal and a restart. */
+  onNeedsReview: () => void;
 }) {
   const { files, rescan, scanning } = useProjectStore();
+  const needsReviewCount = useGraphStore((s) => s.nodes.filter((n) => n.needsReview === true).length);
   // Agent files scan too (project.rs opts into .claude/agents/) but they
   // render in the AGENTS section below, not among context files.
   const contextFiles = files.filter((f) => !f.relPath.startsWith(".claude/"));
@@ -592,6 +599,15 @@ export function FileRail({
         <span className="min-w-0 flex-1 truncate font-mono text-2xs text-content-muted">
           {contextFiles.length} {contextFiles.length === 1 ? "file" : "files"}
         </span>
+        {needsReviewCount > 0 && (
+          <button
+            onClick={onNeedsReview}
+            title="Select every node flagged needsReview and pan the canvas to it"
+            className="flex h-control-sm flex-none items-center gap-1 rounded border border-accent-border bg-accent-surface px-1.5 font-mono text-2xs text-accent-text transition-colors duration-fast hover:bg-surface-2"
+          >
+            {needsReviewCount} review
+          </button>
+        )}
         <button
           onClick={() => void rescan()}
           disabled={scanning}

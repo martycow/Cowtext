@@ -12,13 +12,35 @@ function isSelectable(item: MenuItem): item is Extract<MenuItem, { kind: "item" 
   return item.kind === "item" && item.disabled !== true;
 }
 
+/** WO13_CONTRACT.md §2.3 (defect 3), Stage 0: which surface this menu is
+ *  opened above. Determines the z-index class so the menu paints in front
+ *  of its host rather than behind it — `ContextMenu` is a `position: fixed`
+ *  portal to `document.body`, so its stacking order is decided by z-index
+ *  alone, not DOM nesting. Default `"dropdown"` keeps every pre-WO13 call
+ *  site's exact prior behaviour (`z-dropdown`, unchanged). `"modal"` is for
+ *  a menu opened from inside a `z-modal` dialog (e.g. the New Agent
+ *  modal's avatar menu, a `ToolPicker` inside any modal) — it needs a
+ *  z-index ABOVE `z-modal` (200), so it uses `z-toast` (300). `"toast"` is
+ *  for a menu opened from inside a toast action — needs to sit above THAT,
+ *  so it uses `z-palette` (400). This is a z-index selection, not a
+ *  semantic claim that the menu IS a toast. */
+export type ContextMenuLayer = "dropdown" | "modal" | "toast";
+
+const LAYER_CLASS: Record<ContextMenuLayer, string> = {
+  dropdown: "z-dropdown",
+  modal: "z-toast",
+  toast: "z-palette",
+};
+
 export function ContextMenu(props: {
   x: number;
   y: number;
   items: MenuItem[];
   onClose: () => void;
+  /** @default "dropdown" */
+  layer?: ContextMenuLayer;
 }): JSX.Element | null {
-  const { x, y, items, onClose } = props;
+  const { x, y, items, onClose, layer = "dropdown" } = props;
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; ready: boolean }>({
     left: x,
@@ -123,7 +145,7 @@ export function ContextMenu(props: {
       aria-activedescendant={activeId !== undefined ? `ct-menu-item-${activeId}` : undefined}
       onKeyDown={onKeyDown}
       style={{ position: "fixed", left: pos.left, top: pos.top, visibility: pos.ready ? "visible" : "hidden" }}
-      className="z-dropdown min-w-[190px] max-w-[320px] rounded-lg border border-border bg-surface-3 p-1 shadow-dropdown outline-none"
+      className={`${LAYER_CLASS[layer]} min-w-[190px] max-w-[320px] rounded-lg border border-border bg-surface-3 p-1 shadow-dropdown outline-none`}
     >
       {items.map((item, i) => {
         if (item.kind === "separator") {

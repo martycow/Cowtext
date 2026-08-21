@@ -5,12 +5,14 @@
 //   AgentEditor (rail)  — the DEFINITION: name, model, tools, skills, body,
 //                         plus nickname/priority/influence. Unchanged.
 //   RosterBar (bottom)  — live sessions as a strip, one line each.
-//   AddAgentDialog      — a one-off spawn; every field re-picked each time.
+//   RunSessionDialog    — the single Run target; every field re-picked each
+//                         time, prefilled from context (F3).
 // The orchestrator is the FLEET: every defined agent side by side, the two
 // per-agent orchestration settings that previously existed nowhere (default
-// workspace, default token ceiling), and spawn/kill against them. Definition
-// fields render read-only here and stay editable in the rail — one writer per
-// field, so the two views can never disagree.
+// workspace, default token ceiling) — consumed as Run's prefill — and stop
+// against live sessions below. Definition fields render read-only here and
+// stay editable in the rail — one writer per field, so the two views can
+// never disagree.
 //
 // This is app chrome, not canvas: it uses the --surface-* ramp and the normal
 // radius scale. The Barn plate language is scoped to src/canvas/** by the
@@ -18,10 +20,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ExternalLink, FolderOpen, Play, RotateCw, Square, X } from "lucide-react";
+import { ExternalLink, FolderOpen, RotateCw, Square, X } from "lucide-react";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { agentMemoryStatus, type AgentMemoryStatus } from "../agents/api";
-import { metaOrDefault, seedFor, useAgentsStore, PRODUCER_FILE } from "../store/agents";
+import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
 import { useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
 import { budgetPct } from "../sessions/budget";
 import { agentContextTokens, ctxPercent } from "../store/tokens";
@@ -173,9 +175,6 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
   const loadAvatar = useAgentsStore((s) => s.loadAvatar);
   const updateMeta = useAgentsStore((s) => s.updateMeta);
   const selectAgent = useAgentsStore((s) => s.select);
-  const spawn = useSessionsStore((s) => s.spawn);
-  const busy = useSessionsStore((s) => s.busy);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const files = useProjectStore((s) => s.files);
@@ -204,13 +203,6 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
     });
   };
 
-  const doSpawn = () => {
-    setSpawnError(null);
-    void spawn(root, doc.fileName, label, cwd, meta.defaultTokenCeiling).then((err) => {
-      if (err !== null) setSpawnError(err);
-    });
-  };
-
   // WO11 G5 — "one writer per field" (§5.12): this view never edits a
   // definition field itself. Selecting the agent in the agents store is as
   // far as this lane's zone reaches — the rail/Inspector (a different view)
@@ -226,29 +218,7 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
           <span className="truncate text-lg font-semibold text-content">{label}</span>
           <span className="truncate font-mono text-2xs text-content-muted">{doc.fileName}</span>
         </div>
-        <button
-          onClick={doSpawn}
-          disabled={busy}
-          title={`Spawn a session in ${cwd}`}
-          className="flex h-control flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-3 disabled:text-content-disabled"
-        >
-          <Play size={13} strokeWidth={1.5} />
-          Spawn
-        </button>
       </div>
-
-      {spawnError !== null && (
-        <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4 py-1.5">
-          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">{spawnError}</span>
-          <button
-            onClick={() => setSpawnError(null)}
-            title="Dismiss"
-            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
-          >
-            <X size={10} strokeWidth={1.5} />
-          </button>
-        </div>
-      )}
 
       {/* ── The two settings this view exists for ─────────────────────── */}
       <Section title="Workspace">
@@ -283,8 +253,8 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
         </div>
         <p className="mt-1.5 text-xs text-content-muted">
           {meta.defaultCwd === ""
-            ? "No default set — spawns land in the project root."
-            : "Every session spawned from this view starts here."}
+            ? "No default set — Run prefills the project root."
+            : "Run prefills this folder when this agent is selected."}
         </p>
       </Section>
 
@@ -377,7 +347,7 @@ function Detail({ doc, root, sessions }: { doc: AgentDoc; root: string; sessions
 
       <Section title={`Sessions (${sessions.length})`}>
         {sessions.length === 0 ? (
-          <p className="text-xs text-content-muted">No sessions yet. Spawn starts one with the settings above.</p>
+          <p className="text-xs text-content-muted">No sessions yet. Run starts one, prefilled with the settings above.</p>
         ) : (
           <div className="flex flex-col">
             {sessions.map((s) => (
@@ -396,13 +366,8 @@ export function OrchestratorView({ root }: { root: string }) {
   const sessions = useSessionsStore((s) => s.sessions);
   const [selected, setSelected] = useState<string | null>(null);
 
-  // Producer first (it is the reserved default and owns unassigned work),
-  // then everyone else in the store's own fileName order.
-  const ordered = useMemo(() => {
-    const producer = agents.filter((a) => a.fileName === PRODUCER_FILE);
-    const rest = agents.filter((a) => a.fileName !== PRODUCER_FILE);
-    return [...producer, ...rest];
-  }, [agents]);
+  // The store's own fileName order — no agent is privileged.
+  const ordered = agents;
 
   const sessionsFor = useMemo(() => {
     const map = new Map<string, Session[]>();

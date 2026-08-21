@@ -45,8 +45,13 @@ const REQUIRED_FLAGS: &[&str] = &["-p", "--output-format", "--verbose", "--resum
 const REQUIRED_FORMAT: &str = "stream-json";
 
 const BOOT_PROMPT_HEAD: &str = "You are the Cowtext agent \"{name}\" working in {cwd}.";
+// F2: the marker convention `map_line`'s "result" branch scans for
+// (`find_cowtext_ask`). Appended as its own sentence — the rest of the tail
+// is unchanged so every existing `build_boot_prompt` assertion on its
+// original wording still holds.
 const BOOT_PROMPT_TAIL: &str = "Reply with ONE short line confirming you are ready. \
-Do not modify any file until you are asked to.";
+Do not modify any file until you are asked to. If you need a decision from the user \
+before you can continue, end your reply with a line of the form `COWTEXT_ASK: <your question>`.";
 const RESTART_PROMPT: &str = "Session restarted by Cowtext. Reply with ONE short line \
 confirming you are ready to continue.";
 const AGENT_FILE_MAX_BYTES: usize = 8 * 1024;
@@ -80,6 +85,11 @@ pub enum AgentEventKind {
     /// WO06 §5.4: a token-ceiling hard-stop. Emitted UNGATED (see
     /// `charge`/`Stop`) — no other field on `AgentEvent` changes shape.
     Budget,
+    /// F2: the agent ended its reply with a `COWTEXT_ASK: <question>` line
+    /// (see `BOOT_PROMPT_TAIL` and `find_cowtext_ask`) — surfaced by the
+    /// frontend as a reply-prompt popup. Appended last, never reordered: the
+    /// TS `AgentEventKind` union mirrors this enum positionally.
+    Question,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -505,6 +515,33 @@ fn status_event(id: &str, status: SessionStatus, ts: u64) -> AgentEvent {
     AgentEvent { id: id.to_string(), kind: AgentEventKind::Status, status: Some(status), tool: None, text: None, usage: None, ts }
 }
 
+/// F2 marker scan: does `result_text` (the already-extracted `result` line
+/// text) contain a `COWTEXT_ASK: <question>` line (per `BOOT_PROMPT_TAIL`'s
+/// convention)? Matching is on each line's TRIMMED form via `starts_with`,
+/// so leading whitespace before the marker never hides it. Only the FIRST
+/// matching line is returned — a later line is prose, not a second
+/// question (contract: "Only the FIRST such line in a turn produces a
+/// Question event"). The returned text is trimmed of surrounding
+/// whitespace only; any other punctuation (e.g. a trailing period) is part
+/// of the question and is preserved verbatim. An empty question after
+/// trimming is treated as no marker at all.
+fn find_cowtext_ask(result_text: &str) -> Option<String> {
+    const MARKER: &str = "COWTEXT_ASK:";
+    for line in result_text.lines() {
+        if let Some(rest) = line.trim().strip_prefix(MARKER) {
+            let question = rest.trim();
+            if !question.is_empty() {
+                return Some(question.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn question_event(id: &str, text: String, ts: u64) -> AgentEvent {
+    AgentEvent { id: id.to_string(), kind: AgentEventKind::Question, status: None, tool: None, text: Some(text), usage: None, ts }
+}
+
 /// Formats a token count with thousands separators (`200000` -> `"200,000"`),
 /// matching the `budget` event's example text (contract §5.4). No new
 /// dependency: plain digit-grouping over the decimal string.
@@ -664,6 +701,12 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                 let result_text = value.get("result").and_then(|v| v.as_str()).unwrap_or("");
                 if !result_text.is_empty() {
                     events.push(text_event(id, result_text.to_string(), ts));
+                    // F2: an ADDITIONAL event alongside the Text event above
+                    // — the transcript stays complete, this never suppresses
+                    // or rewrites it.
+                    if let Some(question) = find_cowtext_ask(result_text) {
+                        events.push(question_event(id, question, ts));
+                    }
                 }
                 // N5: `total_cost_usd` lives on the `result` line itself, a
                 // sibling of `usage`, not nested inside it — read it here and

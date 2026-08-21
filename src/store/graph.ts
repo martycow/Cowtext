@@ -21,40 +21,47 @@ function clearTaskSelection(): void {
   if (useTasksStore.getState().selected !== null) useTasksStore.getState().select(null);
 }
 
-// ── Data model (plan §4) ──────────────────────────────────────────────
+// ── Data model (plan §4; v5 taxonomy overhaul WO13_CONTRACT.md §4/§6) ──
 
 // v2: the former "persona" role IS the agent (Marty, 2026-08-18) — an
 // agent-role node may be backed by a real .claude/agents/*.md file.
-// v3 (WO03): six more roles — 13 total (WO03_CONTRACT.md §"Graph v3
-// schema"). Mirrors src-tauri/src/project.rs's NodeRole.
+// v3 (WO03): six more roles — 13 total. v5 (WO13): full taxonomy re-cut —
+// 14 roles, 5 groups (1 identity + 3 constraints + 2 structure + 5 process
+// + 3 knowledge, §6.1). `agent` sits outside the four pickable groups
+// (dropping it would orphan every `.claude/agents/*.md` node — see
+// src/wizard/roles.ts's WIZARD_BLOCKED_ROLES). Declaration order here IS
+// the contract's enumeration order and mirrors
+// src-tauri/src/project.rs's NodeRole exactly.
 export type NodeRole =
   | "agent"
-  | "rules"
-  | "architecture"
-  | "workflow"
-  | "task"
-  | "reference"
-  | "glossary"
-  | "command"
+  | "rule"
   | "invariant"
   | "trap"
+  | "architecture"
+  | "decision"
+  | "workflow"
+  | "command"
   | "skill"
-  | "snippet"
+  | "env"
+  | "tool"
+  | "glossary"
+  | "example"
   | "style";
 
 export const NODE_ROLES: readonly NodeRole[] = [
   "agent",
-  "rules",
-  "architecture",
-  "workflow",
-  "task",
-  "reference",
-  "glossary",
-  "command",
+  "rule",
   "invariant",
   "trap",
+  "architecture",
+  "decision",
+  "workflow",
+  "command",
   "skill",
-  "snippet",
+  "env",
+  "tool",
+  "glossary",
+  "example",
   "style",
 ];
 
@@ -87,6 +94,18 @@ export function isAgentFile(relPath: string): boolean {
   return canonPath(relPath).startsWith(".claude/agents/");
 }
 
+/** v5 (WO13 §4.1): `{ replacedBy, since?, reason? }`. Field order here IS
+ *  the wire order — frozen. `since` is `YYYY-MM-DD`; migration NEVER
+ *  stamps it (only a user-initiated deprecation in the UI does, and only
+ *  this side computes the date — `project.rs`'s Rust mirror never calls
+ *  `now()` for it, or the two serializers would disagree on bytes for the
+ *  same graph). */
+export interface Deprecated {
+  replacedBy: string;
+  since?: string;
+  reason?: string;
+}
+
 export interface MemoryNode {
   id: string;
   title: string;
@@ -97,8 +116,11 @@ export interface MemoryNode {
   filePath: string;
   /** Position in compiled output. */
   readOrder: number;
-  /** Always-in-context vs on-demand. */
-  pinned: boolean;
+  /** v5 (WO13 §4.1): replaces `pinned: boolean`. The only legal value is
+   *  `"always"`; on-demand is expressed by absence — a single-variant
+   *  optional field, so the "was it false or was it just added" parity
+   *  landmine between the two serializers is unrepresentable. */
+  rootLoad?: "always";
   position: { x: number; y: number };
   /** Isometric tile coords for the barn scene (phase 5); auto if absent. */
   scenePos?: { tx: number; ty: number };
@@ -110,8 +132,15 @@ export interface MemoryNode {
   lastVerified?: string;
   /** v3 (WO03): free-form labels. Absent/empty are both "no tags". */
   tags?: string[];
-  /** v3 (WO03): optional owner/assignee. */
+  /** v3 (WO03): optional owner/assignee. Absent/empty are both "no owner". */
   owner?: string;
+  /** v5 (WO13 §4.1, §5.5): set by a `supersedes` edge during migration, or
+   *  by a user-initiated deprecation in the UI. */
+  deprecated?: Deprecated;
+  /** v5 (WO13 §4.1, §5.2): `true` ⇒ present on the wire; `false`/absent ⇒
+   *  omitted. Set only where a migration pass actually rewrote a value, or
+   *  by explicit user action — never re-fires on an unchanged value. */
+  needsReview?: boolean;
   /**
    * v3 (WO03): reserved extension map, scalars only for now — never forces
    * a v4 bump. Keys serialize sorted (see {@link serializeGraph}) so output
@@ -120,36 +149,39 @@ export interface MemoryNode {
   meta?: Record<string, unknown>;
 }
 
-// v3 (WO03): `overrides` is STRUCTURAL (participates in Kahn's algorithm /
-// cycle validation / topological ordering exactly like `imports` —
-// compile.rs's `EdgeKind::is_structural`); `supersedes` and `conflicts-with`
-// are NON-structural (linter-only).
-export type EdgeKind =
-  | "imports"
-  | "references"
-  | "conditional"
-  | "sequence"
-  | "overrides"
-  | "supersedes"
-  | "conflicts-with";
+// v5 (WO13 §7.1): 5 edge kinds. `conditional` is gone (now `imports` + a
+// typed EdgeGuard); `supersedes` is gone (now deprecates its target and is
+// deleted by migration); `conflicts-with` is renamed `contradicts`.
+// `overrides` is STRUCTURAL (participates in Kahn's algorithm / cycle
+// validation / topological ordering exactly like `imports` — see
+// `isStructuralEdgeKind`); `references` and `contradicts` are NON-structural
+// (linter-only). Mirrors src-tauri/src/project.rs's EdgeKind exactly.
+export type EdgeKind = "imports" | "references" | "overrides" | "sequence" | "contradicts";
 
 export const EDGE_KINDS: readonly EdgeKind[] = [
   "imports",
   "references",
-  "conditional",
-  "sequence",
   "overrides",
-  "supersedes",
-  "conflicts-with",
+  "sequence",
+  "contradicts",
 ];
+
+/** v5 (WO13 §4.2, §7): the typed replacement for the old free-text
+ *  `condition` string on a `conditional` edge. Inner key order, frozen:
+ *  `type` first, then `globs` (glob) or `text` (description) — matches
+ *  Rust's `#[serde(tag = "type")]`, which emits the tag first. A glob
+ *  guard with an empty `globs` array is invalid and normalized away by
+ *  migration; the UI must never construct one. */
+export type EdgeGuard = { type: "glob"; globs: string[] } | { type: "description"; text: string };
 
 export interface MemoryEdge {
   id: string;
   source: string;
   target: string;
   kind: EdgeKind;
-  /** For conditional: glob ("src/net/**") OR natural language. */
-  condition?: string;
+  /** v5 (WO13 §4.2): replaces `condition?: string`. Legal on every kind
+   *  except `contradicts` (migration strips it there). */
+  guard?: EdgeGuard;
   /** Human hint rendered on the edge label. */
   note?: string;
   /** v3 (WO03): edge colour override (backlog "edge colour persistence"). */
@@ -166,7 +198,11 @@ export interface MemoryEdge {
 // `compileTargets` below, unchanged at `["claude"]`.
 export type CompileTarget = "claude" | "agents" | "cursor" | "copilot" | "gemini";
 
-export const GRAPH_VERSION = 4;
+/** Every {@link CompileTarget} value, used only by {@link migrateGraph}'s
+ *  tolerance pass (mirrors `project.rs`'s `KNOWN_COMPILE_TARGET_STRS`). */
+const COMPILE_TARGETS: readonly CompileTarget[] = ["claude", "agents", "cursor", "copilot", "gemini"];
+
+export const GRAPH_VERSION = 5;
 
 export interface BarnGraph {
   version: typeof GRAPH_VERSION;
@@ -186,6 +222,25 @@ function sortedMeta(meta: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+/** Sorted-key copy of a `Deprecated`, in the frozen field order
+ *  (`replacedBy`, `since?`, `reason?`), `since`/`reason` omitted at
+ *  absent/empty exactly like every other optional string field here. */
+function stableDeprecated(d: Deprecated): Deprecated {
+  return {
+    replacedBy: d.replacedBy,
+    ...(d.since !== undefined && d.since !== "" ? { since: d.since } : {}),
+    ...(d.reason !== undefined && d.reason !== "" ? { reason: d.reason } : {}),
+  };
+}
+
+/** Sorted-key copy of an `EdgeGuard`, `type` first (frozen — matches
+ *  Rust's `#[serde(tag = "type")]`). */
+function stableGuard(g: EdgeGuard): EdgeGuard {
+  return g.type === "glob"
+    ? { type: "glob", globs: [...g.globs] }
+    : { type: "description", text: g.text };
+}
+
 function stableNode(n: MemoryNode): MemoryNode {
   return {
     id: n.id,
@@ -194,12 +249,14 @@ function stableNode(n: MemoryNode): MemoryNode {
     brief: n.brief,
     filePath: n.filePath,
     readOrder: n.readOrder,
-    pinned: n.pinned,
+    ...(n.rootLoad === "always" ? { rootLoad: "always" as const } : {}),
     position: { x: Math.round(n.position.x), y: Math.round(n.position.y) },
     ...(n.scenePos !== undefined ? { scenePos: { tx: n.scenePos.tx, ty: n.scenePos.ty } } : {}),
     ...(n.lastVerified !== undefined ? { lastVerified: n.lastVerified } : {}),
     ...(n.tags !== undefined && n.tags.length > 0 ? { tags: [...n.tags] } : {}),
     ...(n.owner !== undefined && n.owner !== "" ? { owner: n.owner } : {}),
+    ...(n.deprecated !== undefined ? { deprecated: stableDeprecated(n.deprecated) } : {}),
+    ...(n.needsReview === true ? { needsReview: true as const } : {}),
     ...(n.meta !== undefined && Object.keys(n.meta).length > 0
       ? { meta: sortedMeta(n.meta) }
       : {}),
@@ -212,7 +269,7 @@ function stableEdge(e: MemoryEdge): MemoryEdge {
     source: e.source,
     target: e.target,
     kind: e.kind,
-    ...(e.condition !== undefined && e.condition !== "" ? { condition: e.condition } : {}),
+    ...(e.guard !== undefined ? { guard: stableGuard(e.guard) } : {}),
     ...(e.note !== undefined && e.note !== "" ? { note: e.note } : {}),
     ...(e.color !== undefined && e.color !== "" ? { color: e.color } : {}),
     ...(e.waypoints !== undefined && e.waypoints.length > 0
@@ -250,39 +307,234 @@ export function serializeGraph(g: BarnGraph): string {
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
 
-/** Migration harness (backlog 9.2; v3 bump WO03 §"Graph v3 schema"; v4 bump
- *  WO10 §"Lane 1"): version 4 is current. v1 → v2: the "persona" role was renamed to
- *  "agent" (same semantics, now unified with Claude Code agent files).
- *  v2 → v3: pure default-filling — the new node fields (`tags`/`owner`/
- *  `meta`), new edge field (`color`), widened role/edge-kind vocabularies,
- *  and two new compile targets are all optional on the TS types above, so
- *  a v2 graph is already a structurally valid v3 graph; nothing here needs
- *  to touch node/edge contents. v3 → v4: pure default-filling again — the
- *  only new field is the edge's optional `waypoints`, absent ⇒ the
- *  automatic route. A v1 graph migrates v1→v2→v3→v4 in one call (the
- *  persona→agent rewrite below, then the version stamp at the
- *  bottom). Anything else must come through here with an explicit
- *  migration step. Mirrors `migrate_graph` in `src-tauri/src/project.rs`. */
+/** A condition is a glob iff it has no whitespace and at least one of `*`,
+ *  `?`, `[`, `/`; otherwise it is natural language (WO13_CONTRACT.md §5.4).
+ *  The SAME predicate `compile.rs`'s `emit_cursor`/`on_demand_bullets` use
+ *  (via `project.rs`'s `is_glob_condition`) — this is the one definition on
+ *  the TS side; `src/config/*` imports it, no lane may re-derive it. */
+export function isGlobCondition(condition: string): boolean {
+  if (/\s/.test(condition)) return false;
+  return (
+    condition.includes("*") ||
+    condition.includes("?") ||
+    condition.includes("[") ||
+    condition.includes("/")
+  );
+}
+
+/** Loosely-typed working copy of a node/edge mid-migration — before the
+ *  final typed cast, every migration pass below reads/writes through this
+ *  shape rather than `MemoryNode`/`MemoryEdge` directly, mirroring
+ *  `project.rs`'s `serde_json::Value` pre-pass approach so neither side can
+ *  quietly rely on a field the other hasn't written yet. */
+type RawRecord = Record<string, unknown>;
+
+/** Passes 3+4+5 (§5.1): node role rewrite, in place. Order matters —
+ *  `persona` → `agent` (pass 3) before the v4→v5 rename table (pass 4)
+ *  before the unknown-role catch-all (pass 5), or a renamed v4 role would
+ *  first be seen as unknown. */
+const ROLE_RENAME_TABLE: Readonly<Record<string, readonly [string, boolean]>> = {
+  rules: ["rule", false],
+  task: ["workflow", true],
+  reference: ["architecture", true],
+  snippet: ["example", false],
+};
+
+function migrateNodeRole(node: RawRecord): void {
+  if (node.role === "persona") node.role = "agent";
+  const roleStr = typeof node.role === "string" ? node.role : undefined;
+  const renamed = roleStr !== undefined ? ROLE_RENAME_TABLE[roleStr] : undefined;
+  if (renamed !== undefined) {
+    const [nextRole, flagReview] = renamed;
+    node.role = nextRole;
+    if (flagReview) node.needsReview = true;
+  }
+  const known = typeof node.role === "string" && (NODE_ROLES as readonly string[]).includes(node.role);
+  if (!known) {
+    node.role = "architecture";
+    node.needsReview = true;
+  }
+}
+
+/** Passes 6+7 (§5.1): `pinned: boolean` → `rootLoad?: "always"`. `pinned`
+ *  is deleted unconditionally (idempotence law (a)). Pass 7 then discards
+ *  any `rootLoad` value other than `"always"` — defensive tolerance,
+ *  mirrors `project.rs`. */
+function migrateNodeRootLoad(node: RawRecord): void {
+  if (node.pinned === true) node.rootLoad = "always";
+  delete node.pinned;
+  if (node.rootLoad !== undefined && node.rootLoad !== "always") {
+    delete node.rootLoad;
+  }
+}
+
+/** Pass 8 (§5.1, §5.4): `conditional` edges become `imports` + a typed
+ *  guard, classified by {@link isGlobCondition}. `condition` is deleted
+ *  unconditionally, on every edge (idempotence law (a) + defensive
+ *  clean-up of a stray key on any other kind). An absent/empty condition
+ *  produces a bare, unguarded `imports` edge. */
+function migrateEdgeConditional(edge: RawRecord): void {
+  if (edge.kind === "conditional") {
+    const condition =
+      typeof edge.condition === "string" && edge.condition !== "" ? edge.condition : undefined;
+    edge.kind = "imports";
+    if (condition !== undefined) {
+      edge.guard = isGlobCondition(condition)
+        ? { type: "glob", globs: [condition] }
+        : { type: "description", text: condition };
+    }
+  }
+  delete edge.condition;
+}
+
+/** Pass 9 (§5.1, §5.5): `supersedes` edges deprecate their target and are
+ *  deleted, processed in BYTE ORDER of edge id (not array order) so "the
+ *  lowest-id edge wins when a node is superseded twice" is deterministic.
+ *  `since`/`reason` are never set — migration never stamps a date. Returns
+ *  the edges array with every `supersedes` edge removed. */
+function migrateSupersedes(nodes: RawRecord[], edges: RawRecord[]): RawRecord[] {
+  const supersedes: { id: string; source: string; target: string }[] = [];
+  for (const e of edges) {
+    if (
+      e.kind === "supersedes" &&
+      typeof e.id === "string" &&
+      typeof e.source === "string" &&
+      typeof e.target === "string"
+    ) {
+      supersedes.push({ id: e.id, source: e.source, target: e.target });
+    }
+  }
+  supersedes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  for (const { source, target } of supersedes) {
+    for (const node of nodes) {
+      if (node.id === target) {
+        if (node.deprecated === undefined) {
+          node.deprecated = { replacedBy: source };
+        }
+        node.needsReview = true;
+      }
+    }
+  }
+  return edges.filter((e) => e.kind !== "supersedes");
+}
+
+/** Passes 10+11 (§5.1): `conflicts-with` → `contradicts`, then any edge
+ *  kind still not one of the 5 v5 values falls back to `references`. */
+function migrateEdgeKindRename(edge: RawRecord): void {
+  if (edge.kind === "conflicts-with") edge.kind = "contradicts";
+  const known = typeof edge.kind === "string" && (EDGE_KINDS as readonly string[]).includes(edge.kind);
+  if (!known) edge.kind = "references";
+}
+
+/** Pass 12 (§5.1): `guard` is illegal on `contradicts` — strip it. */
+function stripIllegalGuard(edge: RawRecord): void {
+  if (edge.kind === "contradicts") delete edge.guard;
+}
+
+/** Pass 13 (§5.1, §5.6): `contradicts` normalization + dedupe. Step 1:
+ *  canonicalize every `contradicts` edge to `source < target` byte-wise.
+ *  Step 2: group by the canonical pair; keep only the lowest-id edge in
+ *  byte order, dropping every other edge in the group OUTRIGHT (including
+ *  its `note`/`color`/`waypoints` — the frozen, lossy behaviour §5.6 calls
+ *  out). Both steps are fixed points, so a second pass is a no-op. */
+function migrateContradicts(edges: RawRecord[]): RawRecord[] {
+  for (const e of edges) {
+    if (e.kind !== "contradicts") continue;
+    const source = typeof e.source === "string" ? e.source : "";
+    const target = typeof e.target === "string" ? e.target : "";
+    if (source > target) {
+      e.source = target;
+      e.target = source;
+    }
+  }
+
+  const winner = new Map<string, string>();
+  const keyOf = (e: RawRecord): string =>
+    `${typeof e.source === "string" ? e.source : ""} ${typeof e.target === "string" ? e.target : ""}`;
+  for (const e of edges) {
+    if (e.kind !== "contradicts") continue;
+    const key = keyOf(e);
+    const id = typeof e.id === "string" ? e.id : "";
+    const cur = winner.get(key);
+    if (cur === undefined || id < cur) winner.set(key, id);
+  }
+  return edges.filter((e) => {
+    if (e.kind !== "contradicts") return true;
+    const id = typeof e.id === "string" ? e.id : "";
+    return winner.get(keyOf(e)) === id;
+  });
+}
+
+/** Migration harness. NOT a version chain (WO13_CONTRACT.md §5): a set of
+ *  passes over loosely-typed node/edge records, run unconditionally on
+ *  every load regardless of the input's `version`, in the exact order of
+ *  §5.1's table — v1's `persona`→`agent` rename included, so a v1 graph
+ *  migrates to v5 in one call. Idempotence law: every pass is either (a)
+ *  keyed on a value/key that no longer exists after it runs, or (b) a
+ *  projection onto a canonical form (a fixed point by construction) — see
+ *  each pass's own doc comment. `Err` for unparseable input, an
+ *  out-of-range version, or a missing/non-array `nodes`/`edges`. Mirrors
+ *  `migrate_graph` in `src-tauri/src/project.rs` pass-for-pass. */
 export function migrateGraph(data: unknown): BarnGraph {
   if (typeof data !== "object" || data === null) {
     throw new Error("graph.json is not an object");
   }
-  const g = data as { version?: unknown; projectName?: unknown; nodes?: unknown; edges?: unknown; compileTargets?: unknown };
+  const g = data as {
+    version?: unknown;
+    projectName?: unknown;
+    nodes?: unknown;
+    edges?: unknown;
+    compileTargets?: unknown;
+  };
+  // Pass 1: version range check.
   if (typeof g.version !== "number" || g.version < 1 || g.version > GRAPH_VERSION) {
     throw new Error(`Unsupported graph.json version: ${String(g.version)}`);
   }
+  // Pass 2: nodes/edges present and arrays.
   if (!Array.isArray(g.nodes) || !Array.isArray(g.edges)) {
     throw new Error("graph.json is missing nodes/edges arrays");
   }
-  const nodes = (g.nodes as MemoryNode[]).map((n) =>
-    (n.role as string) === "persona" ? { ...n, role: "agent" as NodeRole } : n,
-  );
+
+  const nodes: RawRecord[] = (g.nodes as RawRecord[]).map((n) => ({ ...n }));
+  let edges: RawRecord[] = (g.edges as RawRecord[]).map((e) => ({ ...e }));
+
+  // Passes 3-5 (role), then 6-7 (pinned → rootLoad).
+  for (const node of nodes) {
+    migrateNodeRole(node);
+    migrateNodeRootLoad(node);
+  }
+  // Pass 8 (conditional → imports+guard) must run before 9's removal or
+  // well before 10/11, or a `conditional` edge would lose its condition.
+  for (const edge of edges) {
+    migrateEdgeConditional(edge);
+  }
+  // Pass 9 (supersedes → deprecate + delete) must run before 10/11, or an
+  // unconverted `supersedes` falls into 11's `references` catch-all.
+  edges = migrateSupersedes(nodes, edges);
+  // Passes 10-11 (conflicts-with → contradicts; unknown → references), then
+  // 12 (strip illegal guard on contradicts).
+  for (const edge of edges) {
+    migrateEdgeKindRename(edge);
+    stripIllegalGuard(edge);
+  }
+  // Pass 13: contradicts normalization + dedupe.
+  edges = migrateContradicts(edges);
+
+  // Pass 14: unrecognized compile target dropped from the array.
+  const compileTargets = Array.isArray(g.compileTargets)
+    ? (g.compileTargets as unknown[]).filter(
+        (t): t is CompileTarget => typeof t === "string" && (COMPILE_TARGETS as readonly string[]).includes(t),
+      )
+    : (["claude"] as CompileTarget[]);
+
+  // Pass 15: "typed" cast; stamp version = 5.
   return {
     version: GRAPH_VERSION,
     projectName: typeof g.projectName === "string" ? g.projectName : "",
-    nodes,
-    edges: g.edges as MemoryEdge[],
-    compileTargets: Array.isArray(g.compileTargets) ? (g.compileTargets as CompileTarget[]) : ["claude"],
+    nodes: nodes as unknown as MemoryNode[],
+    edges: edges as unknown as MemoryEdge[],
+    compileTargets,
   };
 }
 
@@ -351,6 +603,13 @@ export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
  *  TRANSIENT — never serialized into graph.json, no version bump. */
 export type AssembleStatus = "idle" | "queued" | "running" | "assembled" | "error";
 
+/** WO13_CONTRACT.md §3.3: additive telemetry alongside `AssembleStatus`.
+ *  `status` stays authoritative for `setAssembleStatus`; `phase` is a finer
+ *  3-step readout (`starting → running → writing`) the card renders as a
+ *  stepper with a live `mm:ss` elapsed time from `startedAt`. TRANSIENT —
+ *  never serialized into graph.json. */
+export type AssemblePhase = "queued" | "starting" | "running" | "writing" | "done" | "error";
+
 interface GraphState {
   root: string | null;
   projectName: string;
@@ -369,6 +628,14 @@ interface GraphState {
   /** nodeId → last error line. Transient, not persisted. */
   assembleErrors: Record<string, string>;
   setAssembleStatus: (nodeId: string, status: AssembleStatus, error?: string) => void;
+  /** nodeId → phase; absent = no job in flight. Transient, not persisted. */
+  assemblePhase: Record<string, AssemblePhase>;
+  /** nodeId → epoch ms the job entered "starting". Transient, not persisted. */
+  assembleStartedAt: Record<string, number>;
+  /** WO13 §3.3: `run_job` (assemble.rs) emits one of these per phase
+   *  transition; `startedAt` arrives once, from "starting" onward, and is
+   *  left untouched by later phases of the same job. */
+  setAssemblePhase: (nodeId: string, phase: AssemblePhase, startedAt?: number) => void;
 
   loadGraph: (root: string) => Promise<void>;
   flushSave: () => Promise<void>;
@@ -379,7 +646,13 @@ interface GraphState {
    *  but with caller-supplied role/content/pinned instead of the quick-node
    *  defaults. Resolves to the new node's id, or null when no project is
    *  open. Never throws: a failed disk write still lands the node (missing
-   *  -file badge), matching createNode's existing contract. */
+   *  -file badge), matching createNode's existing contract.
+   *
+   *  `pinned` is a caller-facing "always load this" toggle, not the wire
+   *  field name — WO13 renamed the node's own field to `rootLoad`
+   *  internally; this boolean is translated to `rootLoad` when the node is
+   *  built, so wizard call sites (`src/wizard/NodeWizard.tsx`) don't need
+   *  to know the wire shape. */
   createNodeFrom: (params: {
     title: string;
     role: NodeRole;
@@ -394,11 +667,35 @@ interface GraphState {
   moveNode: (id: string, position: { x: number; y: number }) => void;
   deleteNodes: (ids: string[]) => void;
 
+  /** v5 convenience wrappers over `updateNode`/`updateEdge` (WO13_CONTRACT.md
+   *  §17's frozen Stage-0 action list) — every lane touching root-load,
+   *  deprecation, review flags or edge guards goes through these rather
+   *  than hand-rolling a `updateNode(id, { rootLoad: ... })` patch at each
+   *  call site. */
+  setRootLoad: (id: string, rootLoad: "always" | undefined) => void;
+  setDeprecated: (id: string, deprecated: Deprecated | undefined) => void;
+  setNeedsReview: (id: string, needsReview: boolean) => void;
+  setEdgeGuard: (edgeId: string, guard: EdgeGuard | undefined) => void;
+
   beginConnection: (conn: PendingConnection) => void;
   confirmConnection: (kind: EdgeKind, condition?: string) => void;
   cancelConnection: () => void;
-  updateEdge: (id: string, patch: Partial<Omit<MemoryEdge, "id">>) => void;
+  /** WO13_AUDIT.md D7 (fix-round Stage 0): applies the same §7.3 legality
+   *  gate and §7.2/§7.1 `contradicts` normalization/guard-strip `addEdge`
+   *  does, to the PATCHED edge. Returns `false` (and leaves the edge
+   *  unchanged) on an unknown id or a denied result; `true` on success. */
+  updateEdge: (id: string, patch: Partial<Omit<MemoryEdge, "id">>) => boolean;
   deleteEdges: (ids: string[]) => void;
+  /** The one chokepoint every edge-creation code path goes through
+   *  (WO13_CONTRACT.md §7.3, §17): applies the legality matrix (`deny`
+   *  blocks creation outright, `warn` creates it — lint flags it later) and
+   *  the §7.2 `contradicts` symmetric no-op rule (creating (B,A) when (A,B)
+   *  already exists is a no-op, not a duplicate), plus the pre-existing
+   *  exact-duplicate guard `confirmConnection` used to do inline. Returns
+   *  the new edge's id (the caller-supplied `id`, if given, is preserved —
+   *  paste/undo/redo/preset-apply need that), or `null` if the edge was
+   *  denied, an exact duplicate, or a no-op reciprocal pair. */
+  addEdge: (edge: Omit<MemoryEdge, "id"> & { id?: string }) => string | null;
 
   /** Wholesale selection sync — React Flow reports the full selection. */
   setSelection: (nodeIds: string[], edgeIds: string[]) => void;
@@ -421,6 +718,63 @@ interface GraphState {
    *  file. Resolves to an error message when the rename failed (title is still
    *  applied), or null on success/no-op. Never throws. */
   commitTitle: (id: string, title: string) => Promise<string | null>;
+}
+
+/** WO13 §7.3: the §7.3 legality matrix (`legalityFor`, lane T1's
+ *  `src/config/edgeRules.ts`) is not created until T1 lands, in PARALLEL
+ *  with this file — but `src/store/graph.ts` is CLOSED to every lane after
+ *  Stage 0 (§17), so T1 can never come back and wire a static `import`
+ *  into this file themselves. A forward `import` of a file that does not
+ *  exist yet on disk would also make this whole module fail to LOAD at
+ *  runtime (Vitest/Vite resolve imports eagerly, unlike `tsc`'s type-only
+ *  forward-reference tolerance) — a hard failure for every test in this
+ *  file, not just an accepted type error. Resolved instead with the SAME
+ *  registration idiom this file already uses for cross-module wiring
+ *  (`agentRenameListeners`/`agentDeleteListeners` at the bottom of this
+ *  file): a settable resolver slot, defaulting to "allow everything" —
+ *  literally the contract's own "nothing matches" default (§7.3) — until
+ *  `registerEdgeLegality` is called once, from wherever lane T1's
+ *  `edgeRules.ts` (or its own consumer) chooses to wire it in. */
+type EdgeLegalityResolver = (
+  sourceRole: NodeRole,
+  kind: EdgeKind,
+  targetRole: NodeRole,
+  targetDeprecated: boolean,
+) => { legality: "allow" | "warn" | "deny"; reason: string };
+
+let edgeLegalityResolver: EdgeLegalityResolver = () => ({ legality: "allow", reason: "" });
+
+/** Wired in once by lane T1 (WO13_CONTRACT.md §7.3) to make `addEdge`'s
+ *  deny/warn checks real. Before that call, `addEdge` allows every edge —
+ *  see `edgeLegalityResolver`'s doc comment above. */
+export function registerEdgeLegality(resolver: EdgeLegalityResolver): void {
+  edgeLegalityResolver = resolver;
+}
+
+/** WO13_AUDIT.md D7: `contradicts` is a symmetric, unordered edge kind
+ *  (§7.2) — its wire normal form is `source < target` byte order, the same
+ *  canonicalization `migrateGraph`'s `migrateContradicts` pass applies on
+ *  load. A `contradicts` edge that reaches `graph.json` un-normalized is
+ *  silently reordered on the NEXT load, and if its (now-matching)
+ *  reciprocal already exists, migration's dedupe collapses the pair and
+ *  DELETES one edge outright — data loss discovered a reload after the
+ *  edit that caused it. `guard` is separately illegal on `contradicts`
+ *  (§7.1); a guard left on a `contradicts` edge (e.g. from switching a
+ *  guarded `imports` edge's kind) must not survive even transiently.
+ *  Applied on every write path that can produce a `contradicts` edge —
+ *  `addEdge` and `updateEdge` both call this on the edge they are about to
+ *  store, so this is enforced at creation time, not just at the next load. */
+function normalizeContradicts<T extends { source: string; target: string; kind: EdgeKind; guard?: EdgeGuard }>(
+  edge: T,
+): T {
+  if (edge.kind !== "contradicts") return edge;
+  const { source, target } = edge;
+  return {
+    ...edge,
+    source: source > target ? target : source,
+    target: source > target ? source : target,
+    guard: undefined,
+  };
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -519,7 +873,7 @@ async function commitNewNode(
     brief: opts.brief,
     filePath: opts.filePath,
     readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
-    pinned: opts.pinned,
+    ...(opts.pinned ? { rootLoad: "always" as const } : {}),
     position: opts.position,
   };
   pushHistory("create");
@@ -557,6 +911,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   loadError: null,
   assembleStatus: {},
   assembleErrors: {},
+  assemblePhase: {},
+  assembleStartedAt: {},
   canUndo: false,
   canRedo: false,
 
@@ -570,6 +926,70 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       else delete nextErrors[nodeId];
       return { assembleStatus: nextStatus, assembleErrors: nextErrors };
     });
+  },
+
+  setAssemblePhase: (nodeId, phase, startedAt) => {
+    set((st) => {
+      const nextPhase = { ...st.assemblePhase };
+      nextPhase[nodeId] = phase;
+      const nextStarted = { ...st.assembleStartedAt };
+      if (startedAt !== undefined) nextStarted[nodeId] = startedAt;
+      // A fresh "queued" with no startedAt means a brand-new job — clear
+      // any stale elapsed-time reading from a previous run on this node.
+      else if (phase === "queued") delete nextStarted[nodeId];
+      return { assemblePhase: nextPhase, assembleStartedAt: nextStarted };
+    });
+  },
+
+  setRootLoad: (id, rootLoad) => get().updateNode(id, { rootLoad }),
+  setDeprecated: (id, deprecated) => get().updateNode(id, { deprecated }),
+  setNeedsReview: (id, needsReview) => get().updateNode(id, { needsReview }),
+  setEdgeGuard: (edgeId, guard) => get().updateEdge(edgeId, { guard }),
+
+  addEdge: (edge) => {
+    const s = get();
+    // D7: canonicalize BEFORE resolving nodes/checking legality/duplicates,
+    // so every check below sees the same normal form that will actually be
+    // stored (a user can draw a `contradicts` edge in either direction).
+    const normalized = normalizeContradicts(edge);
+    const sourceNode = s.nodes.find((n) => n.id === normalized.source);
+    const targetNode = s.nodes.find((n) => n.id === normalized.target);
+    if (sourceNode === undefined || targetNode === undefined) return null;
+
+    const { legality } = edgeLegalityResolver(
+      sourceNode.role,
+      normalized.kind,
+      targetNode.role,
+      targetNode.deprecated !== undefined,
+    );
+    if (legality === "deny") return null;
+
+    // Exact-duplicate guard (source+target+kind) — the check
+    // `confirmConnection` used to do inline before this action existed.
+    const exactDup = s.edges.some(
+      (e) => e.source === normalized.source && e.target === normalized.target && e.kind === normalized.kind,
+    );
+    if (exactDup) return null;
+
+    // §7.2: `contradicts` is a symmetric, unordered pair. Creating (B, A)
+    // when (A, B) already exists is a no-op, not a duplicate. Redundant
+    // with the exact-duplicate check above once every write path
+    // normalizes (this one does), but kept as a defensive belt-and-braces
+    // check against any edge that reached the store un-normalized (e.g. a
+    // hand-edited preset, or a future write path not yet covered).
+    if (normalized.kind === "contradicts") {
+      const reciprocal = s.edges.some(
+        (e) => e.kind === "contradicts" && e.source === normalized.target && e.target === normalized.source,
+      );
+      if (reciprocal) return null;
+    }
+
+    pushHistory("edge-add");
+    const id = edge.id ?? makeId();
+    const full: MemoryEdge = { ...normalized, id };
+    set((st) => ({ edges: [...st.edges, full] }));
+    scheduleSave();
+    return id;
   },
 
   loadGraph: async (root) => {
@@ -587,6 +1007,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       pending: null,
       assembleStatus: {},
       assembleErrors: {},
+      assemblePhase: {},
+      assembleStartedAt: {},
       projectName: projectNameFromRoot(root),
     });
     try {
@@ -643,7 +1065,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     }
     await commitNewNode(set, get, {
       title,
-      role: "reference",
+      role: "architecture",
       filePath,
       brief: "",
       pinned: false,
@@ -687,11 +1109,12 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       id: makeId(),
       title: title !== undefined && title !== "" ? title : derived,
       // An adopted .claude/agents file IS an agent — the unified role.
-      role: isAgentFile(relPath) ? "agent" : "reference",
+      // v5: "reference" no longer exists; "architecture" is the WO13
+      // fallback role (WIZARD_FALLBACK_ROLE, WO13_CONTRACT.md §6.1).
+      role: isAgentFile(relPath) ? "agent" : "architecture",
       brief: "",
       filePath: relPath,
       readOrder: s.nodes.reduce((m, n) => Math.max(m, n.readOrder), 0) + 1,
-      pinned: false,
       position,
     };
     set((st) => ({
@@ -733,9 +1156,13 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     set((st) => {
       const nextStatus = { ...st.assembleStatus };
       const nextErrors = { ...st.assembleErrors };
+      const nextPhase = { ...st.assemblePhase };
+      const nextStarted = { ...st.assembleStartedAt };
       for (const id of ids) {
         delete nextStatus[id];
         delete nextErrors[id];
+        delete nextPhase[id];
+        delete nextStarted[id];
       }
       return {
         nodes: st.nodes.filter((n) => !gone.has(n.id)),
@@ -743,6 +1170,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         selectedNodeIds: st.selectedNodeIds.filter((i) => !gone.has(i)),
         assembleStatus: nextStatus,
         assembleErrors: nextErrors,
+        assemblePhase: nextPhase,
+        assembleStartedAt: nextStarted,
       };
     });
     scheduleSave();
@@ -753,38 +1182,67 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     set({ pending: conn });
   },
 
+  /** v5: `condition` is classified into a typed `guard` via
+   *  `isGlobCondition`, the same predicate migration uses (§5.4) —
+   *  `kind === "conditional"` no longer exists, so any structural kind can
+   *  carry a guard now (§7.1). Delegates to `addEdge` for the legality
+   *  check, the exact-duplicate guard and the `contradicts` no-op rule. */
   confirmConnection: (kind, condition) => {
-    pushHistory("edge-add");
-    const { pending, edges } = get();
+    const { pending } = get();
     if (pending === null) return;
-    const duplicate = edges.some(
-      (e) => e.source === pending.source && e.target === pending.target && e.kind === kind,
-    );
-    if (!duplicate) {
-      const edge: MemoryEdge = {
-        id: makeId(),
-        source: pending.source,
-        target: pending.target,
-        kind,
-        ...(kind === "conditional" && condition !== undefined && condition !== ""
-          ? { condition }
-          : {}),
-      };
-      set((st) => ({ edges: [...st.edges, edge], pending: null }));
-      scheduleSave();
-    } else {
-      set({ pending: null });
-    }
+    const guard: EdgeGuard | undefined =
+      condition !== undefined && condition !== ""
+        ? isGlobCondition(condition)
+          ? { type: "glob", globs: [condition] }
+          : { type: "description", text: condition }
+        : undefined;
+    get().addEdge({
+      source: pending.source,
+      target: pending.target,
+      kind,
+      ...(guard !== undefined ? { guard } : {}),
+    });
+    set({ pending: null });
   },
 
   cancelConnection: () => set({ pending: null }),
 
+  /** WO13_AUDIT.md D7 (fix-round Stage 0 — `graph.ts` reopened serially,
+   *  per tech-lead's ruling that "CLOSED" applies only for the duration of
+   *  PARALLEL lane execution, §17 amended). Runs the same checks `addEdge`
+   *  does, against the PATCHED result: the §7.3 legality gate (deny
+   *  refuses the whole update — the only call site today,
+   *  `MemoryEdge.tsx`'s kind-switcher, already has its own courtesy check,
+   *  but this is the real chokepoint every other path goes through too),
+   *  and `normalizeContradicts` (§7.2 endpoint order, §7.1 guard strip) so
+   *  a kind-switch onto `contradicts` — or any patch that happens to leave
+   *  one un-normalized — can never reach `graph.json` in a shape migration
+   *  would silently reorder or (if the reciprocal already exists) collapse
+   *  and delete outright. Returns `false` on refusal (unknown edge id, or
+   *  denied) so a caller can react; `true` on success. */
   updateEdge: (id, patch) => {
+    const s = get();
+    const existing = s.edges.find((e) => e.id === id);
+    if (existing === undefined) return false;
+    const merged = normalizeContradicts<MemoryEdge>({ ...existing, ...patch, id });
+
+    const sourceNode = s.nodes.find((n) => n.id === merged.source);
+    const targetNode = s.nodes.find((n) => n.id === merged.target);
+    if (sourceNode === undefined || targetNode === undefined) return false;
+    const { legality } = edgeLegalityResolver(
+      sourceNode.role,
+      merged.kind,
+      targetNode.role,
+      targetNode.deprecated !== undefined,
+    );
+    if (legality === "deny") return false;
+
     pushHistory(`edge:${id}`);
     set((st) => ({
-      edges: st.edges.map((e) => (e.id === id ? { ...e, ...patch, id } : e)),
+      edges: st.edges.map((e) => (e.id === id ? merged : e)),
     }));
     scheduleSave();
+    return true;
   },
 
   deleteEdges: (ids) => {

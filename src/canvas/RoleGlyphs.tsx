@@ -6,6 +6,13 @@
 import type { NodeRole } from "../store/graph";
 
 // 8 rows × 8 cols; "#" = filled pixel.
+// v5 (WO13_CONTRACT.md §6.1, §17): 14 roles now, declaration order matching
+// NODE_ROLES. `rules`→`rule` is a straight rename (bitmap unchanged); `task`,
+// `reference` and `snippet` are gone (their v5 successors — `workflow`,
+// `architecture`, `example` — already have, or now get, their own glyph);
+// `decision`, `env`, `tool` and `example` are new hand-authored bitmaps, per
+// the WO13 dispatch (13 → 14 keys, no index signature — the exhaustive
+// Record is the safety net for the closed 14-role set, project.rs:592-605).
 const PIXELS: Record<NodeRole, readonly string[]> = {
   // Head and shoulders — who the agent is.
   agent: [
@@ -19,7 +26,7 @@ const PIXELS: Record<NodeRole, readonly string[]> = {
     "########",
   ],
   // Shield — hard constraints.
-  rules: [
+  rule: [
     "########",
     "########",
     "########",
@@ -28,73 +35,6 @@ const PIXELS: Record<NodeRole, readonly string[]> = {
     "..####..",
     "...##...",
     "........",
-  ],
-  // Building blocks — how it fits together.
-  architecture: [
-    "........",
-    "..####..",
-    "..####..",
-    "..####..",
-    "........",
-    "###..###",
-    "###..###",
-    "###..###",
-  ],
-  // Descending steps — ordered processes.
-  workflow: [
-    "........",
-    "###.....",
-    "###.....",
-    "...###..",
-    "...###..",
-    "......##",
-    "......##",
-    "........",
-  ],
-  // Flag — work with a finish line.
-  task: [
-    ".######.",
-    ".######.",
-    ".######.",
-    ".#......",
-    ".#......",
-    ".#......",
-    ".#......",
-    ".#......",
-  ],
-  // Bookmark with a notched tail — lookup material.
-  reference: [
-    "..####..",
-    "..####..",
-    "..####..",
-    "..####..",
-    "..####..",
-    "..####..",
-    "..####..",
-    "..#..#..",
-  ],
-  // Uneven text lines — vocabulary.
-  glossary: [
-    "........",
-    "######..",
-    "........",
-    "########",
-    "........",
-    "#####...",
-    "........",
-    "###.....",
-  ],
-  // v3 (WO03) — six more glyphs, same 8×8 hand-authored style.
-  // Prompt chevron + cursor bar — a command to run.
-  command: [
-    "........",
-    "..#.....",
-    "...#....",
-    "....#...",
-    "...#....",
-    "..#.....",
-    "........",
-    ".#####..",
   ],
   // Padlock — a fact that must stay locked/true.
   invariant: [
@@ -118,6 +58,53 @@ const PIXELS: Record<NodeRole, readonly string[]> = {
     "..#..#..",
     "...##...",
   ],
+  // Building blocks — how it fits together.
+  architecture: [
+    "........",
+    "..####..",
+    "..####..",
+    "..####..",
+    "........",
+    "###..###",
+    "###..###",
+    "###..###",
+  ],
+  // Fork — a branch point, two paths converging to one stem. New in v5:
+  // `decision` sits beside `architecture` in the structure group, but a
+  // decision is a CHOICE rather than a shape, so it gets its own mark
+  // instead of reusing architecture's blocks.
+  decision: [
+    "##....##",
+    ".#....#.",
+    "..#..#..",
+    "...##...",
+    "...##...",
+    "...##...",
+    "...##...",
+    "........",
+  ],
+  // Descending steps — ordered processes.
+  workflow: [
+    "........",
+    "###.....",
+    "###.....",
+    "...###..",
+    "...###..",
+    "......##",
+    "......##",
+    "........",
+  ],
+  // Prompt chevron + cursor bar — a command to run.
+  command: [
+    "........",
+    "..#.....",
+    "...#....",
+    "....#...",
+    "...#....",
+    "..#.....",
+    "........",
+    ".#####..",
+  ],
   // Starburst badge — a learned capability.
   skill: [
     "...##...",
@@ -129,16 +116,56 @@ const PIXELS: Record<NodeRole, readonly string[]> = {
     ".##..##.",
     "##....##",
   ],
-  // Hollow brackets — a reusable fragment.
-  snippet: [
-    "##....##",
+  // Plug — the runtime/environment it's plugged into. New in v5: `env` has
+  // no v4 predecessor; a plug reads as "what this project is wired into"
+  // without borrowing workflow's steps or tool's hardware.
+  env: [
+    ".##.##..",
+    ".##.##..",
+    ".######.",
+    ".######.",
+    ".######.",
+    "..####..",
+    "..####..",
+    "...##...",
+  ],
+  // Hex nut, hollow — hardware you turn a wrench on. New in v5: `tool`
+  // (external commands/integrations) is deliberately NOT the command
+  // glyph's chevron — it names a thing, not an action to invoke.
+  tool: [
+    "..####..",
+    ".#....#.",
     "#......#",
     "#......#",
     "#......#",
     "#......#",
-    "#......#",
-    "#......#",
-    "##....##",
+    ".#....#.",
+    "..####..",
+  ],
+  // Uneven text lines — vocabulary.
+  glossary: [
+    "........",
+    "######..",
+    "........",
+    "########",
+    "........",
+    "#####...",
+    "........",
+    "###.....",
+  ],
+  // Target rings — a concrete instance that hits the mark, good or bad.
+  // New in v5: replaces `snippet`'s hollow brackets (a generic "reusable
+  // fragment") now that the role is specifically the good/bad worked
+  // example, not just any excerpt.
+  example: [
+    "..####..",
+    ".#....#.",
+    "#.####.#",
+    "#.#..#.#",
+    "#.#..#.#",
+    "#.####.#",
+    ".#....#.",
+    "..####..",
   ],
   // Diagonal brush stroke — voice and formatting.
   style: [
