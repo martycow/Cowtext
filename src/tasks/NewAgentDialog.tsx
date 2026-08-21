@@ -8,7 +8,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useAgentsStore, type Selection } from "../store/agents";
 import { FieldLabel, ModelPicker, Stepper } from "../agents/AgentEditor";
-import { ALL_TOOLS } from "../agents/toolCatalog";
+import {
+  CAPABILITIES,
+  applyCapability,
+  capabilityState,
+  type Capability,
+} from "../agents/toolCatalog";
 import { normalizeFileName, slugForFile } from "../wizard/paths";
 
 const ICON_BTN =
@@ -43,10 +48,10 @@ function AmberToggle({ checked, onChange }: { checked: boolean; onChange: (v: bo
   );
 }
 
-// WO10 item 11 — this list used to be declared here, and disagreed with the
-// free-text Tools field the editor offered afterwards. Both now read the one
-// catalog in agents/toolCatalog.ts.
-const TOOL_OPTIONS = ALL_TOOLS;
+// WO10 item 11 — a tool list used to be declared here, and disagreed with
+// the free-text Tools field the editor offered afterwards. WO12 — both now
+// present the same CAPABILITY rows from agents/toolCatalog.ts, so creating
+// and editing an agent ask the user the same question.
 
 export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const createAgent = useAgentsStore((s) => s.createAgent);
@@ -99,8 +104,12 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     [agents, normalizedFileName],
   );
 
-  const toggleTool = (t: string) => {
-    setTools((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  // WO12 — capability-shaped, matching the editor's ToolPicker. A new agent
+  // starts with an empty list, so every row is cleanly "none" or "all" here;
+  // the tri-state still routes through applyCapability so creation and
+  // editing share one writer rather than two that can drift.
+  const toggleCapability = (cap: Capability) => {
+    setTools((cur) => applyCapability(cur, cap, capabilityState(cur, cap) !== "all"));
   };
 
   const toggleSkill = (name_: string) => {
@@ -251,19 +260,39 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
           </div>
           <div>
             <FieldLabel>Tools</FieldLabel>
-            <div className="grid grid-cols-3 gap-1 rounded border border-border-subtle bg-surface-inset p-1.5">
-              {TOOL_OPTIONS.map((t) => (
-                <label key={t} className="flex h-[22px] items-center gap-1.5 px-1">
-                  <input
-                    type="checkbox"
-                    checked={tools.includes(t)}
-                    onChange={() => toggleTool(t)}
-                    className="h-3 w-3 accent-[var(--accent)]"
-                  />
-                  <span className="truncate text-xs text-content">{t}</span>
-                </label>
-              ))}
+            <div className="flex flex-col gap-0.5 rounded border border-border-subtle bg-surface-inset p-1.5">
+              {CAPABILITIES.map((cap) => {
+                const state = capabilityState(tools, cap);
+                return (
+                  <label
+                    key={cap.key}
+                    className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 transition-colors duration-instant hover:bg-[var(--surface-hover)]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={state === "all"}
+                      ref={(el) => {
+                        // Native indeterminate is a DOM property, not an
+                        // attribute — React cannot set it via JSX.
+                        if (el !== null) el.indeterminate = state === "some";
+                      }}
+                      onChange={() => toggleCapability(cap)}
+                      className="h-3 w-3 flex-none accent-[var(--accent)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs text-content">{cap.label}</span>
+                      <span className="block truncate text-micro leading-snug text-content-disabled">
+                        {cap.hint}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
             </div>
+            <p className="pt-1 text-micro leading-snug text-content-muted">
+              Leave all unticked to inherit every tool. Exact tool names are
+              editable in the Inspector afterwards.
+            </p>
           </div>
           {skills.length > 0 && (
             <div>
