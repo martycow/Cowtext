@@ -36,6 +36,7 @@ mod settings;
 pub mod taskctx;
 mod tasklinks;
 pub mod tasks;
+mod toolchain;
 mod watcher;
 mod worktree;
 
@@ -135,7 +136,8 @@ pub fn run() {
             project_meta::project_meta_read,
             project_meta::project_meta_write,
             project_meta::project_init,
-            fsbatch::fs_apply_batch
+            fsbatch::fs_apply_batch,
+            toolchain::detect_ai_tools
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

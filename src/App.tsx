@@ -16,11 +16,9 @@ import {
   Redo2,
   Send,
   Settings,
-  Sparkles,
   Undo2,
   Users,
   Wand2,
-  Workflow,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -32,15 +30,14 @@ import {
   type SaveState,
 } from "./store/graph";
 import { ProjectWizard, type ProjectWizardMode } from "./project/ProjectWizard";
+import { TitleScreen } from "./project/TitleScreen";
 import { initEventListener } from "./store/events";
 import { initSessionsListener, MAX_SESSIONS, useSessionsStore } from "./store/sessions";
 import { useReviewStore } from "./store/review";
 import { pinnedContextTokens } from "./store/tokens";
 import { GraphCanvas } from "./canvas/GraphCanvas";
-import { EventLog } from "./inspector/EventLog";
-import { ProblemsPanel } from "./inspector/ProblemsPanel";
-import { RosterBar } from "./sessions/RosterBar";
 import { FileRail } from "./rail/Hierarchy";
+import { Dock } from "./ui/Dock";
 // Lazy-loaded for code splitting
 const Inspector = lazy(() => import("./inspector/Inspector").then(m => ({ default: m.Inspector })));
 const CompileModal = lazy(() => import("./compile/CompileModal").then(m => ({ default: m.CompileModal })));
@@ -72,13 +69,11 @@ const AssembleConfirmModal = lazy(() =>
 const AgentQuestionModal = lazy(() =>
   import("./sessions/AgentQuestionModal").then((m) => ({ default: m.AgentQuestionModal })),
 );
-import { flushSettings, PANEL_LIMITS, useSettingsStore, type RecentProject } from "./store/settings";
+import { flushSettings, PANEL_LIMITS, useSettingsStore } from "./store/settings";
 import { flushAgentSave, flushMetaSave, useAgentsStore } from "./store/agents";
 import { initSfx } from "./scene/sfx";
-import { probeProjectDirs, revealPath } from "./fs/api";
 import { ResizeHandle } from "./ui/ResizeHandle";
 import { ContextMenu } from "./ui/ContextMenu";
-import { useContextMenu } from "./ui/useContextMenu";
 import type { MenuItem } from "./ui/menuTypes";
 // WO12 F1 — the toast channel. NOT lazy: it must already be present before
 // the first failure that would want to raise a toast can occur, and it is
@@ -175,43 +170,39 @@ const SAVE_LABEL: Record<SaveState, string | null> = {
   error: "save failed",
 };
 
-function SaveIndicator() {
+/** Top-bar status cluster (WO14 redesign) — merges the old separate save
+ *  indicator and pinned-token chip into one compact pill, one fewer distinct
+ *  control in an already-crowded bar. Absent state (idle, no label) still
+ *  shows the token count alone rather than disappearing entirely. */
+function StatusPill() {
   const saveState = useGraphStore((s) => s.saveState);
-  const label = SAVE_LABEL[saveState];
-  if (label === null) return null;
-  return (
-    <span
-      className={`flex items-center gap-1.5 font-mono text-2xs ${
-        saveState === "error" ? "text-danger-text" : "text-content-muted"
-      }`}
-      title=".cowtext/graph.json"
-    >
-      <span
-        className={`h-1.5 w-1.5 rounded-pill ${
-          saveState === "error"
-            ? "bg-danger"
-            : saveState === "saved"
-              ? "bg-success"
-              : "bg-content-muted"
-        }`}
-      />
-      {label}
-    </span>
-  );
-}
-
-/** ≈N tok pinned (contract §8) — chars/4 estimate over pinned nodes, labeled
- *  as an estimate since real token accounting needs Work Order Block F. */
-function PinnedTokenChip() {
   const nodes = useGraphStore((s) => s.nodes);
   const files = useProjectStore((s) => s.files);
   const tokens = pinnedContextTokens(nodes, files);
+  const label = SAVE_LABEL[saveState];
   return (
-    <span
-      title="estimate, chars/4 · window ~200k"
-      className="flex-none rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-2xs text-content-muted"
-    >
-      ≈{tokens.toLocaleString()} tok pinned
+    <span className="flex h-control flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 font-mono text-2xs text-content-muted">
+      {label !== null && (
+        <>
+          <span
+            title=".cowtext/graph.json"
+            className={`flex items-center gap-1.5 ${saveState === "error" ? "text-danger-text" : ""}`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-pill ${
+                saveState === "error"
+                  ? "bg-danger"
+                  : saveState === "saved"
+                    ? "bg-success"
+                    : "bg-content-muted"
+              }`}
+            />
+            {label}
+          </span>
+          <span className="text-content-disabled">&middot;</span>
+        </>
+      )}
+      <span title="estimate, chars/4 · window ~200k">≈{tokens.toLocaleString()} tok pinned</span>
     </span>
   );
 }
@@ -333,6 +324,99 @@ function CompileSplitButton({
   );
 }
 
+/** WO14 declutter — the five occasional project actions (properties, git,
+ *  import, presets, handoff) collapse into one menu instead of five
+ *  standing icon buttons. WO11 G2's own comment already named this the
+ *  deferred "topbar overflow menu"; this is that menu, now with four more
+ *  entries to justify existing. Anchored like CompileSplitButton's dropdown
+ *  — button rect → x/y — so it opens on a plain click. */
+function ProjectMenuButton({
+  onProjectProps,
+  onGit,
+  onImport,
+  onPresets,
+  onHandoff,
+  handoffDisabled,
+}: {
+  onProjectProps: () => void;
+  onGit: () => void;
+  onImport: () => void;
+  onPresets: () => void;
+  onHandoff: () => void;
+  handoffDisabled: boolean;
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState<{ x: number; y: number } | null>(null);
+
+  const openMenu = () => {
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    setOpen({ x: rect.left, y: rect.bottom + 4 });
+  };
+
+  const items: MenuItem[] = [
+    {
+      kind: "item",
+      id: "props",
+      label: "Project properties…",
+      icon: Gem,
+      onSelect: onProjectProps,
+    },
+    { kind: "item", id: "git", label: "Git…", icon: GitBranch, onSelect: onGit },
+    {
+      kind: "item",
+      id: "import",
+      label: "Import existing context…",
+      icon: ImportIcon,
+      onSelect: onImport,
+    },
+    { kind: "item", id: "presets", label: "Presets…", icon: Package, onSelect: onPresets },
+    {
+      kind: "item",
+      id: "handoff",
+      label: "Handoff…",
+      icon: Send,
+      disabled: handoffDisabled,
+      hint: handoffDisabled ? "the graph is empty" : undefined,
+      onSelect: onHandoff,
+    },
+  ];
+
+  return (
+    <div className="flex flex-none">
+      <button
+        ref={btnRef}
+        onClick={openMenu}
+        aria-haspopup="menu"
+        aria-expanded={open !== null}
+        title="Project properties, Git, Import, Presets, Handoff"
+        className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
+      >
+        <Package size={14} strokeWidth={1.5} />
+        Project
+        <ChevronDown size={11} strokeWidth={1.5} className="text-content-muted" />
+      </button>
+      {open !== null && (
+        <ContextMenu
+          x={open.x}
+          y={open.y}
+          items={items}
+          onClose={() => {
+            setOpen(null);
+            btnRef.current?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** WO14 declutter — grid layout (left / center / right) replaces the old
+ *  flex+two-spacer trick, so the view toggle is genuinely centered instead
+ *  of only appearing centered when the left/right clusters happen to be the
+ *  same width. The right cluster groups into status / undo-redo /
+ *  compile+run / project menu / settings, each separated by a hairline
+ *  divider, instead of fourteen flat siblings. */
 function TopBar({
   onCompile,
   onRun,
@@ -366,338 +450,93 @@ function TopBar({
   const aliveSessionCount = useSessionsStore((s) => s.sessions.filter((x) => x.alive).length);
   const atCap = aliveSessionCount >= MAX_SESSIONS;
   return (
-    <header className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle bg-surface-1 px-4">
-      <PixelLogo />
-      <span className="font-pixel text-xs tracking-wide">cowtext</span>
-      {root !== null && (
-        <>
-          <span className="text-content-disabled">/</span>
-          <span className="text-base font-medium">{projectName(root)}</span>
-          <span
-            className="hidden truncate font-mono text-2xs text-content-muted md:block"
-            title={root}
-          >
-            {root}
-          </span>
-        </>
-      )}
-      <div className="flex-1" />
-      {/* WO11 G1 — house icon, left of the view segments. Closes the project
-          and returns to the title screen; live agent sessions keep running
-          (App.tsx's confirm strip handles the warning, not this button). */}
-      {root !== null && (
-        <button
-          onClick={onHome}
-          title="Close project and return to the title screen"
-          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <Home size={14} strokeWidth={1.5} />
-        </button>
-      )}
-      {root !== null && (
-        <ViewToggle view={view} onChange={onViewChange} managerMode={managerMode} />
-      )}
-      <div className="flex-1" />
-      {root !== null && <PinnedTokenChip />}
-      {root !== null && <SaveIndicator />}
-      {root !== null && <UndoRedoButtons />}
-      {root !== null && <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />}
-      {/* WO12 F3 — Run. The pipeline reads Compile -> Run left to right; Run
-          is the bar's only accent-filled control (blue = user-initiated,
-          per the two-accent law). Opens RunSessionDialog prefilled from
-          current context (selected agent, task, cwd, ceiling). */}
-      {root !== null && (
-        <button
-          onClick={onRun}
-          disabled={atCap}
-          title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Run — launch a Claude session"}
-          className="flex h-control flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
-        >
-          <Play size={14} strokeWidth={1.5} />
-          Run
-        </button>
-      )}
-      {/* WO10 (INPUT_PROMPT 08/19 item 10) — the project's own properties.
-          Written by the title-screen wizard, edited here; they compile into
-          the pinned context/project.md Memory Node. */}
-      {root !== null && (
-        <button
-          onClick={onProjectProps}
-          title="Project properties — name, brief, requirements, hard rules"
-          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <Gem size={14} strokeWidth={1.5} />
-        </button>
-      )}
-      {/* WO11 G2 — reaches GitWizard (git init + .gitignore composer). The
-          contract names a "topbar overflow menu"; with exactly one item to
-          hold, a single icon button matches this bar's existing idiom
-          (Project properties, Import, Presets, Handoff are all standalone
-          buttons too) instead of standing up generic overflow-menu chrome
-          for one entry — see the final report for this deviation. */}
-      {root !== null && (
-        <button
-          onClick={onGit}
-          title="Git — initialize a repository or edit .gitignore"
-          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <GitBranch size={14} strokeWidth={1.5} />
-        </button>
-      )}
-      {root !== null && (
-        <button
-          onClick={onImport}
-          title="Scan CLAUDE.md / AGENTS.md / .cursor/rules for un-managed context to adopt"
-          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <ImportIcon size={14} strokeWidth={1.5} />
-        </button>
-      )}
-      {root !== null && (
-        <button
-          onClick={onPresets}
-          title="Save or apply graph presets"
-          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <Package size={14} strokeWidth={1.5} />
-          Presets
-        </button>
-      )}
-      {root !== null && (
-        <button
-          onClick={onHandoff}
-          disabled={nodeCount === 0}
-          title={nodeCount === 0 ? "The graph is empty" : "Generate a session handoff document"}
-          className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2"
-        >
-          <Send size={14} strokeWidth={1.5} />
-          Handoff
-        </button>
-      )}
-      <button
-        onClick={onSettings}
-        aria-label="Settings"
-        title="Settings"
-        className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-      >
-        <Settings size={14} strokeWidth={1.5} />
-      </button>
-      <button
-        onClick={() => void openProject()}
-        className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-      >
-        <FolderOpen size={14} strokeWidth={1.5} />
-        Open folder
-      </button>
-    </header>
-  );
-}
-
-/** Relative last-opened, coarse — "today", "3 days ago", falling back to a
- *  date once it's old enough that a relative phrase stops being useful. */
-function relativeTime(ms: number): string {
-  const diffMs = Date.now() - ms;
-  const day = 86_400_000;
-  if (diffMs < day) return "today";
-  const days = Math.floor(diffMs / day);
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days} days ago`;
-  return new Date(ms).toLocaleDateString();
-}
-
-function RecentProjectRow({ project, missing }: { project: RecentProject; missing: boolean }) {
-  const openProjectAt = useProjectStore((s) => s.openProjectAt);
-  const removeRecentProject = useSettingsStore((s) => s.removeRecentProject);
-  const contextMenu = useContextMenu();
-  // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
-  // error, never a silent no-op."
-  const [revealError, setRevealError] = useState<string | null>(null);
-
-  const open = () => {
-    if (missing) return;
-    void openProjectAt(project.root);
-  };
-
-  const openMenu = (e: React.MouseEvent) => {
-    const items: MenuItem[] = [
-      { kind: "item", id: "open", label: "Open", icon: FolderOpen, disabled: missing, hint: missing ? "folder not found" : undefined, onSelect: open },
-      {
-        kind: "item",
-        id: "reveal",
-        label: "Reveal in File Explorer",
-        icon: FolderOpen,
-        disabled: missing,
-        hint: missing ? "folder not found" : undefined,
-        onSelect: () => {
-          setRevealError(null);
-          void revealPath(project.root, null).catch((err: unknown) => setRevealError(String(err)));
-        },
-      },
-      { kind: "separator", id: "sep-1" },
-      {
-        kind: "item",
-        id: "remove",
-        label: "Remove from list",
-        icon: X,
-        danger: true,
-        onSelect: () => removeRecentProject(project.root),
-      },
-    ];
-    contextMenu.openAt(e, items);
-  };
-
-  return (
-    <li onContextMenu={openMenu} className="group flex flex-col">
-      <div
-        onClick={open}
-        className={`flex h-row items-center gap-2 px-3 ${
-          missing ? "cursor-default opacity-60" : "cursor-default hover:bg-[var(--surface-hover)]"
-        }`}
-      >
-        <FolderOpen size={13} strokeWidth={1.5} className="flex-none text-content-muted" />
-        <span className="min-w-0 flex-1 truncate text-sm text-content">{project.name}</span>
-        <span
-          dir="rtl"
-          title={project.root}
-          className="hidden min-w-0 max-w-[220px] truncate font-mono text-2xs text-content-muted md:block"
-        >
-          {project.root}
-        </span>
-        {missing && (
-          <span className="flex-none rounded-sm bg-danger-surface px-1 py-px font-mono text-micro text-danger-text">
-            missing
-          </span>
+    <header className="grid h-topbar flex-none grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border-subtle bg-surface-1 px-4">
+      <div className="flex min-w-0 items-center gap-2">
+        <PixelLogo />
+        <span className="font-pixel text-xs tracking-wide">cowtext</span>
+        {root !== null && (
+          <>
+            <span className="text-content-disabled">/</span>
+            <span className="truncate text-base font-medium">{projectName(root)}</span>
+            <span
+              className="hidden truncate font-mono text-2xs text-content-muted lg:block"
+              title={root}
+            >
+              {root}
+            </span>
+            {/* WO11 G1 — house icon, next to the project identity it acts
+                on. Closes the project and returns to the title screen; live
+                agent sessions keep running (App.tsx's confirm strip handles
+                the warning, not this button). */}
+            <button
+              onClick={onHome}
+              title="Close project and return to the title screen"
+              className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+            >
+              <Home size={13} strokeWidth={1.5} />
+            </button>
+          </>
         )}
-        <span className="flex-none font-mono text-2xs text-content-disabled">
-          {relativeTime(project.lastOpenedMs)}
-        </span>
+      </div>
+
+      <div className="justify-self-center">
+        {root !== null && (
+          <ViewToggle view={view} onChange={onViewChange} managerMode={managerMode} />
+        )}
+      </div>
+
+      <div className="flex items-center justify-end gap-3">
+        {root !== null && (
+          <>
+            <StatusPill />
+            <span className="h-[22px] w-px flex-none bg-border-subtle" />
+            <UndoRedoButtons />
+            <span className="h-[22px] w-px flex-none bg-border-subtle" />
+            <div className="flex flex-none items-center gap-1.5 rounded-md bg-surface-2 p-[3px]">
+              <CompileSplitButton onCompile={onCompile} disabled={nodeCount === 0} />
+              {/* WO12 F3 — Run. The pipeline reads Compile -> Run left to
+                  right; Run is the bar's only accent-filled control (blue =
+                  user-initiated, per the two-accent law). Opens
+                  RunSessionDialog prefilled from current context (selected
+                  agent, task, cwd, ceiling). */}
+              <button
+                onClick={onRun}
+                disabled={atCap}
+                title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Run — launch a Claude session"}
+                className="flex h-[26px] flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
+              >
+                <Play size={14} strokeWidth={1.5} />
+                Run
+              </button>
+            </div>
+            <span className="h-[22px] w-px flex-none bg-border-subtle" />
+            <ProjectMenuButton
+              onProjectProps={onProjectProps}
+              onGit={onGit}
+              onImport={onImport}
+              onPresets={onPresets}
+              onHandoff={onHandoff}
+              handoffDisabled={nodeCount === 0}
+            />
+          </>
+        )}
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            removeRecentProject(project.root);
-          }}
-          title="Remove from list"
-          className="hidden h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content group-hover:grid"
+          onClick={onSettings}
+          aria-label="Settings"
+          title="Settings"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
         >
-          <X size={12} strokeWidth={1.5} />
+          <Settings size={14} strokeWidth={1.5} />
         </button>
-      </div>
-      {revealError !== null && (
-        <div className="flex items-center gap-2 border-t border-border-subtle bg-danger-surface px-3 py-1">
-          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-danger-text">
-            {revealError}
-          </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setRevealError(null);
-            }}
-            title="Dismiss"
-            className="grid h-3.5 w-3.5 flex-none place-items-center text-danger-text transition-opacity duration-fast hover:opacity-70"
-          >
-            <X size={10} strokeWidth={1.5} />
-          </button>
-        </div>
-      )}
-      {contextMenu.menu !== null && (
-        <ContextMenu
-          x={contextMenu.menu.x}
-          y={contextMenu.menu.y}
-          items={contextMenu.menu.items}
-          onClose={contextMenu.close}
-        />
-      )}
-    </li>
-  );
-}
-
-/** Up to 8 rows, newest first (contract §7.7). Absent entirely when the
- *  list is empty — the first-run empty state is unchanged. */
-function RecentProjects() {
-  const recentProjects = useSettingsStore((s) => s.recentProjects);
-  const [missing, setMissing] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (recentProjects.length === 0) return;
-    let live = true;
-    void probeProjectDirs(recentProjects.map((p) => p.root)).then((exists) => {
-      if (!live) return;
-      const next = new Set<string>();
-      recentProjects.forEach((p, i) => {
-        if (exists[i] === false) next.add(p.root);
-      });
-      setMissing(next);
-    });
-    return () => {
-      live = false;
-    };
-    // Re-probe only when the list identity (roots) changes, not on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentProjects.map((p) => p.root).join("|")]);
-
-  if (recentProjects.length === 0) return null;
-
-  return (
-    <div className="w-full max-w-[520px]">
-      <div className="mb-1 px-1 font-mono text-2xs uppercase tracking-wider text-content-muted">
-        Recent
-      </div>
-      <ul className="rounded-lg border border-border-subtle bg-surface-1">
-        {recentProjects.map((p) => (
-          <RecentProjectRow key={p.root} project={p} missing={missing.has(p.root)} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function EmptyState({ onWizard }: { onWizard: (mode: ProjectWizardMode) => void }) {
-  const { openProject } = useProjectStore();
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto py-8">
-      <div
-        className="grid h-[58px] w-[88px] place-items-center border border-dashed border-border-strong"
-        style={{
-          background:
-            "repeating-linear-gradient(135deg, rgba(232,163,61,.05) 0 6px, transparent 6px 12px)",
-        }}
-      >
-        <span className="font-mono text-micro text-content-muted">cow art</span>
-      </div>
-      <h1 className="text-2xl font-semibold tracking-tight">Open a project</h1>
-      <p className="max-w-[360px] text-center text-base leading-relaxed text-content-secondary">
-        Pick a folder and Cowtext will find every markdown file in it. Adopt them as memory
-        nodes, wire the graph, and the herd has a barn.
-      </p>
-      {/* WO10 (INPUT_PROMPT 08/19 items 7-8) — three doors, not one. "Open
-          folder" only helps with a project Cowtext already knows; the other
-          two are the states a new user is actually in. */}
-      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
         <button
           onClick={() => void openProject()}
-          className="flex h-control-lg items-center gap-2 rounded bg-accent px-4 text-base font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
+          title="Open folder"
+          className="grid h-control w-control flex-none place-items-center rounded border border-border bg-surface-2 text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
         >
-          <FolderOpen size={15} strokeWidth={1.8} />
-          Open folder
-        </button>
-        <button
-          onClick={() => onWizard("new")}
-          className="flex h-control-lg items-center gap-2 rounded border border-border bg-surface-2 px-4 text-base text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <Sparkles size={15} strokeWidth={1.8} />
-          New project
-        </button>
-        <button
-          onClick={() => onWizard("convert")}
-          title="Scaffold Cowtext's files alongside an existing project, then import its context"
-          className="flex h-control-lg items-center gap-2 rounded border border-border bg-surface-2 px-4 text-base text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
-        >
-          <Workflow size={15} strokeWidth={1.8} />
-          Convert existing
+          <FolderOpen size={14} strokeWidth={1.5} />
         </button>
       </div>
-      <RecentProjects />
-    </div>
+    </header>
   );
 }
 
@@ -894,26 +733,6 @@ function HomeConfirmBanner({
       >
         Cancel
       </button>
-    </div>
-  );
-}
-
-/** N4: slim status strip, the very bottom of the window — N/M straight from
- *  the graph store, J the review queue length (shrinks on Accept/Revert/
- *  dismiss), K the session's running external-change counter (only resets
- *  on a project switch, see review.ts). Mono micro, muted — a status line,
- *  never a call to action. */
-function StatusBar() {
-  const nodeCount = useGraphStore((s) => s.nodes.length);
-  const edgeCount = useGraphStore((s) => s.edges.length);
-  const changedCount = useReviewStore((s) => s.externalChangeCount);
-  const toReviewCount = useReviewStore((s) => s.queue.length);
-  return (
-    <div className="flex h-control-sm flex-none items-center border-t border-border-subtle bg-surface-1 px-3">
-      <span className="font-mono text-micro text-content-muted">
-        {nodeCount} node{nodeCount === 1 ? "" : "s"} · {edgeCount} edge{edgeCount === 1 ? "" : "s"} ·{" "}
-        {changedCount} changed on disk · {toReviewCount} to review
-      </span>
     </div>
   );
 }
@@ -1239,7 +1058,7 @@ export default function App() {
         scanning ? (
           <Scanning caption="the cow is reading" />
         ) : (
-          <EmptyState onWizard={setWizardMode} />
+          <TitleScreen onWizard={setWizardMode} />
         )
       ) : (
         <>
@@ -1255,10 +1074,7 @@ export default function App() {
               useProjectStore.getState().focusNeedsReview();
             }}
           />
-          <RosterBar />
-          <ProblemsPanel root={root} onNavigate={() => setView("canvas")} />
-          <EventLog root={root} />
-          <StatusBar />
+          <Dock root={root} onNavigate={() => setView("canvas")} />
         </>
       )}
       {reviewing && root !== null && (

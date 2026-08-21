@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (75); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` (unchanged) |
+| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (76); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` (unchanged) |
 | `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write (schema **v5**), `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/project_meta.rs` | `.cowtext/project.json` v1 sidecar, `context/project.md` renderer, `project_init` scaffolder |
@@ -21,11 +21,11 @@
 | `src-tauri/src/preset.rs` | Preset save/list/read/export/apply (never-clobber) |
 | `src-tauri/src/handoff.rs` | `HANDOFF.md` generation via ClaudeRunner, GENERATED header |
 | `src-tauri/src/resolve_load.rs` | Load policy: `resolveLoad` decider unifying three prior implementations (effective_pinned, taskctx walk, tokens.ts logic) into one authoritative function |
-| `src-tauri/src/fsbatch.rs` | Batch FS apply with all-or-nothing rollback and inverse batch for Undo (`fs_apply_batch` command) |
+| `src-tauri/src/fsbatch.rs`, `toolchain.rs` | Batch FS apply with all-or-nothing rollback and inverse batch for Undo (`fs_apply_batch`) · AI-CLI detection: PATH probe + `--version` per compile target, on demand (`detect_ai_tools`) |
 | `src/store/` | Zustand stores: `useProjectStore`, `useGraphStore` (graph.ts), `useEventsStore` (events.ts), `useSettingsStore` (settings.ts) |
 | `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, plus five pure modules — `portSlots` (pins/slots), `edgePath` (router), `edgeEdit` (waypoints), `labelSlots` (label collisions), `edgeVerb`/`edgeColor` (label + palette) |
 | `src/inspector/` | Inspector panel, `InspectorSection` (collapsible components), `EventLog`, `HooksModal`, AssembleSection |
-| `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `src/project/` | Feature UI: CompileModal + LCS `diff.ts` · SettingsModal · preset & handoff modals with clipboard variants · `ProjectWizard` (new / convert / edit) |
+| `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `src/project/` | Feature UI: CompileModal + LCS `diff.ts` · SettingsModal · preset & handoff modals with clipboard variants · `ProjectWizard` (new / convert / edit) + `TitleScreen` (brand, recents, toolchain panel) |
 | `src-tauri/src/frontmatter.rs` | Frontmatter parser/emitter: read-patch-write round-trip with byte-identity invariant, line-level EOL tracking, no regex/YAML crate |
 | `src-tauri/src/agents.rs` | Agent/skill CRUD, file creation, rename, delete, metadata write; validation (component/path guards), sidecar schema, `AGENT_FS` mutex for .claude/agents/ + .claude/skills/ write safety |
 | `src-tauri/src/git.rs` | Git probe/init/`.gitignore` write, shells out to system `git`, `gitAvailable` fallback when git not on PATH |
@@ -34,7 +34,7 @@
 | `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
 | `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
 
-## Invoke commands (75)
+## Invoke commands (76)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -56,6 +56,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | tasklinks / taskctx | `tasklinks_read`, `tasklink_set`, `tasklink_delete`, `task_context_preview`, `task_context_write` |
 | project-meta | `project_meta_read`, `project_meta_write`, `project_init` |
 | worktree | `worktree_check`, `worktree_add` |
+| toolchain | `detect_ai_tools` |
 | sessions | `agent_session_spawn`, `agent_session_send`, `agent_session_kill`, `agent_session_restart`, `agent_session_list` |
 
 ## Events

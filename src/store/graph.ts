@@ -1024,6 +1024,18 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         // Review baseline (Block C §T4): every managed file's current disk
         // content becomes "what a future external edit diffs against".
         void useReviewStore.getState().initSnapshots(root, graph.nodes.map((n) => n.filePath));
+      } else {
+        // No graph.json yet — a brand-new project. Seed its compile targets
+        // from the app-level default (the ticks in the title screen's
+        // AI-toolchain details), narrowed here rather than in settings.ts so
+        // COMPILE_TARGETS stays the single runtime source of truth and an
+        // unknown target left by a newer build is dropped at the point of
+        // use. Canonical order, not the user's tick order. This also RESETS
+        // the targets on a project switch, which the old code left carrying
+        // the previous project's value into the new one.
+        const stored = useSettingsStore.getState().defaultCompileTargets as readonly string[];
+        const wanted = COMPILE_TARGETS.filter((t) => stored.includes(t));
+        set({ compileTargets: wanted.length > 0 ? wanted : ["claude"] });
       }
       set({ loaded: true, saveState: raw === null ? "idle" : "saved" });
     } catch (e) {

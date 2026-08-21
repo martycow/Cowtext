@@ -3,6 +3,10 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { pushToast } from "./toasts";
+// Type-only: `src/store/graph.ts` imports THIS module, so a value import here
+// would close an import cycle. The runtime list of valid targets stays in
+// graph.ts (`COMPILE_TARGETS`), which filters this field where it is applied.
+import type { CompileTarget } from "./graph";
 
 /** One entry in the recent-projects list (startup screen). */
 export interface RecentProject {
@@ -77,6 +81,14 @@ export interface AppSettings {
    *  later release starts open without a migration, and a settings.json
    *  written by an older build simply has fewer exceptions in it. */
   collapsedSections: string[];
+  /** Compile targets a BRAND-NEW project starts with — the ticks in the
+   *  title screen's AI-toolchain details. Scanning finds what this machine
+   *  runs; this is the user saying which of those Cowtext should compile
+   *  for by default. An existing project's own `compileTargets` in
+   *  graph.json always wins; this is only consulted when there is no
+   *  graph.json yet (`graph.ts::loadGraph`). Additive, tolerant-merge
+   *  field — an older settings.json simply falls back to `["claude"]`. */
+  defaultCompileTargets: CompileTarget[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -98,6 +110,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showFps: false,
   sessionTokenCeiling: DEFAULT_SESSION_TOKEN_CEILING,
   collapsedSections: [],
+  defaultCompileTargets: ["claude"],
 };
 
 export interface SettingsState extends AppSettings {
@@ -128,6 +141,7 @@ export interface SettingsState extends AppSettings {
   setSessionTokenCeiling: (n: number) => void;
   /** Collapse/expand one Inspector section by key. */
   setSectionCollapsed: (key: string, collapsed: boolean) => void;
+  setDefaultCompileTargets: (targets: CompileTarget[]) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -208,6 +222,14 @@ function mergeSettings(raw: unknown): AppSettings {
   if (Array.isArray(r.collapsedSections)) {
     out.collapsedSections = r.collapsedSections.filter((k): k is string => typeof k === "string");
   }
+  // Strings only here; graph.ts narrows to real CompileTargets where it
+  // applies them, so an unknown target left by a newer build is dropped at
+  // the point of use rather than silently rewritten out of settings.json.
+  if (Array.isArray(r.defaultCompileTargets)) {
+    out.defaultCompileTargets = r.defaultCompileTargets.filter(
+      (t): t is CompileTarget => typeof t === "string",
+    );
+  }
   return out;
 }
 
@@ -237,6 +259,7 @@ function persistNow(): void {
     showFps: s.showFps,
     sessionTokenCeiling: s.sessionTokenCeiling,
     collapsedSections: s.collapsedSections,
+    defaultCompileTargets: s.defaultCompileTargets,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -391,6 +414,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({
       collapsedSections: collapsed ? [...cur, key].sort() : cur.filter((k) => k !== key),
     });
+    schedulePersist();
+  },
+
+  setDefaultCompileTargets: (targets) => {
+    set({ defaultCompileTargets: [...targets] });
     schedulePersist();
   },
 }));
