@@ -17,6 +17,9 @@
 // the one LIVE place that still special-cases the bare aliases; the `fable`
 // gap is closed there instead, where it's actually reachable.
 
+import { PROVIDERS } from "../resources";
+import type { ProviderId } from "./types";
+
 /** Short explanations rendered under the picker; absent key = no note. */
 export const MODEL_NOTES: Record<string, string> = {
   inherit:
@@ -74,4 +77,35 @@ export function shortModelLabel(model: string | null): string {
   const parts = s.split("-");
   if (parts.length === 1) return capitalize(parts[0]);
   return `${capitalize(parts[0])}-${parts.slice(1).join(".")}`;
+}
+
+/** Prefix heuristics, in `PROVIDER_IDS` order (WO15 §4.10). Consulted only
+ *  when the id is not one `models.json` names — a user-typed "Custom model
+ *  id…" still needs a provider so the picker can open on the right chip. */
+const PROVIDER_PREFIXES: readonly { provider: ProviderId; prefixes: readonly string[] }[] = [
+  { provider: "anthropic", prefixes: ["claude-", "opus", "sonnet", "haiku", "fable"] },
+  { provider: "openai", prefixes: ["gpt-", "o1", "o3", "o4", "codex"] },
+  { provider: "google", prefixes: ["gemini-"] },
+];
+
+/**
+ * Which provider does this model id belong to?
+ *
+ * Exact match against `PROVIDERS` first — that is the only authoritative
+ * answer — then the prefix table above. `null` for `inherit`, `""`, and
+ * anything unrecognized: the caller (an agent with no `provider` in the
+ * sidecar) falls back to `DEFAULT_PROVIDER` itself rather than this
+ * function guessing "anthropic" for a string it has never seen.
+ */
+export function providerForModel(modelId: string | null): ProviderId | null {
+  const raw = (modelId ?? "").trim();
+  if (raw === "") return null;
+  for (const provider of PROVIDERS) {
+    if (provider.models.some((m) => m.id === raw)) return provider.id;
+  }
+  const lower = raw.toLowerCase();
+  for (const entry of PROVIDER_PREFIXES) {
+    if (entry.prefixes.some((p) => lower.startsWith(p))) return entry.provider;
+  }
+  return null;
 }

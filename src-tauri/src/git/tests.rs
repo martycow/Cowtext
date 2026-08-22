@@ -29,6 +29,33 @@ fn init_repo_with_commit(dir: &Path) {
     assert!(git(dir, &["commit", "-q", "-m", "init"]).status.success());
 }
 
+/// Writes a standalone git config file and points every `git` child this
+/// thread spawns at it (WO15 §3.2): `GIT_CONFIG_GLOBAL` replaces BOTH
+/// `~/.gitconfig` and the XDG file, `GIT_CONFIG_NOSYSTEM=1` drops the
+/// system one. Without this the identity tests would pass or fail
+/// depending on whether the machine running them happens to have a global
+/// `user.name` — on the dev box it does, in a clean container it does not.
+/// Thread-local (see [`set_git_env_override`]), so it cannot leak into a
+/// sibling test running at the same time.
+fn use_isolated_git_config(dir: &Path, body: &str) {
+    let cfg = dir.join("isolated.gitconfig");
+    fs::write(&cfg, body).unwrap();
+    set_git_env_override(&[
+        ("GIT_CONFIG_GLOBAL", &cfg.to_string_lossy()),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ]);
+}
+
+/// The identity-carrying counterpart of [`use_isolated_git_config`]: a
+/// hermetic config that DOES set a name and email, so `git_init(commit)`
+/// can be exercised end-to-end without borrowing the developer's identity.
+fn use_isolated_git_config_with_identity(dir: &Path) {
+    use_isolated_git_config(
+        dir,
+        "[user]\n\tname = Cowtext Test\n\temail = test@cowtext.invalid\n",
+    );
+}
+
 // ── git_status ───────────────────────────────────────────────────────
 
 #[test]
@@ -145,6 +172,10 @@ fn git_status_with_git_missing_from_path_reports_unavailable_not_err() {
     assert!(!status.is_repo);
     assert!(!status.has_commits);
     assert_eq!(status.branch, None);
+    // WO15 §3.1: `not_available()` reports no identity either — the probe
+    // that would have read it is the very binary that could not be spawned.
+    assert_eq!(status.identity_name, None);
+    assert_eq!(status.identity_email, None);
 }
 
 /// Same seam, targeted at `git_init`: unlike `git_status`, `git_init` DOES
@@ -157,7 +188,7 @@ fn git_init_with_git_missing_from_path_errors_cleanly() {
     let bogus = format!("cowtext-no-such-git-{}", std::process::id());
     set_git_bin_override(Some(&bogus));
 
-    let result = git_init(dir.to_string_lossy().into_owned(), None);
+    let result = git_init(dir.to_string_lossy().into_owned(), None, false);
 
     set_git_bin_override(None);
 
@@ -173,10 +204,20 @@ fn git_init_on_a_clean_directory_creates_a_repo() {
     let before = git_status(dir.to_string_lossy().into_owned()).unwrap();
     assert!(!before.is_repo);
 
-    let status = git_init(dir.to_string_lossy().into_owned(), None).unwrap();
-    assert!(status.is_repo);
-    assert!(!status.has_commits, "init alone must not create a commit");
+    let result = git_init(dir.to_string_lossy().into_owned(), None, false).unwrap();
+    assert!(result.status.is_repo);
+    assert!(
+        !result.status.has_commits,
+        "init alone must not create a commit"
+    );
+    assert!(!result.committed);
+    assert_eq!(result.commit_count, 0);
+    assert!(!result.skipped_existing_repo);
     assert!(dir.join(".git").is_dir());
+    assert!(
+        !dir.join(".gitignore").exists(),
+        "commit=false must not write .gitignore"
+    );
 }
 
 #[test]
@@ -185,9 +226,14 @@ fn git_init_on_an_already_initialized_repo_is_a_no_op() {
     let repo = root.join("repo");
     init_repo_with_commit(&repo);
 
-    let status = git_init(repo.to_string_lossy().into_owned(), None).unwrap();
-    assert!(status.is_repo);
-    assert!(status.has_commits, "re-running init must not touch existing history");
+    let result = git_init(repo.to_string_lossy().into_owned(), None, false).unwrap();
+    assert!(result.status.is_repo);
+    assert!(
+        result.status.has_commits,
+        "re-running init must not touch existing history"
+    );
+    assert!(result.skipped_existing_repo);
+    assert_eq!(result.commit_count, 1);
 }
 
 /// WO13 fix (a): a project folder nested under an unrelated outer repo must
@@ -207,10 +253,19 @@ fn git_init_inside_an_outer_repo_creates_its_own_nested_repo_with_the_chosen_bra
     let nested = outer.join("nested-project");
     fs::create_dir_all(&nested).unwrap();
 
-    let status = git_init(nested.to_string_lossy().into_owned(), Some("feature-x".to_string())).unwrap();
-    assert!(status.is_repo, "the nested dir must get its own repo, not report the outer one");
+    let result = git_init(
+        nested.to_string_lossy().into_owned(),
+        Some("feature-x".to_string()),
+        false,
+    )
+    .unwrap();
+    assert!(
+        result.status.is_repo,
+        "the nested dir must get its own repo, not report the outer one"
+    );
+    assert!(!result.skipped_existing_repo);
     assert!(nested.join(".git").is_dir(), "git init must actually run at the nested path");
-    assert_eq!(status.branch.as_deref(), Some("feature-x"));
+    assert_eq!(result.status.branch.as_deref(), Some("feature-x"));
 
     let out = git(&outer, &["symbolic-ref", "--short", "HEAD"]);
     let outer_branch_after = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -221,7 +276,7 @@ fn git_init_inside_an_outer_repo_creates_its_own_nested_repo_with_the_chosen_bra
 fn git_init_rejects_a_non_directory_root() {
     let root = temp_dir("initbadroot");
     let missing = root.join("does-not-exist");
-    let err = git_init(missing.to_string_lossy().into_owned(), None).unwrap_err();
+    let err = git_init(missing.to_string_lossy().into_owned(), None, false).unwrap_err();
     assert!(err.contains("Not a directory"), "{err}");
 }
 
@@ -236,7 +291,9 @@ fn git_init_rejects_a_non_directory_root() {
 #[test]
 fn git_init_with_explicit_branch_name_sets_head_to_that_branch() {
     let dir = temp_dir("initbranchmain");
-    let status = git_init(dir.to_string_lossy().into_owned(), Some("main".to_string())).unwrap();
+    let status = git_init(dir.to_string_lossy().into_owned(), Some("main".to_string()), false)
+        .unwrap()
+        .status;
     assert!(status.is_repo);
     assert_eq!(status.branch.as_deref(), Some("main"), "WO13: unborn branch must be visible in GitStatus too");
 
@@ -247,7 +304,13 @@ fn git_init_with_explicit_branch_name_sets_head_to_that_branch() {
 #[test]
 fn git_init_with_explicit_master_branch_name_sets_head_to_that_branch() {
     let dir = temp_dir("initbranchmaster");
-    let status = git_init(dir.to_string_lossy().into_owned(), Some("master".to_string())).unwrap();
+    let status = git_init(
+        dir.to_string_lossy().into_owned(),
+        Some("master".to_string()),
+        false,
+    )
+    .unwrap()
+    .status;
     assert!(status.is_repo);
 
     let out = git(&dir, &["symbolic-ref", "--short", "HEAD"]);
@@ -260,7 +323,9 @@ fn git_init_with_explicit_master_branch_name_sets_head_to_that_branch() {
 #[test]
 fn git_init_with_none_branch_reproduces_todays_behaviour() {
     let dir = temp_dir("initnobranch");
-    let status = git_init(dir.to_string_lossy().into_owned(), None).unwrap();
+    let status = git_init(dir.to_string_lossy().into_owned(), None, false)
+        .unwrap()
+        .status;
     assert!(status.is_repo);
     assert!(dir.join(".git").is_dir());
 }
@@ -270,7 +335,12 @@ fn git_init_with_none_branch_reproduces_todays_behaviour() {
 #[test]
 fn git_init_rejects_invalid_branch_name_before_any_fs_mutation() {
     let dir = temp_dir("initbadbranch");
-    let err = git_init(dir.to_string_lossy().into_owned(), Some("bad branch".to_string())).unwrap_err();
+    let err = git_init(
+        dir.to_string_lossy().into_owned(),
+        Some("bad branch".to_string()),
+        false,
+    )
+    .unwrap_err();
     assert!(err.contains("whitespace"), "{err}");
     assert!(!dir.join(".git").exists(), "no repo should have been created");
 }
@@ -278,7 +348,12 @@ fn git_init_rejects_invalid_branch_name_before_any_fs_mutation() {
 #[test]
 fn git_init_rejects_invalid_branch_name_with_leading_dash_before_any_fs_mutation() {
     let dir = temp_dir("initbadbranchdash");
-    let err = git_init(dir.to_string_lossy().into_owned(), Some("-weird".to_string())).unwrap_err();
+    let err = git_init(
+        dir.to_string_lossy().into_owned(),
+        Some("-weird".to_string()),
+        false,
+    )
+    .unwrap_err();
     assert!(!dir.join(".git").exists(), "no repo should have been created");
     assert!(err.contains('-'), "{err}");
 }
@@ -295,13 +370,21 @@ fn git_init_on_existing_repo_does_not_move_head_even_with_a_branch_argument() {
     let out = git(&repo, &["symbolic-ref", "--short", "HEAD"]);
     let original_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
-    let status = git_init(
+    let result = git_init(
         repo.to_string_lossy().into_owned(),
         Some("some-other-branch".to_string()),
+        false,
     )
     .unwrap();
-    assert_eq!(status.branch.as_deref(), Some(original_branch.as_str()));
-    assert!(status.has_commits, "existing history must be untouched");
+    assert_eq!(
+        result.status.branch.as_deref(),
+        Some(original_branch.as_str())
+    );
+    assert!(
+        result.status.has_commits,
+        "existing history must be untouched"
+    );
+    assert!(result.skipped_existing_repo);
 }
 
 // ── gitignore_write ──────────────────────────────────────────────────
@@ -398,6 +481,509 @@ fn gitignore_write_rejects_a_non_directory_root() {
     let missing = root.join("does-not-exist");
     let err = gitignore_write(missing.to_string_lossy().into_owned(), "x\n".to_string()).unwrap_err();
     assert!(err.contains("Not a directory"), "{err}");
+}
+
+// ── WO15 §3.1: identity fields ──────────────────────────────────────
+
+/// Contract §3.2: these tests need a real `git`. On a box without one they
+/// print a line and return — `cargo test` has no native "skipped" state for
+/// a `#[test]` that has already begun running.
+fn require_git() -> bool {
+    match StdCommand::new("git").arg("--version").output() {
+        Ok(out) if out.status.success() => true,
+        _ => {
+            eprintln!("SKIP: git is not on PATH");
+            false
+        }
+    }
+}
+
+#[test]
+fn git_status_reports_the_configured_identity() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("identityset");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let status = git_status(proj.to_string_lossy().into_owned()).unwrap();
+    set_git_env_override(&[]);
+
+    assert_eq!(status.identity_name.as_deref(), Some("Cowtext Test"));
+    assert_eq!(status.identity_email.as_deref(), Some("test@cowtext.invalid"));
+    assert!(
+        !status.is_repo,
+        "identity is readable from a plain folder too — the wizard shows the \
+         warning BEFORE the repo exists"
+    );
+}
+
+#[test]
+fn git_status_reports_no_identity_under_an_empty_config() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("identityunset");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config(&root, "");
+
+    let status = git_status(proj.to_string_lossy().into_owned()).unwrap();
+    set_git_env_override(&[]);
+
+    assert!(status.git_available, "git itself is still perfectly available");
+    assert_eq!(status.identity_name, None);
+    assert_eq!(status.identity_email, None);
+}
+
+// ── WO15 §3.2: git_init(commit) ─────────────────────────────────────
+
+#[test]
+fn init_with_commit_creates_exactly_one_commit_containing_gitignore_and_graph() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initcommitone");
+    let proj = root.join("proj");
+    fs::create_dir_all(proj.join(".cowtext")).unwrap();
+    fs::create_dir_all(proj.join("context")).unwrap();
+    fs::write(
+        proj.join(".cowtext").join("graph.json"),
+        "{\"version\":5,\"nodes\":[],\"edges\":[]}\n",
+    )
+    .unwrap();
+    fs::write(proj.join("context").join("project.md"), "# Project\n").unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let result = git_init(
+        proj.to_string_lossy().into_owned(),
+        Some("main".to_string()),
+        true,
+    )
+    .unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.committed);
+    assert_eq!(result.commit_count, 1);
+    assert!(!result.skipped_existing_repo);
+    assert!(result.status.has_commits);
+    assert_eq!(result.status.branch.as_deref(), Some("main"));
+
+    let shown =
+        String::from_utf8_lossy(&git(&proj, &["show", "--name-only", "--format=", "HEAD"]).stdout)
+            .into_owned();
+    for expected in [".gitignore", ".cowtext/graph.json", "context/project.md"] {
+        assert!(shown.contains(expected), "{expected} missing from: {shown}");
+    }
+
+    // Block 0 acceptance, in the criterion's own commands.
+    let branch = git(&proj, &["branch", "--show-current"]);
+    assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "main");
+    let log = git(&proj, &["log", "--oneline"]);
+    assert_eq!(String::from_utf8_lossy(&log.stdout).lines().count(), 1);
+    let subject = git(&proj, &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&subject.stdout).trim(),
+        INIT_COMMIT_MESSAGE
+    );
+}
+
+/// A-3: `preset_apply` is the single writer of `.cowtext/graph.json`.
+/// `git_init` stages whatever of the three paths happens to exist and
+/// creates none of them beyond `.gitignore` itself.
+#[test]
+fn init_with_commit_never_creates_graph_json_and_stages_only_what_exists() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initnograph");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let result = git_init(proj.to_string_lossy().into_owned(), None, true).unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.committed);
+    assert_eq!(result.commit_count, 1);
+    assert!(
+        !proj.join(".cowtext").exists(),
+        "A-3: git_init must never create .cowtext/graph.json"
+    );
+
+    let shown =
+        String::from_utf8_lossy(&git(&proj, &["show", "--name-only", "--format=", "HEAD"]).stdout)
+            .into_owned();
+    let files: Vec<&str> = shown.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(files, vec![".gitignore"]);
+}
+
+/// WO15 audit F3: `project_init` creates `context/` and `.cowtext/` before
+/// anything lands in them, so the first commit has to survive a project whose
+/// `context/` is still an empty folder. The old `exists()` staging filter
+/// handed that folder to `git add` as a pathspec; the commit must succeed
+/// either way, with `.gitignore` as its only content.
+#[test]
+fn init_with_commit_tolerates_an_empty_context_dir() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initcommitemptyctx");
+    let proj = root.join("proj");
+    fs::create_dir_all(proj.join("context")).unwrap();
+    fs::create_dir_all(proj.join(".cowtext")).unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let result = git_init(
+        proj.to_string_lossy().into_owned(),
+        Some("main".to_string()),
+        true,
+    )
+    .unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.committed, "an empty context/ must not block the commit");
+    assert_eq!(result.commit_count, 1);
+    assert!(result.status.has_commits);
+    assert_eq!(result.status.branch.as_deref(), Some("main"));
+
+    let log = git(&proj, &["log", "--oneline"]);
+    assert_eq!(String::from_utf8_lossy(&log.stdout).lines().count(), 1);
+    let shown =
+        String::from_utf8_lossy(&git(&proj, &["show", "--name-only", "--format=", "HEAD"]).stdout)
+            .into_owned();
+    let files: Vec<&str> = shown.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        files,
+        vec![".gitignore"],
+        "git records no empty directory, so the commit holds .gitignore alone"
+    );
+    // The empty folders are still on disk — the staging filter reads, never
+    // writes.
+    assert!(proj.join("context").is_dir());
+    assert!(proj.join(".cowtext").is_dir());
+}
+
+/// The mixed case is unchanged: a populated candidate is staged in full
+/// (including files nested below it), an empty one is simply skipped. Nested
+/// empty directories inside a populated tree change nothing either — the
+/// probe answers yes/no, it never enumerates what to stage.
+#[test]
+fn init_with_commit_stages_populated_candidates_and_skips_empty_ones() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initcommitmixed");
+    let proj = root.join("proj");
+    fs::create_dir_all(proj.join("context").join("nested")).unwrap();
+    fs::create_dir_all(proj.join("context").join("hollow")).unwrap();
+    fs::create_dir_all(proj.join(".cowtext")).unwrap(); // stays empty
+    fs::write(proj.join("context").join("project.md"), "# Project\n").unwrap();
+    fs::write(
+        proj.join("context").join("nested").join("deep.md"),
+        "# Deep\n",
+    )
+    .unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let result = git_init(proj.to_string_lossy().into_owned(), None, true).unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.committed);
+    assert_eq!(result.commit_count, 1);
+
+    let shown =
+        String::from_utf8_lossy(&git(&proj, &["show", "--name-only", "--format=", "HEAD"]).stdout)
+            .into_owned();
+    let mut files: Vec<&str> = shown.lines().filter(|l| !l.trim().is_empty()).collect();
+    files.sort_unstable();
+    assert_eq!(
+        files,
+        vec![".gitignore", "context/nested/deep.md", "context/project.md"]
+    );
+}
+
+/// A-4: the identity check runs before ANY mutation — the folder is left
+/// exactly as it was found, so the user can fix `git config` and retry into
+/// a clean directory rather than a half-initialised one.
+#[test]
+fn init_with_commit_and_missing_identity_errs_before_init() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initcommitnoident");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config(&root, "");
+
+    let err = git_init(
+        proj.to_string_lossy().into_owned(),
+        Some("main".to_string()),
+        true,
+    )
+    .unwrap_err();
+    set_git_env_override(&[]);
+
+    assert_eq!(err, GIT_IDENTITY_ERR);
+    assert!(!proj.join(".git").exists(), "no repo may be created");
+    assert!(!proj.join(".gitignore").exists(), "no file may be written");
+}
+
+/// Both halves are required: a name without an email fails just as hard,
+/// because `git commit` would refuse it just as hard.
+#[test]
+fn init_with_commit_errs_when_only_the_email_is_missing() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initcommithalfident");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config(&root, "[user]\n\tname = Only A Name\n");
+
+    let err = git_init(proj.to_string_lossy().into_owned(), None, true).unwrap_err();
+    set_git_env_override(&[]);
+
+    assert_eq!(err, GIT_IDENTITY_ERR);
+    assert!(!proj.join(".git").exists());
+}
+
+/// The identity requirement is gated on `commit`: plain init never needed
+/// one and still does not.
+#[test]
+fn init_without_commit_needs_no_identity() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initnocommitnoident");
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    use_isolated_git_config(&root, "");
+
+    let result = git_init(
+        proj.to_string_lossy().into_owned(),
+        Some("main".to_string()),
+        false,
+    )
+    .unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.status.is_repo);
+    assert!(!result.committed);
+    assert_eq!(result.commit_count, 0);
+}
+
+/// D-15: an existing repo is never re-initialised, never committed into,
+/// and its `.gitignore` is never rewritten — whatever `commit` said.
+#[test]
+fn init_on_existing_repo_skips_everything() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("initskipexisting");
+    let repo = root.join("repo");
+    init_repo_with_commit(&repo);
+    let gitignore = repo.join(".gitignore");
+    fs::write(&gitignore, "handwritten\r\n").unwrap();
+    let before = fs::read(&gitignore).unwrap();
+    use_isolated_git_config_with_identity(&root);
+
+    let result = git_init(
+        repo.to_string_lossy().into_owned(),
+        Some("some-other-branch".to_string()),
+        true,
+    )
+    .unwrap();
+    set_git_env_override(&[]);
+
+    assert!(result.skipped_existing_repo);
+    assert!(!result.committed);
+    assert_eq!(
+        result.commit_count, 1,
+        "the repo's own commit, not one this call made"
+    );
+    assert_eq!(
+        fs::read(&gitignore).unwrap(),
+        before,
+        ".gitignore must be untouched byte-for-byte"
+    );
+    let log = git(&repo, &["log", "--oneline"]);
+    assert_eq!(String::from_utf8_lossy(&log.stdout).lines().count(), 1);
+}
+
+#[test]
+fn branch_master_and_custom_names_survive_init() {
+    if !require_git() {
+        return;
+    }
+    let root = temp_dir("branchnames");
+    use_isolated_git_config_with_identity(&root);
+
+    for name in ["master", "feat/x"] {
+        let proj = root.join(name.replace('/', "-"));
+        fs::create_dir_all(&proj).unwrap();
+
+        let result = git_init(
+            proj.to_string_lossy().into_owned(),
+            Some(name.to_string()),
+            true,
+        )
+        .unwrap();
+
+        assert!(result.committed, "{name}");
+        assert_eq!(result.commit_count, 1, "{name}");
+        assert_eq!(
+            result.status.branch.as_deref(),
+            Some(name),
+            "{name} must survive the first commit"
+        );
+        let out = git(&proj, &["symbolic-ref", "--short", "HEAD"]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), name);
+    }
+    set_git_env_override(&[]);
+}
+
+/// A-7 regression (BUGS.md line 35): `probe_status` must name the unborn
+/// branch `git_init` just chose, before any commit exists.
+#[test]
+fn probe_status_reports_unborn_branch_after_init() {
+    if !require_git() {
+        return;
+    }
+    let dir = temp_dir("unbornafterinit");
+    let result = git_init(
+        dir.to_string_lossy().into_owned(),
+        Some("main".to_string()),
+        false,
+    )
+    .unwrap();
+    assert_eq!(result.status.branch.as_deref(), Some("main"));
+    assert!(!result.status.has_commits);
+
+    // ...and a fresh, independent probe agrees.
+    let status = git_status(dir.to_string_lossy().into_owned()).unwrap();
+    assert!(status.is_repo);
+    assert!(!status.has_commits);
+    assert_eq!(status.branch.as_deref(), Some("main"));
+}
+
+// ── WO15 §3.2 step 5a: ensure_gitignore_lines ───────────────────────
+//
+// Exercised at the helper level, not through `git_init`: the second
+// `git_init` call on the same folder takes the D-15 skip path, so
+// idempotency is not observable from outside. No `git` needed either.
+
+#[test]
+fn gitignore_is_created_with_the_marker_and_all_three_lines_when_absent() {
+    let dir = temp_dir("gicreatelines");
+    ensure_gitignore_lines(&dir).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "# --- added by Cowtext ---\n.claude/settings.local.json\nCLAUDE.local.md\n.cowtext/cache/\n"
+    );
+}
+
+#[test]
+fn gitignore_append_is_crlf_safe_and_idempotent() {
+    let dir = temp_dir("giappendcrlf");
+    let path = dir.join(".gitignore");
+    // A CRLF file that already carries one of the three lines.
+    fs::write(&path, "node_modules/\r\nCLAUDE.local.md\r\n").unwrap();
+
+    ensure_gitignore_lines(&dir).unwrap();
+    let first = fs::read_to_string(&path).unwrap();
+
+    assert_eq!(
+        first,
+        "node_modules/\r\nCLAUDE.local.md\r\n\r\n# --- added by Cowtext ---\r\n\
+         .claude/settings.local.json\r\n.cowtext/cache/\r\n"
+    );
+    assert!(
+        first.starts_with("node_modules/\r\nCLAUDE.local.md\r\n"),
+        "existing bytes are never modified or removed"
+    );
+    assert_eq!(
+        first.matches('\n').count(),
+        first.matches("\r\n").count(),
+        "no bare LF may be introduced into a CRLF file"
+    );
+    assert_eq!(
+        first.matches(COWTEXT_GITIGNORE_MARKER).count(),
+        1,
+        "the marker is appended once"
+    );
+
+    // Second call: all three lines are present, so nothing is written.
+    ensure_gitignore_lines(&dir).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), first);
+}
+
+#[test]
+fn gitignore_append_keeps_lf_and_adds_the_missing_trailing_newline() {
+    let dir = temp_dir("giappendlf");
+    let path = dir.join(".gitignore");
+    fs::write(&path, "dist/").unwrap(); // no trailing newline at all
+
+    ensure_gitignore_lines(&dir).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "dist/\n# --- added by Cowtext ---\n.claude/settings.local.json\nCLAUDE.local.md\n.cowtext/cache/\n"
+    );
+}
+
+#[test]
+fn gitignore_append_is_a_no_op_when_all_three_lines_are_present() {
+    let dir = temp_dir("giappendpresent");
+    let path = dir.join(".gitignore");
+    // Order is irrelevant, and a `\r`-terminated line still counts.
+    let original = "# mine\n.cowtext/cache/\r\nCLAUDE.local.md\n.claude/settings.local.json\n";
+    fs::write(&path, original).unwrap();
+
+    ensure_gitignore_lines(&dir).unwrap();
+
+    let after = fs::read_to_string(&path).unwrap();
+    assert_eq!(after, original, "not one byte may change");
+    assert!(!after.contains(COWTEXT_GITIGNORE_MARKER));
+}
+
+// ── holds_stageable_content (pure helper, no git needed) ────────────
+
+#[test]
+fn holds_stageable_content_answers_by_content_not_by_existence() {
+    let dir = temp_dir("stageablecontent");
+
+    // Absent: nothing to stage.
+    assert!(!holds_stageable_content(&dir.join("does-not-exist")));
+
+    // A file is stageable in its own right.
+    let file = dir.join(".gitignore");
+    fs::write(&file, "x\n").unwrap();
+    assert!(holds_stageable_content(&file));
+
+    // An existing but empty directory is not — this is F3's case, the one
+    // `exists()` used to wave through to `git add`.
+    let empty = dir.join("context");
+    fs::create_dir_all(&empty).unwrap();
+    assert!(!holds_stageable_content(&empty));
+
+    // ...and neither is a tree of nothing but empty directories, however deep
+    // (the probe is recursive, not one level).
+    fs::create_dir_all(empty.join("a").join("b").join("c")).unwrap();
+    assert!(!holds_stageable_content(&empty));
+
+    // One file anywhere beneath it flips the answer.
+    fs::write(empty.join("a").join("b").join("c").join("deep.md"), "# d\n").unwrap();
+    assert!(holds_stageable_content(&empty));
+
+    // An empty file still counts: git records it as an entry.
+    let hollow = dir.join(".cowtext");
+    fs::create_dir_all(&hollow).unwrap();
+    fs::write(hollow.join("empty.json"), "").unwrap();
+    assert!(holds_stageable_content(&hollow));
 }
 
 // ── normalize_gitignore (pure helper) ───────────────────────────────

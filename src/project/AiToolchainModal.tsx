@@ -11,18 +11,17 @@
 import { useEffect, useRef } from "react";
 import { Check, RefreshCw, X } from "lucide-react";
 import { useSettingsStore } from "../store/settings";
+import { useToolchainStore } from "../store/toolchain";
 import type { CompileTarget } from "../store/graph";
-import type { AiTool } from "./toolchain";
 
-export function AiToolchainModal({
-  tools,
-  onRescan,
-  onClose,
-}: {
-  tools: AiTool[];
-  onRescan: () => void;
-  onClose: () => void;
-}) {
+export function AiToolchainModal({ onClose }: { onClose: () => void }) {
+  // WO15 Block 5a — rows come from the scan store, not from props. The
+  // modal is opened from the title screen and re-scanned from inside it, so
+  // passing an immutable snapshot down meant a re-scan couldn't repaint the
+  // list it was launched from.
+  const tools = useToolchainStore((s) => s.tools);
+  const phase = useToolchainStore((s) => s.phase);
+  const scan = useToolchainStore((s) => s.scan);
   const defaults = useSettingsStore((s) => s.defaultCompileTargets);
   const setDefaults = useSettingsStore((s) => s.setDefaultCompileTargets);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -128,7 +127,7 @@ export function AiToolchainModal({
                           t.found ? "text-success-text" : "text-content-muted"
                         }`}
                       >
-                        {t.found ? (t.version !== null ? `v${t.version}` : "installed") : "not found"}
+                        {t.found ? `✓ ${t.version ?? "installed"}` : "✗ not found"}
                       </span>
                     </span>
                     <span className="truncate font-mono text-xs text-content-muted">
@@ -147,11 +146,12 @@ export function AiToolchainModal({
 
         <div className="flex h-[56px] flex-none items-center justify-between border-t border-border-subtle bg-surface-0 px-4">
           <button
-            onClick={onRescan}
-            className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 text-sm text-content-secondary transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 hover:text-content"
+            onClick={() => void scan()}
+            disabled={phase === "scanning"}
+            className="flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 text-sm text-content-secondary transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 hover:text-content disabled:text-content-muted disabled:hover:border-border disabled:hover:bg-surface-2"
           >
             <RefreshCw size={13} strokeWidth={1.6} />
-            Re-scan
+            {phase === "scanning" ? "Scanning…" : "Rescan"}
           </button>
           <div className="flex items-center gap-2.5">
             <span className="font-mono text-xs text-content-muted">

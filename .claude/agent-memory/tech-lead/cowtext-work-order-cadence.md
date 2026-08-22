@@ -19,6 +19,13 @@ close-out (TERMINOLOGY.md + the cowtext-terminology skill + Status line + test m
 protocol") and it cost extra rounds. Laying every stub down first makes `lib.rs` closed for
 the rest of the work order and every lane's zone genuinely exclusive.
 
+**Audit sessions may have no shell** (WO15: Read/Grep/Glob/Write/Edit only — no Bash, so no
+`git status`, `cargo`, `npm`). What still works: `rg -l WOnn` over the tree as the touched-file
+proxy for the grid check (every lane annotates with the WO number), Grep for every `invoke(`
+name vs a Read of `generate_handler!`, Glob for new files. What does not: gate runs and the real
+`git status --short` — hand both to the dispatcher/tester explicitly in the audit's P0 table
+rather than claiming them. Say which checks were proxied.
+
 **How to apply:** a contract without a Stage-0 seams spec precise enough to need no judgment
 is incomplete. Always name the hot files (`tasks.rs`, `sessions.rs`, `compile.rs`,
 `TasksBoard.tsx`, `App.tsx`, `lib.rs`, `store/graph.ts`) and assign each to exactly one lane

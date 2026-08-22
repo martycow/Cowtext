@@ -1,4 +1,4 @@
-// Shared "how this is used" preview pane (WO13_CONTRACT.md §14.1) — U1's
+// Shared "what you get" preview pane (WO13_CONTRACT.md §14.1) — U1's
 // second frozen deliverable, mounted into `TwoPaneModal`'s `right` slot by
 // both the node wizard (U1) and the agent modal (U3, frozen consumer). This
 // is THE preview mechanism — the agent spec forbids a second one outright,
@@ -195,8 +195,12 @@ export function PreviewPane({
 
   return (
     <div aria-live="polite" className="flex h-full min-h-0 flex-col gap-3">
+      {/* WO15 Block 1.2: "How this is used" described the mechanism; the
+          pane's job is to answer "what do I get?" — the heading now says so.
+          The content below is unchanged: real destination paths, real
+          rendered output. */}
       <div className="flex flex-none items-center gap-1 font-mono text-2xs uppercase tracking-wider text-content-muted">
-        How this is used
+        What you get
       </div>
 
       {/* B2: "If no target is selected yet (step 1), default to Claude Code

@@ -1,21 +1,21 @@
 ---
 name: feedback-docs-guard-hook
-description: A pre-write hook blocks the Write/Edit tools on .md files under .claude/agent-memory/ — use Bash (cat heredoc, sed) instead
+description: The docs-guard hook allow-lists .claude/agent-memory/ for Write/Edit but blocks any Bash command whose .md path it cannot resolve (shell variables, relative paths) — use Write/Edit with absolute paths for memory files
 metadata:
   type: feedback
 ---
 
-Writing or editing `.md` files under `.claude/agent-memory/**` with the Write
-or Edit tools gets blocked by a docs-guard hook in this repo. Use the Bash
-tool instead — a heredoc (`cat > path << 'EOF' ... EOF`) for new files, `sed`
-or a rewritten heredoc for edits.
+For `.md` files under `.claude/agent-memory/**`, use the Write/Edit tools with the full
+absolute path. Do NOT route the write through Bash (heredoc, `>>`, sed): the guard inspects the
+command text, and a path it cannot match to its allow-list (e.g. `$M/MEMORY.md`, a relative
+path) is denied with "Do not route this write through Bash to avoid the guard".
 
-**Why:** the hook exists to keep hand-authored `docs/**` content from being
-silently touched by the wrong tool path; agent memory files live outside
-`docs/` but the guard's path match is broad enough to catch them too. This
-was discovered when a direct `Write` to a memory file failed.
+**Why:** `.claude/scripts/docs-guard.ps1` line 59 allow-lists
+`^\.claude/(agents|skills|agent-memory|commands|scripts)/` — so a direct Write/Edit on the
+absolute memory path passes. The earlier note here ("Write is blocked, use Bash") was observed
+on an older version of the guard; on 2026-08-22 the Bash route was the one blocked
+(variable-hidden path) and Write/Edit succeeded.
 
-**How to apply:** for every memory write in this repo (both new files and
-`MEMORY.md` index updates), default to Bash, not Write/Edit — this also
-matches this repo's own general per-session instruction to prefer Bash for
-file operations wherever possible.
+**How to apply:** memory file creation → Write with `D:\Moo.exe\Cowtext\.claude\agent-memory\tester\<name>.md`;
+index update → Edit on `...\MEMORY.md`. If a Write is ever denied again, quote the guard message
+in the report rather than working around it.

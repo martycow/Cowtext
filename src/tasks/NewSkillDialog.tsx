@@ -3,10 +3,9 @@
 // draft's description/body and saves it.
 
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useAgentsStore, type Selection } from "../store/agents";
 import { FieldLabel } from "../agents/AgentEditor";
-import { TASK_FORMAT_SKILL } from "./taskFormatSkill";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -97,22 +96,12 @@ export function NewSkillDialog({ onClose }: { onClose: () => void }) {
               {error}
             </div>
           )}
-          {/* F6: the shipped default — prefills the fields below from the
-              frozen TASK_FORMAT_SKILL constant, then goes through the same
-              createSkill/updateDraft/saveDoc path as any hand-written skill.
-              No separate command, no separate write path. */}
-          <button
-            type="button"
-            onClick={() => {
-              setName(TASK_FORMAT_SKILL.name);
-              setDescription(TASK_FORMAT_SKILL.description);
-              setBody(TASK_FORMAT_SKILL.body);
-            }}
-            className="flex h-control-sm w-fit flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2 text-xs text-content-secondary transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 hover:text-content"
-          >
-            <Sparkles size={12} strokeWidth={1.5} />
-            Use the built-in task-format skill
-          </button>
+          {/* WO15 A-18: the "Use the built-in task-format skill" prefill
+              button lived here. Built-ins are no longer a prefill for a
+              hand-written skill — they are their own group in the Skills
+              rail, virtual until a compile materialises them (Block 4), so
+              copying one into a new dir was a second, divergent copy of a
+              file Cowtext already ships. */}
           <div>
             <FieldLabel>Name</FieldLabel>
             <input

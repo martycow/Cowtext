@@ -69,7 +69,24 @@ const AssembleConfirmModal = lazy(() =>
 const AgentQuestionModal = lazy(() =>
   import("./sessions/AgentQuestionModal").then((m) => ({ default: m.AgentQuestionModal })),
 );
-import { flushSettings, PANEL_LIMITS, useSettingsStore } from "./store/settings";
+// WO15 Block 5b / U1 — the agent wizard and the hooks modal are opened from
+// four different trees (canvas menus, node cards, the rail, the Barn legend,
+// the event log) and mounted exactly once, here. `useUiStore` is the seam.
+const NewAgentDialog = lazy(() =>
+  import("./tasks/NewAgentDialog").then((m) => ({ default: m.NewAgentDialog })),
+);
+const HooksModal = lazy(() =>
+  import("./inspector/HooksModal").then((m) => ({ default: m.HooksModal })),
+);
+import {
+  CODE_FONT_STACKS,
+  flushSettings,
+  PANEL_LIMITS,
+  UI_FONT_STACKS,
+  useSettingsStore,
+} from "./store/settings";
+import { useUiStore } from "./store/ui";
+import { useTasksStore } from "./store/tasks";
 import { flushAgentSave, flushMetaSave, useAgentsStore } from "./store/agents";
 import { initSfx } from "./scene/sfx";
 import { ResizeHandle } from "./ui/ResizeHandle";
@@ -450,7 +467,8 @@ function TopBar({
   const aliveSessionCount = useSessionsStore((s) => s.sessions.filter((x) => x.alive).length);
   const atCap = aliveSessionCount >= MAX_SESSIONS;
   return (
-    <header className="grid h-topbar flex-none grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border-subtle bg-surface-1 px-4">
+    // `ct-zoom` (index.css) — chrome follows the UI-scale setting.
+    <header className="ct-zoom grid h-topbar flex-none grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border-subtle bg-surface-1 px-4">
       <div className="flex min-w-0 items-center gap-2">
         <PixelLogo />
         <span className="font-pixel text-xs tracking-wide">cowtext</span>
@@ -502,7 +520,11 @@ function TopBar({
               <button
                 onClick={onRun}
                 disabled={atCap}
-                title={atCap ? `agent limit reached (${MAX_SESSIONS})` : "Run — launch a Claude session"}
+                title={
+                  atCap
+                    ? `agent limit reached (${MAX_SESSIONS})`
+                    : "Run — launches a headless Claude Code session (claude -p)"
+                }
                 className="flex h-[26px] flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
               >
                 <Play size={14} strokeWidth={1.5} />
@@ -596,7 +618,7 @@ function MigrationBanner({ onNavigate }: { onNavigate: () => void }) {
   ];
 
   return (
-    <div className="flex flex-col flex-none border-b border-border-subtle bg-accent-surface">
+    <div className="ct-zoom flex flex-col flex-none border-b border-border-subtle bg-accent-surface">
       <div className="flex h-[31px] flex-none items-center gap-2 px-4">
         <Info size={13} strokeWidth={1.5} className="flex-none text-accent-text" />
         <span className="truncate font-mono text-xs text-accent-text">
@@ -666,7 +688,7 @@ function ReviewBanner() {
   if (queueLen === 0) return null;
 
   return (
-    <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
+    <div className="ct-zoom flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
       <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" />
       <span className="truncate font-mono text-xs text-amber-text">
         {queueLen} file{queueLen === 1 ? "" : "s"} changed on disk
@@ -715,7 +737,7 @@ function HomeConfirmBanner({
   onCancel: () => void;
 }) {
   return (
-    <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
+    <div className="ct-zoom flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-amber-surface px-4">
       <span className="h-1.5 w-1.5 flex-none rounded-pill bg-amber" />
       <span className="truncate font-mono text-xs text-amber-text">
         {count} agent session{count === 1 ? "" : "s"} keep running in the background
@@ -755,6 +777,10 @@ function Workspace({
   // The agent panel is reachable from any view, including the barn — without
   // this, selecting a roster card while watching the barn has no visible effect.
   const sessionSelected = useSessionsStore((s) => s.selectedId !== null);
+  // P0.7 — in Tasks view the Inspector only earns its 392px once a task is
+  // selected. It used to mount unconditionally there and show the "select a
+  // node" fallback, i.e. a third of the window explaining that it is empty.
+  const taskSelected = useTasksStore((s) => s.selected !== null);
   // N3: defense-in-depth — even if `view` somehow still says "barn" (e.g. a
   // settings load racing a restored view), manager mode must never mount
   // BarnScene/Pixi.
@@ -784,12 +810,19 @@ function Workspace({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <FileRail
-        root={root}
-        onEditProject={onEditProject}
-        onOpenGit={onOpenGit}
-        onNeedsReview={onNeedsReview}
-      />
+      {/* The rail and the Inspector are scaled from here rather than from
+          inside their own files: `zoom` belongs to whoever owns the layout
+          slot, and both components belong to other lanes this round. The wrapper
+          is `flex-none` around a `flex-none` child, so the only thing it
+          changes at 100 % is one more div. */}
+      <div className="ct-zoom flex min-h-0 flex-none">
+        <FileRail
+          root={root}
+          onEditProject={onEditProject}
+          onOpenGit={onOpenGit}
+          onNeedsReview={onNeedsReview}
+        />
+      </div>
       {!leftPanelCollapsed && (
         <ResizeHandle
           value={leftPanelWidth}
@@ -825,16 +858,19 @@ function Workspace({
                 <BarnScene />
               </Suspense>
             )}
+            {/* Tasks and Agents are chrome that happens to occupy `main`,
+                not canvas surfaces — they scale with the rest of the app.
+                Only `.react-flow` and the Barn host below stay 1:1. */}
             {view === "tasks" && (
               <Suspense fallback={<LoadingFallback />}>
-                <div className="flex h-full flex-col">
+                <div className="ct-zoom flex h-full flex-col">
                   <TasksBoard root={root} />
                 </div>
               </Suspense>
             )}
             {view === "orchestrator" && (
               <Suspense fallback={<LoadingFallback />}>
-                <div className="flex h-full flex-col">
+                <div className="ct-zoom flex h-full flex-col">
                   <OrchestratorView root={root} />
                 </div>
               </Suspense>
@@ -848,7 +884,9 @@ function Workspace({
       </main>
       {loaded &&
         loadError === null &&
-        (view === "canvas" || view === "tasks" || (barnView && sessionSelected)) && (
+        (view === "canvas" ||
+          (view === "tasks" && taskSelected) ||
+          (barnView && sessionSelected)) && (
         <>
           <ResizeHandle
             value={rightPanelWidth}
@@ -857,9 +895,15 @@ function Workspace({
             onChange={setRightPanelWidth}
             label="Resize inspector panel"
           />
-          <Suspense fallback={<div style={{ width: rightPanelWidth }} className="flex-none bg-surface-1" />}>
-            <Inspector root={root} onOpenGit={onOpenGit} />
-          </Suspense>
+          <div className="ct-zoom flex min-h-0 flex-none">
+            <Suspense fallback={<div style={{ width: rightPanelWidth }} className="flex-none bg-surface-1" />}>
+              <Inspector
+                root={root}
+                onOpenGit={onOpenGit}
+                surface={view === "barn" ? "barn" : view === "tasks" ? "tasks" : "canvas"}
+              />
+            </Suspense>
+          </div>
         </>
       )}
     </div>
@@ -907,6 +951,16 @@ export default function App() {
   useEffect(() => {
     setView("canvas");
   }, [root]);
+
+  // Block 7 — appearance, published to <html> by the effect below.
+  const uiScale = useSettingsStore((s) => s.uiScale);
+  const uiFont = useSettingsStore((s) => s.uiFont);
+  const codeFont = useSettingsStore((s) => s.codeFont);
+  // Block 5b / U1 — the two single-mount dialogs, opened from four trees.
+  const agentWizard = useUiStore((s) => s.agentWizard);
+  const closeAgentWizard = useUiStore((s) => s.closeAgentWizard);
+  const hooksModalOpen = useUiStore((s) => s.hooksModalOpen);
+  const setHooksModalOpen = useUiStore((s) => s.setHooksModalOpen);
 
   // N3: turning manager mode on while watching the barn falls back to the
   // canvas — Barn is never a reachable view once the toggle is on.
@@ -969,9 +1023,26 @@ export default function App() {
   }, []);
 
   // Settings load then sfx init — both idempotent, StrictMode-safe.
+  // `loadHooksAddr` rides along: it is the same "ask Rust once for a constant
+  // of this machine" shape, it never rejects, and every surface that shows
+  // the address (Settings, HooksModal, EventLog) reads the store.
   useEffect(() => {
     void useSettingsStore.getState().load().then(() => initSfx());
+    void useProjectStore.getState().loadHooksAddr();
   }, []);
+
+  // WO15 Block 7 — publish the appearance settings as custom properties on
+  // <html>. Everything downstream is CSS: `zoom: var(--ui-scale)` on the
+  // chrome containers (index.css), `font-sans`/`font-mono` on the two font
+  // vars (tailwind.config.js). Runs on every change, and once more after
+  // `load()` resolves, so a restart repaints at the persisted scale rather
+  // than flashing 100 % first.
+  useEffect(() => {
+    const el = document.documentElement;
+    el.style.setProperty("--ui-scale", String(uiScale / 100));
+    el.style.setProperty("--font-ui", UI_FONT_STACKS[uiFont]);
+    el.style.setProperty("--font-mono", CODE_FONT_STACKS[codeFont]);
+  }, [uiScale, uiFont, codeFont]);
 
   // Best-effort flush of pending debounced saves when the window goes away.
   useEffect(() => {
@@ -1046,7 +1117,7 @@ export default function App() {
         />
       )}
       {error !== null && (
-        <div className="flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
+        <div className="ct-zoom flex h-[31px] flex-none items-center gap-2 border-b border-border-subtle bg-danger-surface px-4">
           <span className="h-1.5 w-1.5 flex-none bg-danger" />
           <span className="truncate font-mono text-xs text-danger-text">{error}</span>
         </div>
@@ -1132,12 +1203,31 @@ export default function App() {
       <Suspense fallback={null}>
         <AgentQuestionModal />
       </Suspense>
+      {/* WO15 Block 5b — the ONE agent-wizard mount. The prefill (canvas
+          position, context node) travels in `useUiStore`, not in props, so a
+          card menu three components deep opens it without threading state
+          up. Closing goes through the store too, which clears the prefill. */}
+      {agentWizard.open && (
+        <Suspense fallback={null}>
+          <NewAgentDialog onClose={closeAgentWizard} />
+        </Suspense>
+      )}
+      {/* The ONE hooks-modal mount (the event log and the Barn legend both
+          open it). `root !== null` because installing hooks writes into a
+          project's .claude/settings.json — there is nothing to write without
+          one. ProjectWizard keeps its own mount: it runs before a project is
+          open, over its own root. */}
+      {hooksModalOpen && root !== null && (
+        <Suspense fallback={null}>
+          <HooksModal root={root} onClose={() => setHooksModalOpen(false)} />
+        </Suspense>
+      )}
       {wizardMode !== null && (
         <ProjectWizard
           mode={wizardMode}
           root={root ?? undefined}
           onClose={() => setWizardMode(null)}
-          onDone={(picked, openImport) => {
+          onDone={(picked, openImport, outcome) => {
             const wasEdit = wizardMode === "edit";
             setWizardMode(null);
             if (openImport) setPendingImportRoot(picked);
@@ -1151,12 +1241,26 @@ export default function App() {
               // WO12 F5 tail — only "new" mode (never "convert", which
               // already opens ImportReviewModal for the user to choose what
               // to adopt; firing both would be two modals at once).
-              if (!openImport) setPendingStarterAdoptRoot(picked);
+              //
+              // WO15 D-16: the wizard now always runs `presetApply` itself,
+              // so a graph already exists and starter adoption would race
+              // it — `graphApplied` says so. The intent-then-act effect is
+              // kept for wizards that report no outcome (an older path, or
+              // a wizard that bailed before applying).
+              if (!openImport && outcome?.graphApplied !== true) {
+                setPendingStarterAdoptRoot(picked);
+              }
             }
           }}
         />
       )}
-      <ToastHost />
+      {/* ToastHost renders inline rather than through a portal, so it needs
+          the scale applied here — the body-child rule in index.css only
+          reaches real portals. The wrapper is a zero-height flex item; the
+          host itself is `position: fixed`. */}
+      <div className="ct-zoom flex-none">
+        <ToastHost />
+      </div>
     </div>
   );
 }

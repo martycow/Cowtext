@@ -1,7 +1,7 @@
 - [WO06 U2-linkage zone](project_wo06_u2_linkage_zone.md) — dispatch zone vs. WO06_CONTRACT.md §10 grid mismatch, what was granted/inferred/ratified (audit D9), fix-round D4/D6 patterns.
 - [Ambiguous zone boundaries](feedback_ambiguous_zone_boundaries.md) — rule of thumb for dispatch-vs-contract zone conflicts: dispatch wins, frozen cross-lane interfaces still honored, additive-and-flagged for undeclared-but-coupled files.
 - [WO06 U1 fix round: D1/D8/O4](project_wo06_u1_fixround_d1_d8_o4.md) — mount points for the unreachable differentiator, store-reload discipline, the blur-close-vs-disabled-button trap in DependsPicker.
-- [No frontend test runner](feedback_no_frontend_test_runner.md) — package.json has no test script/framework; state that plainly for TS-only regression-test asks, don't add a new dep or fake a test.
+- [Frontend tests run on Vitest](feedback_frontend_tests_vitest.md) — `npm run test` exists since WO13 (~276 tests / 17 files); write real *.test.ts, scope runs during parallel lanes.
 - [WO11 UI-B shell & rail](project_wo11_uib_shell_rail.md) — B1 Hierarchy extraction pattern, missing-reset() cross-lane workaround (safe because loadGraph/loadAgents already full-reset), overflow-menu deviation, mid-session seam landings.
 - [WO11 UI-C Inspector](project_wo11_uic_inspector.md) — C1 UNPROVEN verdict, setSelection clear-before-guard ordering bug pattern, a real self-conflict inside WO11_CONTRACT.md's D5 text resolved by tracing functional consequences, the SectionStack ordering model shape.
 - [WO11 UI-A wizards](project_wo11_ui_a_wizards.md) — A1-A4 project wizard fixes (controlled-textarea trap, unpersisted disclosure idiom), F1 verdict UNPROVEN, GitWizard built against R1's not-yet-landed git module.
@@ -12,4 +12,14 @@
 - [WO12 run-button-sessions](project_wo12_run_button_sessions.md) — F3: three spawn buttons → one context-prefilled RunSessionDialog; literal-grep acceptance forced renaming internal vars, not just UI text.
 - [WO12 app-shell wave3](project_wo12_app_shell_wave3.md) — Run button + 4 mounts in App.tsx; the openProjectAt-resolves-before-loadGraph-effect race and its pendingXRoot+loaded-gate fix pattern.
 - [WO13 U4 Inspector/migration/E3](project_wo13_u4_inspector_migration.md) — migration banner+review-filter design (raw-diff against the real migrateGraph, never a 2nd migrator), E3 edge-inspector shape, defect 1/6 fixes.
-- [WO13 build-against-unlanded-lane](feedback_wo13_build_against_unlanded_lane.md) — write imports against a contract's frozen signature even when the file doesn't exist yet; scope tsc checks to your own zone, not the whole red tree.
+- [WO13 build-against-unlanded-lane](feedback_wo13_build_against_unlanded_lane.md) — write imports against a contract's frozen signature even when the file doesn't exist yet; scope tsc/eslint checks to your own zone, not the whole red tree.
+- [WO15 U4b canvas & dialogs](project_wo15_u4b_canvas_dialogs.md) — the "none" sentinel trap, don't-duplicate-Rust's-resolver, ref+useCallback vs eslint-disable, and `addEdge`'s silent deny that menu rows must pre-check.
+- [WO15 U1 Inspector](project_wo15_u1_inspector.md) — section order rework, AssembleSection owning Brief/Tags/Influence/live preview, session-local `defaultCollapsed` (D-18), the seams U1 consumes.
+- [Popover & disabled-control traps](feedback_popover_and_disabled_control_traps.md) — capture-phase scroll closing its own portal popover; `title` dead on disabled controls; a pending probe reading as a definitive "no".
+- [WO15 U4a UI scale](project_wo15_u4a_ui_scale.md) — zoom on chrome vs transform-scale on portals (swapping them slides menus off their triggers), the selector set, and why vh/vw needs `calc(N / var(--ui-scale))`.
+- [WO15 U2 wizards & git](project_wo15_u2_wizards_git.md) — scaffold-once retry latch, the post-Create result block (never onDone in the write's tick), the skipped-repo-no-commits warning, BranchPicker's local-choice rule.
+- [No rethrow with cause](feedback_no_rethrow_with_cause.md) — `throw new Error(msg)` in a catch fails eslint `preserve-caught-error`, and `{ cause }` fails tsc TS2554; decorate and `setError` in place.
+- [WO15 U3 agents/skills](project_wo15_u3_agents_skills.md) — Inspector can't mount a doc-less view; model has two homes (frontmatter vs sidecar, A-20); `reloadSkills` not `loadAgents` after writing a skill (A-21).
+- [Modals and deferred writes](feedback_modal_deferred_writes.md) — a debounced store action is a disk write; park the intent in local state and apply it in the Create path, filtered by what is still attached.
+- [Effect guard lint traps](feedback_effect_guard_lint_traps.md) — bump the sequence ref at effect start, never in cleanup (react-hooks warns); keep `let live` for unmount.
+- [Child state + remount key](feedback_child_state_remount_key.md) — ToolsField/ModelPicker derive local state from props once; when a preset writes those props, bump a nonce `key` instead of adding a sync effect.

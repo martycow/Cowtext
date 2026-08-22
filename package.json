@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
+    "truth": "node scripts/truth.mjs --check",
+    "truth:write": "node scripts/truth.mjs --write",
     "tauri": "tauri"
   },
   "dependencies": {

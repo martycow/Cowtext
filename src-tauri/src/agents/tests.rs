@@ -1367,3 +1367,214 @@ fn skill_rename_during_save_never_resurrects_the_old_skill_dir() {
         let _ = fs::remove_dir_all(&dir);
     }
 }
+
+// ---- WO15 §3.4: skills_materialize -----------------------------------------
+
+fn bundled(id: &str) -> SkillInput {
+    SkillInput {
+        id: id.to_string(),
+        content: format!("---\nname: {id}\ndescription: Bundled.\n---\n\n# {id}\n"),
+    }
+}
+
+#[test]
+fn materialize_writes_a_new_skill_and_returns_forward_slash_paths() {
+    let dir = temp_project("materialize-new");
+    let root = dir.to_string_lossy().into_owned();
+
+    let out = skills_materialize(root, vec![bundled("task-format"), bundled("design-tokens")])
+        .unwrap();
+
+    // Input order, forward slashes on every platform — the frontend keys its
+    // rail rows off these strings.
+    assert_eq!(
+        out.written,
+        vec![
+            ".claude/skills/task-format/SKILL.md".to_string(),
+            ".claude/skills/design-tokens/SKILL.md".to_string(),
+        ]
+    );
+    for rel in &out.written {
+        assert!(!rel.contains('\\'), "backslash in returned path: {rel}");
+        assert!(dir.join(rel).is_file(), "not written: {rel}");
+    }
+    let on_disk = fs::read_to_string(dir.join(&out.written[0])).unwrap();
+    assert_eq!(on_disk, bundled("task-format").content);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// "Reset to built-in" is the same call: create-or-replace, deliberately.
+#[test]
+fn materialize_overwrites_an_edited_skill() {
+    let dir = temp_project("materialize-reset");
+    let root = dir.to_string_lossy().into_owned();
+
+    skills_materialize(root.clone(), vec![bundled("task-format")]).unwrap();
+    let path = skills_dir(&dir).join("task-format/SKILL.md");
+    fs::write(&path, "---\nname: task-format\n---\n\nuser edits\n").unwrap();
+
+    let out = skills_materialize(root, vec![bundled("task-format")]).unwrap();
+    assert_eq!(out.written.len(), 1);
+    assert_eq!(fs::read_to_string(&path).unwrap(), bundled("task-format").content);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn materialize_rejects_ids_that_are_not_already_slugs() {
+    let dir = temp_project("materialize-bad-id");
+    let root = dir.to_string_lossy().into_owned();
+
+    // A display name, not an id: slugify("Task Format") == "task-format" != id.
+    let err = skills_materialize(root.clone(), vec![bundled("Task Format")]).unwrap_err();
+    assert_eq!(err, "Skill id is not a slug: \"Task Format\"");
+
+    // Path components never reach `resolve_within_root` — `validate_component`
+    // rejects them first, with its own message.
+    for bad in ["../x", "a/b", "a\\b", ".."] {
+        let err = skills_materialize(root.clone(), vec![bundled(bad)]).unwrap_err();
+        assert!(
+            err.contains("invalid character") || err.contains("Invalid name"),
+            "id {bad:?} produced the wrong error: {err}"
+        );
+    }
+    assert!(!skills_dir(&dir).exists(), "a rejected batch must write nothing");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn materialize_rejects_content_without_a_frontmatter_block() {
+    let dir = temp_project("materialize-no-fm");
+    let root = dir.to_string_lossy().into_owned();
+
+    for bad in [
+        "# Just a heading\n",
+        "",
+        "---\nname: unterminated\n",
+        "\n---\nname: x\n---\n",
+    ] {
+        let err = skills_materialize(
+            root.clone(),
+            vec![SkillInput {
+                id: "task-format".to_string(),
+                content: bad.to_string(),
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(err, "SKILL.md content must begin with a frontmatter block");
+    }
+
+    // CRLF openers are real files from a Windows editor, and are accepted.
+    let ok = skills_materialize(
+        root,
+        vec![SkillInput {
+            id: "task-format".to_string(),
+            content: "---\r\nname: task-format\r\n---\r\n\r\nbody\r\n".to_string(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(ok.written.len(), 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn materialize_rejects_duplicate_ids() {
+    let dir = temp_project("materialize-dupes");
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = skills_materialize(
+        root,
+        vec![bundled("task-format"), bundled("art-direction"), bundled("task-format")],
+    )
+    .unwrap_err();
+    assert_eq!(err, "Duplicate skill id: \"task-format\"");
+    assert!(!skills_dir(&dir).exists(), "a rejected batch must write nothing");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// All-or-nothing validation: the point of validating the whole batch up
+/// front is that a bad entry anywhere leaves the *earlier* entries unwritten
+/// too. A per-entry loop would pass every other test in this file.
+#[test]
+fn materialize_with_a_bad_second_entry_leaves_the_first_unwritten() {
+    let dir = temp_project("materialize-second-bad");
+    let root = dir.to_string_lossy().into_owned();
+
+    let err = skills_materialize(
+        root.clone(),
+        vec![
+            bundled("task-format"),
+            SkillInput {
+                id: "art-direction".to_string(),
+                content: "no frontmatter here\n".to_string(),
+            },
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err, "SKILL.md content must begin with a frontmatter block");
+    assert!(
+        !skills_dir(&dir).join("task-format").exists(),
+        "the first entry must not have been written"
+    );
+
+    // Same shape with a bad id rather than bad content.
+    let err = skills_materialize(
+        root,
+        vec![bundled("task-format"), bundled("Art Direction")],
+    )
+    .unwrap_err();
+    assert_eq!(err, "Skill id is not a slug: \"Art Direction\"");
+    assert!(!skills_dir(&dir).exists(), "still nothing on disk");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn materialize_of_nothing_is_a_successful_no_op() {
+    let dir = temp_project("materialize-empty");
+    let root = dir.to_string_lossy().into_owned();
+    let out = skills_materialize(root, vec![]).unwrap();
+    assert_eq!(out, SkillsMaterialized::default());
+    assert!(out.written.is_empty());
+    assert!(!skills_dir(&dir).exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn materialize_rejects_a_bad_root_without_writing() {
+    let err = skills_materialize("Z:/no/such/dir".to_string(), vec![bundled("task-format")])
+        .unwrap_err();
+    assert!(err.starts_with("Not a directory: "), "{err}");
+}
+
+/// A materialized skill is a real skill: `agents_scan` finds it, so the rail
+/// can flip its badge from `virtual` to `materialized` off the same scan it
+/// already runs.
+#[test]
+fn materialized_skills_show_up_in_agents_scan() {
+    let dir = temp_project("materialize-scan");
+    let root = dir.to_string_lossy().into_owned();
+    skills_materialize(root.clone(), vec![bundled("task-format")]).unwrap();
+
+    let scan = agents_scan(root).unwrap();
+    assert_eq!(scan.skills.len(), 1);
+    assert_eq!(scan.skills[0].dir_name, "task-format");
+    assert!(!scan.skills[0].raw, "bundled content must parse as frontmatter");
+    assert_eq!(scan.skills[0].fields.name.as_deref(), Some("task-format"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The wire names the frontend sends/reads (`id`, `content`, `written`).
+#[test]
+fn materialize_wire_shape_round_trips() {
+    let parsed: SkillInput =
+        serde_json::from_str(r#"{ "id": "task-format", "content": "---\nname: x\n---\n" }"#)
+            .unwrap();
+    assert_eq!(parsed.id, "task-format");
+    let json = serde_json::to_string(&SkillsMaterialized {
+        written: vec![".claude/skills/task-format/SKILL.md".to_string()],
+    })
+    .unwrap();
+    assert_eq!(
+        json,
+        r#"{"written":[".claude/skills/task-format/SKILL.md"]}"#
+    );
+}

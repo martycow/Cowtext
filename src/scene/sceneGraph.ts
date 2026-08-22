@@ -187,7 +187,37 @@ export interface BarnLayout {
   tick: (dtMs: number, reduced?: boolean) => void;
   /** Pixel centre of the whole grid (for initial camera centring). */
   center: { x: number; y: number };
+  /** WO15 D-21 — the world-space box the camera fits into on mount/resize.
+   *  Because the camera always *centres* `center`, the fit box is the
+   *  centred box: twice the largest half-extent about `center` on each
+   *  axis, so `min(hostW / width, hostH / height)` is a true "everything
+   *  fits" test rather than an optimistic one. */
+  fitBounds: { width: number; height: number };
 }
+
+/** Tallest silhouette any prop/character raises above its tile anchor —
+ *  the lantern post's roof peak (props.ts, `-42`) plus 2 px of slack.
+ *  Transient hover bubbles are deliberately not counted: they live in the
+ *  camera layer above `world`, not in the layout, and sizing the whole barn
+ *  around a tooltip would cost a zoom step at every window size. */
+const CONTENT_RISE = 44;
+
+/** Centred fit box (see `BarnLayout.fitBounds`). Pure grid maths, computed
+ *  once: the floor diamond's outline is the same one `buildGround` strokes,
+ *  raised by CONTENT_RISE at the top-most tile anchor. */
+function computeFitBounds(center: { x: number; y: number }): { width: number; height: number } {
+  const left = tileToScreen(0, GRID_H - 1).x - TILE_W / 2;
+  const right = tileToScreen(GRID_W - 1, 0).x + TILE_W / 2;
+  const north = tileToScreen(0, 0);
+  const top = Math.min(north.y - TILE_H, north.y - CONTENT_RISE);
+  const bottom = tileToScreen(GRID_W - 1, GRID_H - 1).y;
+  const halfW = Math.max(center.x - left, right - center.x);
+  const halfH = Math.max(center.y - top, bottom - center.y);
+  return { width: halfW * 2, height: halfH * 2 };
+}
+
+const GRID_CENTER = tileToScreen((GRID_W - 1) / 2, (GRID_H - 1) / 2);
+const FIT_BOUNDS = computeFitBounds(GRID_CENTER);
 
 /** R10: wood plank floor. Boards run along the ty axis — every tile sharing
  *  a tx column takes the same one of 3 wood tones, so a constant-tx line of
@@ -391,7 +421,9 @@ export function buildLayout(): BarnLayout {
     sideDeskView: sideDesk,
     decos,
     props,
-    center: tileToScreen((GRID_W - 1) / 2, (GRID_H - 1) / 2),
+    // fresh objects per layout — the module constants stay unaliased
+    center: { ...GRID_CENTER },
+    fitBounds: { ...FIT_BOUNDS },
 
     rebuildProps: (nodes) => {
       for (const entry of props.values()) entry.view.destroy({ children: true });

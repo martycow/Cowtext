@@ -16,8 +16,12 @@ export type ValidationError =
 export interface PreviewFile {
   relPath: string;
   /** The three adapters, plus "agent" for a managed context block inside a
-   *  .claude/agents/*.md file (emitted per agent node with context edges). */
-  target: CompileTarget | "agent";
+   *  .claude/agents/*.md file (emitted per agent node with context edges),
+   *  plus "skill" for a built-in SKILL.md the modal adds itself (WO15
+   *  Block 4 / A-14). A "skill" row never comes from `compile_preview` —
+   *  `compile.rs` is forbidden from writing `.claude/skills/` (D-4) — and
+   *  is written by `skills_materialize` after the compile write succeeds. */
+  target: CompileTarget | "agent" | "skill";
   oldContent: string | null;
   newContent: string;
   handwritten: boolean;

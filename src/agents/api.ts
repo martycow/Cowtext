@@ -122,3 +122,29 @@ export interface AgentMemoryStatus {
 export function agentMemoryStatus(root: string, fileName: string): Promise<AgentMemoryStatus> {
   return invoke<AgentMemoryStatus>("agent_memory_status", { root, fileName });
 }
+
+/** One bundled skill to write (WO15 §3.4). `id` is the skill directory slug;
+ *  `content` is the full SKILL.md text, frontmatter first. */
+export interface SkillInput {
+  id: string;
+  content: string;
+}
+
+/** `.claude/skills/<id>/SKILL.md` paths, forward slashes, in input order. */
+export interface SkillsMaterialized {
+  written: string[];
+}
+
+/** Writes bundled (built-in) skills to disk — create-or-replace on purpose,
+ *  because this is also the "Reset to built-in" path (WO15 Block 4, D-4).
+ *  Compile itself may never write under `.claude/skills/`, so the Compile
+ *  modal calls this AFTER `compileWrite` succeeds, with only the skill rows
+ *  the user approved. Every entry is validated before any write; an I/O
+ *  failure part-way rejects with earlier writes already on disk, so the
+ *  caller reloads. */
+export function skillsMaterialize(
+  root: string,
+  skills: SkillInput[],
+): Promise<SkillsMaterialized> {
+  return invoke<SkillsMaterialized>("skills_materialize", { root, skills });
+}

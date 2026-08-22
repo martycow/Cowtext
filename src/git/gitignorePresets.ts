@@ -55,6 +55,18 @@ export const GITIGNORE_PRESETS: GitignorePreset[] = [
   {
     key: "cowtext",
     label: "Cowtext",
-    lines: [".cowtext/*.tmp-*", ".cowtext/avatars/*.tmp-*"],
+    // The last three are the same lines `git_init(commit = true)` guarantees
+    // before the first commit (WO15 §3.2 `COWTEXT_GITIGNORE_LINES`): local
+    // Claude Code overrides and Cowtext's own cache are per-machine, never
+    // shared. Kept identical on purpose — a user who runs the Git wizard
+    // instead of the New Project wizard must end up with the same file, and
+    // both writers skip a line that is already present.
+    lines: [
+      ".cowtext/*.tmp-*",
+      ".cowtext/avatars/*.tmp-*",
+      ".claude/settings.local.json",
+      "CLAUDE.local.md",
+      ".cowtext/cache/",
+    ],
   },
 ];

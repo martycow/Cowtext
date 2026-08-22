@@ -2,6 +2,28 @@
 // `#[serde(rename_all = "camelCase")]` structs in src-tauri/src/agents.rs 1:1.
 // AGENTS_SUITE_CONTRACT.md §4. This is the only TS definition of these types.
 
+/** WO15 §4.10 — the model providers Cowtext can name in the agent modal.
+ *  This is a COWTEXT-side concept only: it is persisted in the sidecar
+ *  (`.cowtext/agents.json`, §3.8) and never written into an agent's own
+ *  frontmatter. `model:` reaches the file iff the provider is `anthropic`
+ *  (D-13) — Claude Code is the only runtime that reads it.
+ *
+ *  Declared here rather than in `src/resources/index.ts` because
+ *  `store/agents.ts` needs the type without pulling in the data tables,
+ *  and `resources/index.ts` itself imports it back for `Provider.id`. */
+export type ProviderId = "anthropic" | "openai" | "google" | "cursor" | "github";
+
+/** Every {@link ProviderId}, in the `models.json` provider order. The
+ *  runtime validation list for a sidecar `provider` value: anything not in
+ *  here reads as absent (§3.8). */
+export const PROVIDER_IDS: readonly ProviderId[] = [
+  "anthropic",
+  "openai",
+  "google",
+  "cursor",
+  "github",
+];
+
 /** Known-key subset of the frontmatter. A total value: the UI always sends
  *  all ten (WO13_CONTRACT.md §14.4 promotes five new keys, in this
  *  canonical append order after `skills`: `disallowedTools`,

@@ -1,0 +1,34 @@
+{
+  "principles": [
+    {
+      "id": "no-commit-without-asking",
+      "label": "Never commit without asking",
+      "body": "# Never commit without asking\n\nDo not run `git commit` (or anything that creates a commit) unless the user has explicitly asked for a commit in this conversation. Stage and describe the change, then ask.\n\nExample: \"Changes are ready in 3 files — commit as `fix: clamp panel width`? (yes / no / I'll do it)\""
+    },
+    {
+      "id": "short-commit-subjects",
+      "label": "Short commit messages (≤ 50 chars subject)",
+      "body": "# Short commit messages\n\nCommit subject lines are at most 50 characters, imperative mood, no trailing period. Put detail in the body after a blank line.\n\nExample: `feat: add branch picker to project wizard` — not `Added a new branch picker component to the project wizard so that users can choose their branch.`"
+    },
+    {
+      "id": "ask-before-dependency",
+      "label": "Ask before adding a dependency",
+      "body": "# Ask before adding a dependency\n\nThe dependency set is fixed. Before adding a package, crate, font or CLI tool, stop and ask — name the dependency, its size, and what it replaces.\n\nExample: \"This needs a date parser: `date-fns` (~20 KB) or a 30-line local helper — which do you prefer?\""
+    },
+    {
+      "id": "tests-before-done",
+      "label": "Run tests before declaring done",
+      "body": "# Run tests before declaring done\n\nA task is not done until the project's test and lint commands have run green in this session. Paste the final gate output, not a summary of it.\n\nExample: `npm run build && npm run lint && npm run test` — all three exit 0 before you say \"done\"."
+    },
+    {
+      "id": "no-destructive-git",
+      "label": "No destructive git operations (force-push, reset --hard)",
+      "body": "# No destructive git operations\n\nNever run `git push --force`, `git reset --hard`, `git checkout -- <file>`, `git clean -f`, or any command that discards work that is not yours. If history must be rewritten, ask first and say what will be lost.\n\nExample: to undo a bad commit, propose `git revert <sha>` — not `git reset --hard HEAD~1`."
+    },
+    {
+      "id": "prefer-editing-existing",
+      "label": "Prefer editing existing files over creating new ones",
+      "body": "# Prefer editing existing files\n\nExtend the file that already owns a concern before creating a new one. New files need a reason the existing structure cannot absorb them.\n\nExample: a new settings field goes into `src/store/settings.ts`, not a new `src/store/appearance.ts`."
+    }
+  ]
+}

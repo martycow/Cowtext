@@ -9,18 +9,27 @@
 //! Detection is deliberately shallow and side-effect free: resolve the binary
 //! on PATH, then ask it for its version. Nothing is written, no config is
 //! read, and a tool that is absent is reported as absent rather than being
-//! installed or repaired. The scan is on demand (a button), never on startup —
-//! spawning five child processes is not something an app should do while the
-//! user is still deciding which project to open.
+//! installed or repaired.
+//!
+//! The scan runs on title-screen mount and again on **Rescan** (WO15 Block
+//! 5a). Spawning five child processes at mount is only acceptable because the
+//! whole thing is time-boxed and off the render path: every probe is capped at
+//! [`VERSION_TIMEOUT`], all five run concurrently, and the panel renders its
+//! rows immediately — the screen is never blocked and the user can open a
+//! project while the scan is still in flight. Each row carries the wall time
+//! its own probe took ([`AiTool::elapsed_ms`]) so a slow machine is visible
+//! rather than merely felt.
 
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Duration;
 
 /// How long a single `--version` call may take before it is abandoned. A CLI
-/// that has not answered in four seconds is reported found-but-versionless
-/// rather than being allowed to hold the whole panel hostage.
-const VERSION_TIMEOUT: Duration = Duration::from_secs(4);
+/// that has not answered in three seconds is reported found-but-versionless
+/// rather than being allowed to hold the whole panel hostage. Three, not four:
+/// the scan now starts on title-screen mount (WO15 Block 5a), so the worst
+/// case is something the user watches rather than something they asked for.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One row of the panel: a tool Cowtext can compile for, and what the scan
 /// learned about it. `id` is the `CompileTarget` wire value, NOT a tool name —
@@ -39,6 +48,8 @@ pub struct AiTool {
     pub version: Option<String>,
     /// Absolute path the probe resolved, `None` when absent.
     pub path: Option<String>,
+    /// Wall time for this row's probe (PATH resolve + `--version`), ms.
+    pub elapsed_ms: u64,
 }
 
 struct Probe {
@@ -189,7 +200,9 @@ async fn run_version(path: &PathBuf, args: &[&str]) -> Option<String> {
 
 /// The row for a tool that is not installed — identity fields only, so the
 /// panel can still render it. Every "absent" answer comes from here, whether
-/// the binary was missing or the probe task itself died.
+/// the binary was missing or the probe task itself died. `elapsed_ms` is `0`:
+/// this base row has measured nothing, and every caller that *did* measure
+/// overwrites it.
 fn absent(p: &'static Probe) -> AiTool {
     AiTool {
         id: p.id,
@@ -199,24 +212,40 @@ fn absent(p: &'static Probe) -> AiTool {
         found: false,
         version: None,
         path: None,
+        elapsed_ms: 0,
     }
 }
 
 async fn detect_one(p: &'static Probe) -> AiTool {
+    let started = std::time::Instant::now();
     let Some(path) = probe_binary(p.bin) else {
-        return absent(p);
+        return AiTool {
+            elapsed_ms: elapsed_ms(started),
+            ..absent(p)
+        };
     };
     let banner = run_version(&path, p.version_args).await;
     if banner.is_none() && p.needs_version_ok {
         // `gh` is installed but `gh copilot` is not an extension it has.
-        return absent(p);
+        return AiTool {
+            elapsed_ms: elapsed_ms(started),
+            ..absent(p)
+        };
     }
     AiTool {
         found: true,
         version: banner.as_deref().and_then(extract_version),
         path: Some(path.to_string_lossy().into_owned()),
+        elapsed_ms: elapsed_ms(started),
         ..absent(p)
     }
+}
+
+/// Milliseconds since `started`, saturating. A probe cannot plausibly take
+/// 5.8e8 years, but a `u128 as u64` truncation would report a fast probe if
+/// one somehow did — saturating says "very slow", which is at least true.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Scan for every AI tool Cowtext can compile for. Always returns one entry

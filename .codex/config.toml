@@ -1,0 +1,10 @@
+# Development-only (WO15 D-8, docs/design/PROVIDER_SUPPORT_MATRIX.md §3): Cowtext ships no Codex integration, and nothing in the product reads or writes this file.
+# The binary is not in the tree - build it first with `cargo build --release --bin cowtext-mcp` (from src-tauri/); `npm run truth` WARNs (T11) while it is absent.
+# Both paths below are absolute and machine-specific: edit them for your checkout, or delete this file.
+
+[mcp_servers.cowtext]
+command = 'D:\Moo.exe\Cowtext\src-tauri\target\release\cowtext-mcp.exe'
+args = [
+    "--root",
+    'D:\Moo.exe\Cowtext',
+]

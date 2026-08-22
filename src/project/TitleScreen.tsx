@@ -16,12 +16,14 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { FolderOpen, Info, RefreshCw, ScanLine, Sparkles, Workflow, X } from "lucide-react";
 import { useProjectStore } from "../store/project";
 import { useSettingsStore, type RecentProject } from "../store/settings";
+import { useToolchainStore, type ToolchainPhase } from "../store/toolchain";
+import { PROVIDER_SUPPORT_SENTENCE } from "../resources";
 import { probeProjectDirs, revealPath } from "../fs/api";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import type { ProjectWizardMode } from "./ProjectWizard";
-import { detectAiTools, type AiTool } from "./toolchain";
+import type { AiTool } from "./toolchain";
 
 const AiToolchainModal = lazy(() =>
   import("./AiToolchainModal").then((m) => ({ default: m.AiToolchainModal })),
@@ -99,14 +101,18 @@ function BrandLockup({ centered }: { centered: boolean }) {
           </span>
           {!centered && <span className="font-mono text-xs text-content-muted">v0.1.0</span>}
         </div>
+        {/* WO15 Stage 1 — the tagline IS the provider-support sentence, in
+            both compositions and verbatim (PROVIDER_SUPPORT_MATRIX.md §5).
+            The two hand-written taglines this replaced each promised a
+            little more than the product delivers ("every agent you actually
+            run"); the first thing a user reads is the wrong place to be
+            approximately honest. */}
         <p
           className={`max-w-[470px] text-pretty text-md leading-relaxed text-content-secondary ${
             centered ? "text-center" : "max-w-[330px]"
           }`}
         >
-          {centered
-            ? "Point Cowtext at a folder and it finds every markdown file inside. Adopt them as memory nodes, wire the graph, and the herd has a barn."
-            : "A context compiler for AI coding agents. Wire your markdown into one graph, compile it out to every agent you actually run."}
+          {PROVIDER_SUPPORT_SENTENCE}
         </p>
       </div>
     </div>
@@ -117,8 +123,17 @@ function BrandLockup({ centered }: { centered: boolean }) {
 
 /** WO10 (INPUT_PROMPT 08/19 items 7-8) — three doors, not one. "Open folder"
  *  only helps with a project Cowtext already knows; the other two are the
- *  states a new user is actually in. "Open folder" stays the accent-filled
- *  primary (blue is you), matching the hierarchy this screen already had. */
+ *  states a new user is actually in.
+ *
+ *  WO15 fix round, F10 — the primary door FOLLOWS THE COMPOSITION. Both
+ *  signals are blue (blue is you; no amber is involved), but a filled accent
+ *  door and a Recommended chip on a different door are two "do this first"
+ *  marks on one screen, and on first run they contradict each other: "Open
+ *  folder" has nothing to open. So with recents, "Open folder" is the door
+ *  most likely to be taken and keeps the filled accent while "New project"
+ *  wears the chip one weight below it; without recents "New project" is the
+ *  primary and drops the chip — the filled accent IS the recommendation, and
+ *  a chip on the primary would say the same thing twice. */
 function StartDoors({
   onWizard,
   layout,
@@ -128,39 +143,59 @@ function StartDoors({
 }) {
   const { openProject } = useProjectStore();
   const stack = layout === "stack";
+  // The two compositions are one branch in TitleScreen: `row` IS the first
+  // run (no recents), `stack` IS the two-column screen that has them — so
+  // layout already carries the fact the hierarchy depends on, and no second
+  // prop can drift out of step with it.
+  const hasRecents = stack;
+  // WO15 Stage 4 — every hint now names what lands on disk, in the user's
+  // words: "Creates .cowtext/, context/ and starter nodes" beats "scaffold a
+  // fresh graph", which assumes you already know what a graph is. The stack
+  // variants are the short ones (62px rows in the two-column composition);
+  // the row variants carry the full sentence because a 244px card has space
+  // for it and first-run is exactly when the sentence is needed.
   const doors = [
     {
       key: "open",
-      primary: true,
+      primary: hasRecents,
+      recommended: false,
       icon: FolderOpen,
       label: "Open folder",
       hint: stack
         ? "A folder Cowtext already knows"
-        : "Scan a folder for markdown and adopt what is there",
+        : "Opens a folder Cowtext already knows and scans its markdown",
       onClick: () => void openProject(),
       title: undefined as string | undefined,
     },
     {
       key: "new",
-      primary: false,
+      primary: !hasRecents,
+      // The one door a first-run user should take. With recents it says so
+      // with the accent-surface chip — one weight below the filled primary,
+      // so the two blues read as hierarchy rather than as two primaries.
+      // Without them it IS the filled primary, and the chip would be a
+      // second mark on the same control.
+      recommended: hasRecents,
       icon: Sparkles,
       label: "New project",
       hint: stack
-        ? "Scaffold a fresh graph and starter nodes"
-        : "Start from a preset and get starter nodes wired for you",
+        ? "Creates .cowtext/, context/ and starter nodes"
+        : "Creates .cowtext/, context/ and starter nodes — recommended for a fresh start",
       onClick: () => onWizard("new"),
       title: undefined,
     },
     {
       key: "convert",
       primary: false,
+      recommended: false,
       icon: Workflow,
       label: "Convert existing",
       hint: stack
-        ? "Import the CLAUDE.md you already have"
-        : "Split the CLAUDE.md you already have into nodes",
+        ? "Turns CLAUDE.md, AGENTS.md or .cursor/rules into nodes"
+        : "Turns the CLAUDE.md, AGENTS.md or .cursor/rules you already have into nodes — preview first",
       onClick: () => onWizard("convert"),
-      title: "Scaffold Cowtext's files alongside an existing project, then import its context",
+      title:
+        "Scaffolds Cowtext's files alongside an existing project, then imports its context. Nothing is written until you approve.",
     },
   ];
 
@@ -187,8 +222,15 @@ function StartDoors({
             <d.icon size={16} strokeWidth={d.primary ? 1.8 : 1.6} />
           </span>
           <span className="flex min-w-0 flex-col gap-1">
-            <span className={`text-md ${d.primary ? "font-semibold" : "font-medium"}`}>
-              {d.label}
+            <span className="flex items-center gap-2">
+              <span className={`text-md ${d.primary ? "font-semibold" : "font-medium"}`}>
+                {d.label}
+              </span>
+              {d.recommended && (
+                <span className="flex-none rounded-sm border border-accent-border bg-accent-surface px-1.5 py-px text-2xs text-accent-text">
+                  Recommended
+                </span>
+              )}
             </span>
             <span className="text-xs leading-normal text-content-secondary">{d.hint}</span>
           </span>
@@ -358,7 +400,9 @@ function RecentProjects({ projects }: { projects: RecentProject[] }) {
         <span className="font-mono text-xs uppercase tracking-wider text-content-muted">
           Recent projects
         </span>
-        <span className="font-mono text-xs text-content-muted">{projects.length} of 8</span>
+        {/* "3 of 8 kept" — the old "3 of 8" read as a page counter. The list
+            is a fixed-size ring: the ninth project opened drops the oldest. */}
+        <span className="font-mono text-xs text-content-muted">{projects.length} of 8 kept</span>
       </div>
       <ul className="flex min-h-0 flex-col overflow-y-auto rounded-lg border border-border-subtle bg-surface-1">
         {projects.map((p) => (
@@ -370,8 +414,6 @@ function RecentProjects({ projects }: { projects: RecentProject[] }) {
 }
 
 // ── AI toolchain ───────────────────────────────────────────────────────
-
-type ScanPhase = "idle" | "scanning" | "done" | "failed";
 
 /** 4-step amber pixel march — never a spinner (DESIGN_SPEC.md). */
 function ScanMarch() {
@@ -389,37 +431,20 @@ function ScanMarch() {
   );
 }
 
-/** One scan, shared by both compositions. Kept in the screen (not a store):
- *  nothing outside the title screen consumes it, and it must NOT run at
- *  startup — spawning five child processes while the user is still choosing a
- *  project is not something an app should do unasked. */
-function useToolScan() {
-  const [phase, setPhase] = useState<ScanPhase>("idle");
-  const [tools, setTools] = useState<AiTool[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  const scan = () => {
-    if (phase === "scanning") return;
-    setPhase("scanning");
-    setError(null);
-    void detectAiTools().then(
-      (found) => {
-        setTools(found);
-        setPhase("done");
-      },
-      (e: unknown) => {
-        setError(String(e));
-        setPhase("failed");
-      },
-    );
-  };
-
-  return { phase, tools, error, scan };
-}
-
-function ScanButton({ phase, onScan }: { phase: ScanPhase; onScan: () => void }) {
+/** WO15 Block 5a — the scan now lives in `store/toolchain.ts` and runs on
+ *  mount instead of on a click. Two things changed the "don't spawn five
+ *  child processes unasked" judgement this screen was written with: the
+ *  probes are time-boxed at 3 s each in Rust (§3.5), and the answer is what
+ *  the screen is FOR — a panel that says "not checked yet" until you press a
+ *  button is a chore, not information. The store also means the agent
+ *  modal's provider chips read the same answer instead of scanning again. */
+function ScanButton({ phase, onScan }: { phase: ToolchainPhase; onScan: () => void }) {
+  // `Check installs` survives only for the pre-scan instant (and for a
+  // machine where the effect never ran); once there are rows on screen the
+  // honest verb is Rescan — including after a failure, where re-trying is
+  // exactly what the button is for.
   const label =
-    phase === "done" ? "Re-scan" : phase === "scanning" ? "Scanning…" : "Check installs";
+    phase === "idle" ? "Check installs" : phase === "scanning" ? "Scanning…" : "Rescan";
   return (
     <button
       onClick={onScan}
@@ -427,10 +452,10 @@ function ScanButton({ phase, onScan }: { phase: ScanPhase; onScan: () => void })
       title="Look for installed AI CLIs on this machine"
       className="flex h-control flex-none items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-muted"
     >
-      {phase === "done" ? (
-        <RefreshCw size={13} strokeWidth={1.6} />
-      ) : (
+      {phase === "idle" ? (
         <ScanLine size={13} strokeWidth={1.6} />
+      ) : (
+        <RefreshCw size={13} strokeWidth={1.6} />
       )}
       {label}
     </button>
@@ -441,23 +466,38 @@ function toolDot(tool: AiTool): string {
   return tool.found ? "bg-success" : "bg-content-disabled";
 }
 
+/** Status cell for one row: the amber march while the probe is in flight,
+ *  then a tick and the version or a cross and "not found". Text glyphs, not
+ *  icons — the column is monospace and 5 rows tall, and ✓/✗ line up in it. */
+function ToolStatus({ tool, phase, scanned }: { tool: AiTool; phase: ToolchainPhase; scanned: boolean }) {
+  if (phase === "scanning") return <ScanMarch />;
+  if (!scanned) return <span className="font-mono text-xs text-content-muted">—</span>;
+  return (
+    <span
+      className={`font-mono text-xs ${tool.found ? "text-success-text" : "text-content-muted"}`}
+    >
+      {tool.found ? `✓ ${tool.version ?? "installed"}` : "✗ not found"}
+    </span>
+  );
+}
+
 /** The full panel — the two-column composition's bottom-right card. */
-function ToolchainPanel({
-  scan,
-  onDetails,
-}: {
-  scan: ReturnType<typeof useToolScan>;
-  onDetails: () => void;
-}) {
-  const { phase, tools, error } = scan;
+function ToolchainPanel({ onDetails }: { onDetails: () => void }) {
+  const phase = useToolchainStore((s) => s.phase);
+  const tools = useToolchainStore((s) => s.tools);
+  const error = useToolchainStore((s) => s.error);
+  const scan = useToolchainStore((s) => s.scan);
+  // A failed RESCAN keeps the previous answers in the store, so "have we ever
+  // had real rows?" is the question that decides ✓/✗ vs "—", not `phase`.
+  const scanned = tools.length > 0;
   const foundCount = tools.filter((t) => t.found).length;
   const summary =
-    phase === "done"
-      ? `${foundCount} of ${tools.length} found`
-      : phase === "failed"
-        ? "scan failed"
-        : phase === "scanning"
-          ? ""
+    phase === "scanning"
+      ? ""
+      : scanned
+        ? `${foundCount} of ${tools.length} found`
+        : phase === "failed"
+          ? "scan failed"
           : "not checked yet";
 
   return (
@@ -480,7 +520,7 @@ function ToolchainPanel({
               <span className="font-pixel text-micro tracking-wide text-amber-text">scanning</span>
             </span>
           )}
-          {phase === "done" && (
+          {scanned && (
             <button
               onClick={onDetails}
               className="h-control flex-none rounded border border-border bg-surface-2 px-2.5 text-sm text-content-secondary transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 hover:text-content"
@@ -488,63 +528,54 @@ function ToolchainPanel({
               Details
             </button>
           )}
-          <ScanButton phase={phase} onScan={scan.scan} />
+          <ScanButton phase={phase} onScan={() => void scan()} />
         </div>
       </div>
 
-      {phase === "failed" ? (
-        <div className="px-3.5 py-3 font-mono text-xs text-danger-text">{error}</div>
-      ) : (
-        <div>
-          {(phase === "done" ? tools : PLACEHOLDER_ROWS).map((t) => (
-            <div
-              key={t.id}
-              className="flex h-[36px] items-center gap-2.5 border-b border-border-subtle px-3.5"
-            >
-              <span
-                className={`h-[7px] w-[7px] flex-none rounded-pill ${
-                  phase === "done" ? toolDot(t) : phase === "scanning" ? "bg-amber" : "bg-content-disabled"
-                }`}
-              />
-              <span
-                className={`w-[150px] flex-none text-base ${
-                  phase === "done" && !t.found ? "text-content-muted" : "text-content"
-                }`}
-              >
-                {t.name}
-              </span>
-              <span className="w-[100px] flex-none font-mono text-xs text-content-muted">
-                {t.cmd}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-muted">
-                {t.emits}
-              </span>
-              <span
-                className={`flex-none font-mono text-xs ${
-                  phase === "done" && t.found ? "text-success-text" : "text-content-muted"
-                }`}
-              >
-                {phase === "done"
-                  ? t.found
-                    ? t.version !== null
-                      ? `v${t.version}`
-                      : "installed"
-                    : "not found"
-                  : phase === "scanning"
-                    ? "checking…"
-                    : "—"}
-              </span>
-            </div>
-          ))}
+      {/* The error is a strip above the rows, not instead of them: a failed
+          rescan must not blank out answers the user already had. */}
+      {phase === "failed" && error !== null && (
+        <div className="border-b border-border-subtle bg-danger-surface px-3.5 py-2 font-mono text-xs text-danger-text">
+          {error}
         </div>
       )}
+      <div>
+        {(scanned ? tools : PLACEHOLDER_ROWS).map((t) => (
+          <div
+            key={t.id}
+            className="flex h-[36px] items-center gap-2.5 border-b border-border-subtle px-3.5"
+          >
+            <span
+              className={`h-[7px] w-[7px] flex-none rounded-pill ${
+                phase === "scanning" ? "bg-amber" : scanned ? toolDot(t) : "bg-content-disabled"
+              }`}
+            />
+            <span
+              className={`w-[150px] flex-none text-base ${
+                scanned && !t.found ? "text-content-muted" : "text-content"
+              }`}
+            >
+              {t.name}
+            </span>
+            <span className="w-[100px] flex-none font-mono text-xs text-content-muted">
+              {t.cmd}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-content-muted">
+              {t.emits}
+            </span>
+            <span className="flex flex-none justify-end">
+              <ToolStatus tool={t} phase={phase} scanned={scanned} />
+            </span>
+          </div>
+        ))}
+      </div>
 
       <div className="flex h-[34px] items-center gap-2 px-3.5 text-content-muted">
         <Info size={12} strokeWidth={1.6} className="flex-none" />
         <span className="text-xs">
-          {phase === "done"
+          {scanned
             ? "Ticking a tool in Details makes it a compile target for new projects."
-            : "Cowtext compiles one graph out to each of these. Scan to see which are on this machine."}
+            : "Cowtext compiles one graph out to each of these."}
         </span>
       </div>
     </div>
@@ -556,22 +587,25 @@ function ToolchainPanel({
  *  unscanned state must still show every row. Mirrors `PROBES` in
  *  `src-tauri/src/toolchain.rs`; the scan replaces these wholesale. */
 const PLACEHOLDER_ROWS: AiTool[] = [
-  { id: "claude", name: "Claude Code", cmd: "claude", emits: "CLAUDE.md", found: false, version: null, path: null },
-  { id: "agents", name: "Codex CLI", cmd: "codex", emits: "AGENTS.md", found: false, version: null, path: null },
-  { id: "cursor", name: "Cursor", cmd: "cursor", emits: ".cursor/rules/*.mdc", found: false, version: null, path: null },
-  { id: "copilot", name: "GitHub Copilot", cmd: "gh copilot", emits: ".github/copilot-instructions.md", found: false, version: null, path: null },
-  { id: "gemini", name: "Gemini CLI", cmd: "gemini", emits: "GEMINI.md", found: false, version: null, path: null },
+  { id: "claude", name: "Claude Code", cmd: "claude", emits: "CLAUDE.md", found: false, version: null, path: null, elapsedMs: 0 },
+  { id: "agents", name: "Codex CLI", cmd: "codex", emits: "AGENTS.md", found: false, version: null, path: null, elapsedMs: 0 },
+  { id: "cursor", name: "Cursor", cmd: "cursor", emits: ".cursor/rules/*.mdc", found: false, version: null, path: null, elapsedMs: 0 },
+  { id: "copilot", name: "GitHub Copilot", cmd: "gh copilot", emits: ".github/copilot-instructions.md", found: false, version: null, path: null, elapsedMs: 0 },
+  { id: "gemini", name: "Gemini CLI", cmd: "gemini", emits: "GEMINI.md", found: false, version: null, path: null, elapsedMs: 0 },
 ];
 
 /** The compact strip — first run, where there is no column to fill. */
-function ToolchainStrip({ scan }: { scan: ReturnType<typeof useToolScan> }) {
-  const { phase, tools } = scan;
-  const rows = phase === "done" ? tools : PLACEHOLDER_ROWS;
+function ToolchainStrip() {
+  const phase = useToolchainStore((s) => s.phase);
+  const tools = useToolchainStore((s) => s.tools);
+  const scan = useToolchainStore((s) => s.scan);
+  const scanned = tools.length > 0;
+  const rows = scanned ? tools : PLACEHOLDER_ROWS;
   const foundCount = tools.filter((t) => t.found).length;
   return (
     <div className="flex h-topbar items-center gap-3.5 rounded-lg border border-border-subtle bg-surface-1 py-0 pl-4 pr-2">
       <span className="flex-none text-sm text-content-secondary">
-        {phase === "done"
+        {scanned
           ? `${foundCount} of ${tools.length} on this machine:`
           : phase === "failed"
             ? "Could not scan this machine"
@@ -581,25 +615,28 @@ function ToolchainStrip({ scan }: { scan: ReturnType<typeof useToolScan> }) {
         {rows.map((t) => (
           <span
             key={t.id}
-            title={t.found && t.path !== null ? t.path : t.emits}
+            // Found: the resolved binary path. Not found (or not yet asked):
+            // the file that target compiles to, which is the reason the row
+            // is on screen at all.
+            title={
+              scanned && t.found
+                ? `${t.path ?? t.cmd}${t.version !== null ? ` — ${t.version}` : ""}`
+                : t.emits
+            }
             className={`flex h-control-sm flex-none items-center gap-1.5 rounded-sm border px-2 ${
-              phase === "done" && t.found
+              scanned && t.found
                 ? "border-[rgba(79,180,119,.35)] bg-success-surface"
                 : "border-border bg-surface-2"
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-pill ${
-                phase === "done"
-                  ? toolDot(t)
-                  : phase === "scanning"
-                    ? "bg-amber"
-                    : "bg-content-disabled"
+                phase === "scanning" ? "bg-amber" : scanned ? toolDot(t) : "bg-content-disabled"
               }`}
             />
             <span
               className={`font-mono text-xs ${
-                phase === "done" && !t.found ? "text-content-muted" : "text-content-secondary"
+                scanned && !t.found ? "text-content-muted" : "text-content-secondary"
               }`}
             >
               {t.name}
@@ -608,7 +645,7 @@ function ToolchainStrip({ scan }: { scan: ReturnType<typeof useToolScan> }) {
         ))}
       </span>
       {phase === "scanning" && <ScanMarch />}
-      <ScanButton phase={phase} onScan={scan.scan} />
+      <ScanButton phase={phase} onScan={() => void scan()} />
     </div>
   );
 }
@@ -617,34 +654,39 @@ function ToolchainStrip({ scan }: { scan: ReturnType<typeof useToolScan> }) {
 
 export function TitleScreen({ onWizard }: { onWizard: (mode: ProjectWizardMode) => void }) {
   const recentProjects = useSettingsStore((s) => s.recentProjects);
-  const scan = useToolScan();
+  const phase = useToolchainStore((s) => s.phase);
+  const toolCount = useToolchainStore((s) => s.tools.length);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  // Block 5a — scan on arrival, once. The store's own in-flight guard makes
+  // this StrictMode-safe, and the `idle` test means neither a remount (the
+  // title screen unmounts on open and remounts on Home) nor the second
+  // composition re-probes: the answer is already in the store.
+  useEffect(() => {
+    if (phase === "idle") void useToolchainStore.getState().scan();
+  }, [phase]);
+
   const details =
-    detailsOpen && scan.phase === "done" ? (
+    detailsOpen && toolCount > 0 ? (
       <Suspense fallback={null}>
-        <AiToolchainModal
-          tools={scan.tools}
-          onRescan={scan.scan}
-          onClose={() => setDetailsOpen(false)}
-        />
+        <AiToolchainModal onClose={() => setDetailsOpen(false)} />
       </Suspense>
     ) : null;
 
   // First run: nothing to list, so the cow gets the screen.
   if (recentProjects.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10">
+      <div className="ct-zoom flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10">
         <BrandLockup centered />
         <StartDoors onWizard={onWizard} layout="row" />
-        <ToolchainStrip scan={scan} />
+        <ToolchainStrip />
         {details}
       </div>
     );
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[456px_minmax(0,1fr)]">
+    <div className="ct-zoom grid min-h-0 flex-1 grid-cols-[456px_minmax(0,1fr)]">
       <div className="flex min-h-0 flex-col justify-between overflow-y-auto border-r border-border-subtle px-10 pb-10 pt-11">
         <BrandLockup centered={false} />
         <div className="mt-8 flex flex-col gap-2.5">
@@ -658,7 +700,7 @@ export function TitleScreen({ onWizard }: { onWizard: (mode: ProjectWizardMode) 
       <div className="flex min-h-0 flex-col gap-6 py-10 pl-9 pr-10">
         <RecentProjects projects={recentProjects} />
         <div className="flex-1" />
-        <ToolchainPanel scan={scan} onDetails={() => setDetailsOpen(true)} />
+        <ToolchainPanel onDetails={() => setDetailsOpen(true)} />
       </div>
 
       {details}

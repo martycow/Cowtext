@@ -21,7 +21,7 @@ import {
   useAgentsStore,
   type Selection,
 } from "../store/agents";
-import type { AgentDoc, FmFields } from "./types";
+import type { AgentDoc, FmFields, ProviderId } from "./types";
 import { agentMemoryStatus, type AgentMemoryStatus } from "./api";
 import { revealPath } from "../fs/api";
 import { CodeMirrorEditor } from "../inspector/CodeMirrorEditor";
@@ -29,9 +29,12 @@ import { AgentAvatar } from "./AgentAvatar";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
 import { agentContextTokens } from "../store/tokens";
-import { MODEL_NOTES } from "./modelCatalog";
+import { providerForModel } from "./modelCatalog";
+import { ModelPicker } from "./ModelPicker";
 import { ToolsField } from "./ToolPicker";
 import { ContextMenu } from "../ui/ContextMenu";
+import { LocalOnlyBadge } from "../ui/LocalOnlyBadge";
+import { DEFAULT_PROVIDER } from "../resources";
 import type { MenuItem } from "../ui/menuTypes";
 
 // ── A1/A3 — the "local only" badge, one shared component ────────────────
@@ -42,19 +45,17 @@ import type { MenuItem } from "../ui/menuTypes";
 // field cannot be added without answering the question"): a config array
 // can silently go unedited, a required prop cannot silently go unpassed.
 // Marking one field and leaving a neighbour unmarked is worse than no badge
-// at all (A3), so this is the ONLY place either badge text or its styling
-// may be written.
+// at all (A3).
+//
+// WO15 §4.12: the badge itself now lives in `ui/LocalOnlyBadge.tsx` so
+// non-agent surfaces (Position, Influence, the token-ceiling input, a
+// non-Anthropic model) carry the same mark. What is agent-specific is the
+// HINT — for these fields "local" means one precise file.
 
-export function LocalOnlyBadge() {
-  return (
-    <span
-      title="Stored in .cowtext/agents.json — never written to the agent's own file."
-      className="flex-none rounded-sm border border-border-strong bg-surface-2 px-1 font-mono text-micro uppercase tracking-wider text-content-muted"
-    >
-      local only
-    </span>
-  );
-}
+/** Every field in this file's Local-only section lands in exactly this
+ *  place, and the badge says so rather than something vaguer. */
+export const AGENT_LOCAL_HINT =
+  "Stored in .cowtext/agents.json — never written to the agent's own file.";
 
 export function FieldRow({
   label,
@@ -72,7 +73,7 @@ export function FieldRow({
     <div>
       <div className="mb-1 flex items-center gap-1.5">
         <FieldLabel>{label}</FieldLabel>
-        {!compiles && <LocalOnlyBadge />}
+        {!compiles && <LocalOnlyBadge hint={AGENT_LOCAL_HINT} />}
       </div>
       {children}
       {hint !== undefined && <p className="pt-1 text-2xs leading-snug text-content-muted">{hint}</p>}
@@ -187,106 +188,12 @@ export function ChipEditor({
   );
 }
 
-export type ModelChoice = "inherit" | "haiku" | "sonnet" | "opus" | "pin";
-
-function modelChoiceFor(value: string | null): ModelChoice {
-  if (value === null || value.trim() === "") return "inherit";
-  if (value === "haiku" || value === "sonnet" || value === "opus") return value;
-  return "pin";
-}
-
-const MODEL_RADIO: { choice: Exclude<ModelChoice, "pin">; label: string }[] = [
-  { choice: "inherit", label: "Inherit from the main session" },
-  { choice: "haiku", label: "Haiku" },
-  { choice: "sonnet", label: "Sonnet" },
-  { choice: "opus", label: "Opus" },
-];
-
-/** WO13_CONTRACT.md Block D — replaces the company/version picker (WO11 R6).
- *  No provider dropdown: this modal writes exactly one format,
- *  `.claude/agents/*.md`, which is Claude Code, where provider was never
- *  actually selectable — the removed dropdown implied a choice that did
- *  nothing (agent spec D1: multi-provider support is out of scope). "Pin a
- *  specific model ID" is the free-text escape hatch for anything else,
- *  including a dated Anthropic snapshot or `fable` (docs verdict, §3.0).
- *
- *  Frozen: `model: inherit` is OMITTED from frontmatter — `inherit` is the
- *  format's own default, so writing it adds a line that means nothing.
- *  "Inherit" maps to `onChange(null)`; `FmFields.model: string | null`
- *  already deletes a null key on save (contract: "null ⇒ the key is
- *  deleted"), so no new emitter behaviour is needed for that half. */
-export function ModelPicker({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: string | null;
-  disabled: boolean;
-  onChange: (v: string | null) => void;
-}) {
-  const choice = modelChoiceFor(value);
-  const [pinDraft, setPinDraft] = useState(choice === "pin" ? (value ?? "") : "");
-
-  const pick = (c: ModelChoice) => {
-    if (c === "inherit") onChange(null);
-    else if (c === "pin") onChange(pinDraft.trim() === "" ? "" : pinDraft.trim());
-    else onChange(c);
-  };
-
-  const note = MODEL_NOTES[value ?? "inherit"];
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div role="radiogroup" aria-label="Model" className="flex flex-col gap-1">
-        {MODEL_RADIO.map((r) => (
-          <label
-            key={r.choice}
-            className={`flex items-center gap-2 rounded border px-2 py-1 transition-colors duration-fast ${
-              choice === r.choice ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2"
-            } ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
-          >
-            <input
-              type="radio"
-              name="model-choice"
-              checked={choice === r.choice}
-              disabled={disabled}
-              onChange={() => pick(r.choice)}
-              className="h-3 w-3 accent-[var(--accent)]"
-            />
-            <span className="text-xs text-content">{r.label}</span>
-          </label>
-        ))}
-        <label
-          className={`flex items-center gap-2 rounded border px-2 py-1 transition-colors duration-fast ${
-            choice === "pin" ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2"
-          } ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
-        >
-          <input
-            type="radio"
-            name="model-choice"
-            checked={choice === "pin"}
-            disabled={disabled}
-            onChange={() => pick("pin")}
-            className="h-3 w-3 accent-[var(--accent)]"
-          />
-          <span className="flex-none text-xs text-content">Pin a specific model ID</span>
-          {choice === "pin" && (
-            <input
-              value={pinDraft}
-              disabled={disabled}
-              onChange={(e) => {
-                setPinDraft(e.target.value);
-                onChange(e.target.value.trim() === "" ? "" : e.target.value);
-              }}
-              placeholder="claude-opus-5, gpt-5, gemini-2.5-pro…"
-              className="ml-1 h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-2xs text-content focus:border-accent disabled:text-content-disabled"
-            />
-          )}
-        </label>
-      </div>
-      {note !== undefined && <p className="text-2xs leading-snug text-content-muted">{note}</p>}
-    </div>
-  );
+/** The provider a stored agent is configured for: the sidecar's explicit
+ *  value first (the user picked it), then a guess from the model id (an
+ *  agent Cowtext never touched), then Anthropic — `.claude/agents/*.md` is
+ *  Claude Code's own format, so that is the honest default (§6 U3.1). */
+export function providerOf(sidecar: ProviderId | undefined, model: string | null): ProviderId {
+  return sidecar ?? providerForModel(model) ?? DEFAULT_PROVIDER;
 }
 
 // ── B — description as a dispatch contract ───────────────────────────────
@@ -308,39 +215,6 @@ export function joinDescription(whenToUse: string, whenNotToUse: string): string
   const b = whenNotToUse.trim();
   if (a === "") return b === "" ? "" : `${DESCRIPTION_JOIN.trim()} ${b}`;
   return b === "" ? a : `${a}${DESCRIPTION_JOIN}${b}`;
-}
-
-const TRIGGER_WORDS = [
-  "when",
-  "whenever",
-  "use this agent",
-  "invoke",
-  "if ",
-  "before ",
-  "after ",
-  "handles",
-  "handling",
-  "reviewing",
-  "reviews",
-  "needs",
-  "should be used",
-  "must be used",
-  "requires",
-];
-
-function wordCount(s: string): number {
-  return s.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function hasTriggerLanguage(s: string): boolean {
-  const lower = s.toLowerCase();
-  return TRIGGER_WORDS.some((w) => lower.includes(w));
-}
-
-/** Contract's own example: "A senior tech lead who…" — a bio, not dispatch
- *  instructions. Heuristic only; this WARNS, it never blocks (B3). */
-function looksIdentityShaped(s: string): boolean {
-  return /^(a|an|the)\b[\s\S]*\bwho\b/i.test(s.trim());
 }
 
 function significantWords(s: string): Set<string> {
@@ -365,29 +239,46 @@ export interface DescriptionValidation {
   /** Non-null ⇒ Create/save-worthy state is blocked; names the consequence,
    *  never just "required" (dispatch: "say the consequence in plain terms"). */
   blocking: string | null;
-  identityWarning: boolean;
+  /** Advice, never a gate (WO15 Block 3b). */
+  tip: string | null;
   /** The other agent's display label, when overlap crosses the threshold. */
   overlapWarning: string | null;
 }
 
-/** `composed` is the full frontmatter-bound string (both halves joined);
- *  `whenToUse` alone drives the trigger-language/word-count/identity checks
- *  — "when NOT to use it" legitimately contains none of that shape. */
+/** Frozen copy (§6 U3.2) — the ONE soft tip. It fires on shape, so it must
+ *  never block: "Reads the diff and reports risks" is a perfectly good
+ *  description that simply does not open with the recommended phrase. */
+export const WHEN_TO_USE_TIP =
+  'Tip: start with "Use when…" so Claude picks this agent reliably';
+
+/** The three blocking rules, and no others (WO15 Block 3b). The old fourth
+ *  — "must contain trigger language AND ≥ 15 words" — blocked half the
+ *  presets this contract ships, which is how a validator gets discovered to
+ *  be wrong: a rule that rejects your own examples is a rule, not a fact.
+ *
+ *  `composed` is the full frontmatter-bound string (both halves joined);
+ *  `whenToUse` alone drives the length/name checks — "when NOT to use it"
+ *  legitimately contains none of that shape. */
 export function validateDescription(
+  name: string,
   whenToUse: string,
   composed: string,
   others: { label: string; description: string }[],
 ): DescriptionValidation {
   const trimmed = composed.trim();
+  const when = whenToUse.trim();
   let blocking: string | null = null;
   if (trimmed === "") {
     blocking =
       "Claude Code skips an agent file with no description entirely — it never loads, and nothing but the debug log says why.";
-  } else if (wordCount(whenToUse) < 15 || !hasTriggerLanguage(whenToUse)) {
+  } else if (when.length < 20) {
     blocking =
-      "This description doesn't say when to use the agent. The file will be created and valid, but Claude Code will never choose to invoke it.";
+      "Too short to dispatch on. Claude Code matches this text against the task at hand — a handful of characters matches everything or nothing.";
+  } else if (when.toLowerCase() === name.trim().toLowerCase()) {
+    blocking =
+      "This just repeats the agent's name. Claude Code has the name already; the description is the only place that says when to reach for it.";
   }
-  const identityWarning = looksIdentityShaped(whenToUse);
+  const tip = when !== "" && !/^use when\b/i.test(when) ? WHEN_TO_USE_TIP : null;
   const mine = significantWords(whenToUse);
   let overlapWarning: string | null = null;
   let best = 0;
@@ -398,7 +289,7 @@ export function validateDescription(
       overlapWarning = o.label;
     }
   }
-  return { blocking, identityWarning, overlapWarning };
+  return { blocking, tip, overlapWarning };
 }
 
 export function DescriptionEditor({
@@ -425,9 +316,16 @@ export function DescriptionEditor({
           disabled={disabled}
           onChange={(e) => onChangeWhenToUse(e.target.value)}
           rows={2}
-          placeholder="Use this agent when a pull request touches the payments module, to check for…"
+          placeholder="Use when a pull request touches the payments module, to check for…"
           className="min-h-[44px] max-h-[30vh] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm leading-snug text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
         />
+        {/* Block 3b — guidance BEFORE the first keystroke, not a red line
+            after it: the field is the dispatch contract, and the user has
+            no way to know that from an empty box. */}
+        <p className="pt-1 text-2xs leading-snug text-content-muted">
+          Claude Code reads this to decide when to dispatch the agent — one sentence about the
+          situation, not the agent's job title.
+        </p>
       </div>
       <div>
         <FieldLabel>When not to use it (optional)</FieldLabel>
@@ -443,11 +341,8 @@ export function DescriptionEditor({
       {validation.blocking !== null && (
         <p className="text-xs leading-snug text-danger-text">{validation.blocking}</p>
       )}
-      {validation.blocking === null && validation.identityWarning && (
-        <p className="text-2xs leading-snug text-amber-text">
-          Reads like a bio ("A senior … who…") rather than dispatch instructions — consider
-          rephrasing around WHEN to reach for this agent.
-        </p>
+      {validation.blocking === null && validation.tip !== null && (
+        <p className="text-2xs leading-snug text-content-secondary">{validation.tip}</p>
       )}
       {validation.blocking === null && validation.overlapWarning !== null && (
         <p className="text-2xs leading-snug text-amber-text">
@@ -891,7 +786,21 @@ export function AgentEditor({
       label: a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName,
       description: a.fields.description ?? "",
     }));
-  const descriptionValidation = validateDescription(whenToUse, joinDescription(whenToUse, whenNotToUse), others);
+  const descriptionValidation = validateDescription(
+    draft.fields.name ?? doc.fileName,
+    whenToUse,
+    joinDescription(whenToUse, whenNotToUse),
+    others,
+  );
+
+  // Block 3a — provider is the sidecar's, or a guess from the model id for
+  // an agent Cowtext never wrote. Where the MODEL lives follows from the
+  // provider (A-20): Anthropic keeps it in the file's own `model:` key
+  // (D-13), everyone else in the sidecar, because their agent formats have
+  // no field for it. Two homes, never both — so the picker reads from
+  // whichever one the current provider owns and the other stays null.
+  const provider = providerOf(m.provider, draft.fields.model);
+  const pickedModel = provider === "anthropic" ? draft.fields.model : m.model;
 
   // E2 order: identity → dispatch → system prompt → runtime → local-only
   // (last, quieter). Avatar/nickname/priority/influence are ALL local-only
@@ -1090,9 +999,22 @@ export function AgentEditor({
             <FieldLabel>Model</FieldLabel>
             <ModelPicker
               key={doc.fileName}
-              value={draft.fields.model}
+              provider={provider}
+              model={pickedModel}
               disabled={disabled}
-              onChange={(v) => patchFields({ model: v })}
+              onChange={(v) => {
+                // Provider always persists (sidecar). `model:` reaches the
+                // agent file for Anthropic only — for anyone else it is
+                // dropped from frontmatter, so a stale Claude model can
+                // never survive a switch to OpenAI (D-13) — and the pick is
+                // written to the sidecar instead, in the same call, so it
+                // is still there when this panel is reopened (A-20).
+                updateMeta(doc.fileName, {
+                  provider: v.provider,
+                  model: v.provider === "anthropic" ? null : v.model,
+                });
+                patchFields({ model: v.provider === "anthropic" ? v.model : null });
+              }}
             />
           </div>
           <div>
@@ -1134,7 +1056,7 @@ export function AgentEditor({
       <div className="flex flex-col gap-3 rounded border border-border-subtle bg-surface-inset p-3">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">Local only</span>
-          <LocalOnlyBadge />
+          <LocalOnlyBadge hint={AGENT_LOCAL_HINT} />
         </div>
         <div className="flex items-start gap-3">
           <button

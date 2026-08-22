@@ -17,9 +17,20 @@
 // keys — a section added by a later release therefore starts open with no
 // migration, and the panel doesn't reset itself on restart.
 
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, type LucideIcon } from "lucide-react";
 import { useSettingsStore } from "../store/settings";
+
+/** Collapse state for `defaultCollapsed` sections (WO15 D-18).
+ *
+ *  AppSettings.collapsedSections stores only the COLLAPSED exceptions, which
+ *  is exactly the wrong shape for a section that starts closed: persisting
+ *  "Advanced is open" would need a second, opposite-polarity list. D-18 rules
+ *  that a start-closed section keeps SESSION-local state instead — so
+ *  expanding Advanced sticks while you tour nodes (the panel remounts per
+ *  selection, so component state alone would forget it on every click) and
+ *  quietly resets on the next launch. Module scope, keyed by sectionKey. */
+const sessionCollapsed = new Map<string, boolean>();
 
 export function InspectorSection({
   sectionKey,
@@ -34,6 +45,11 @@ export function InspectorSection({
    *  already carries its own padding (WO11 D1 — AgentEditor) — avoids a
    *  visible double-padding seam without touching that component's file. */
   bodyClassName,
+  /** Starts closed and keeps its collapse SESSION-local, never in
+   *  AppSettings (WO15 D-18) — for a section whose contents are a footnote
+   *  (Advanced: canvas position), not something you want back open on every
+   *  node you click. */
+  defaultCollapsed,
   children,
 }: {
   sectionKey: string;
@@ -41,17 +57,33 @@ export function InspectorSection({
   icon: LucideIcon;
   hint?: string;
   bodyClassName?: string;
+  defaultCollapsed?: boolean;
   children: ReactNode;
 }) {
-  const collapsed = useSettingsStore((s) => s.collapsedSections.includes(sectionKey));
+  const persistedCollapsed = useSettingsStore((s) => s.collapsedSections.includes(sectionKey));
   const setSectionCollapsed = useSettingsStore((s) => s.setSectionCollapsed);
+  const [sessionState, setSessionState] = useState(
+    () => sessionCollapsed.get(sectionKey) ?? defaultCollapsed === true,
+  );
+  const session = defaultCollapsed === true;
+  const collapsed = session ? sessionState : persistedCollapsed;
   const bodyId = useId();
+
+  const toggle = () => {
+    const next = !collapsed;
+    if (session) {
+      sessionCollapsed.set(sectionKey, next);
+      setSessionState(next);
+    } else {
+      setSectionCollapsed(sectionKey, next);
+    }
+  };
 
   return (
     <section className="flex flex-col border-b border-border-subtle">
       <button
         type="button"
-        onClick={() => setSectionCollapsed(sectionKey, !collapsed)}
+        onClick={toggle}
         aria-expanded={!collapsed}
         aria-controls={bodyId}
         // Same 26px header ramp the left rail's section headers use, so the

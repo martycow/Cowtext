@@ -144,7 +144,18 @@ export function TwoPaneModal({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        style={{ width: "min(1180px, 92vw)", height: "min(760px, 88vh)" }}
+        style={{
+          // The vw/vh halves are divided by `--ui-scale` in place, following
+          // the convention `tokens.css` documents (rule 4) and `index.css`
+          // applies to every `max-h-[Nvh]` utility: inside a `zoom`ed chrome
+          // container a viewport unit still resolves against the UNSCALED
+          // viewport and is then multiplied by the zoom, so at 130 % a plain
+          // `88vh` panel is ~114 vh tall and its footer sits below the fold.
+          // A stylesheet rule cannot reach an inline style, so this
+          // declaration has to carry the correction itself.
+          width: "min(1180px, calc(92vw / var(--ui-scale)))",
+          height: "min(760px, calc(88vh / var(--ui-scale)))",
+        }}
         className="flex flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         {/* Header — 44px */}

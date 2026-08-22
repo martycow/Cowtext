@@ -939,7 +939,11 @@ export function NodeWizard({
               />
             </div>
             <div>
-              <FieldLabel>Type</FieldLabel>
+              {/* WO15 Block 1.1 — "Node type" is the one name this concept
+                  has, everywhere: this label, the Inspector field, the card
+                  footer and the `?` popover. "Type" alone read as a file
+                  type. */}
+              <FieldLabel>Node type</FieldLabel>
               <RoleGrid
                 role={d.role}
                 onChange={(r) => {

@@ -24,6 +24,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
+  Bot,
   FileCode,
   FilePlus2,
   FolderOpen,
@@ -37,6 +38,9 @@ import {
 } from "lucide-react";
 import { useProjectStore } from "../store/project";
 import { useSettingsStore } from "../store/settings";
+import { useUiStore } from "../store/ui";
+import { NODE_TYPE_BY_ROLE } from "../config/nodeTypes";
+import { legalityFor } from "../config/edgeRules";
 import {
   GRAPH_VERSION,
   canonPath,
@@ -53,7 +57,7 @@ import type { AssembleMode } from "../assemble/types";
 import { revealPath } from "../fs/api";
 import { activityEmphasis, brightnessFor, useLensTickStore, weightEmphasis } from "./lens";
 import { RoleGlyph, roleVar } from "./RoleGlyphs";
-import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
+import { DEFAULT_PRIORITY, metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { shortModelLabel } from "../agents/modelCatalog";
 import { portHeight } from "./portSlots";
@@ -94,6 +98,7 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const setInspectorTab = useInspectorTabStore((s) => s.setTab);
   const requestRename = useInspectorTabStore((s) => s.requestRename);
   const role = roleVar(node.role);
+  const nodeType = NODE_TYPE_BY_ROLE[node.role];
   // Agent-backed nodes wear their identity avatar instead of the role glyph.
   const agentBacked = isAgentFile(node.filePath);
   // WO11_CONTRACT.md §10.5 — a bare "/" split left a Windows backslash path
@@ -274,6 +279,13 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   const openMenu = (e: React.MouseEvent) => {
     if (root === null) return;
     const protectedFile = isRenameProtected(node.filePath);
+    // Fix round (tester #2) — see the "New agent from this node…" row below.
+    // `false` for the deprecation axis is deliberate: this asks whether the
+    // node's ROLE can ever be imported, which is a permanent property, not
+    // whether this particular node happens to be deprecated right now (a
+    // state one Inspector toggle away, and one that would need a different
+    // sentence than the role hint below).
+    const agentCannotImport = legalityFor("agent", "imports", node.role, false).legality === "deny";
     const items: MenuItem[] = [
       file === undefined
         ? {
@@ -330,6 +342,36 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
               setInspectorTab("markdown");
             },
           },
+      // WO15 Block 5b — the second half of "an agent is created FROM the
+      // context it reads": the wizard opens with this node already named as
+      // the agent's context, and the new agent plate lands one card-pitch to
+      // the right (320 = 244px card + a 76px gutter) so the `imports` wire
+      // it draws has somewhere to go. The wizard (U3) owns what it does with
+      // the prefill; this row only states the intent.
+      //
+      // Fix round (tester #2): the wizard's last act is `addEdge({ source:
+      // <the new agent>, target: node.id, kind: "imports" })`
+      // (`NewAgentDialog.tsx:437-441`), and `addEdge` returns null — silently,
+      // nothing is surfaced — when `edgeRules` denies that edge. On a Command
+      // or Skill node this row therefore promised a Context row that no wire
+      // could ever back. The question is put to the SAME resolver the store
+      // enforces (`legalityFor`, with `agent` — the role `adoptFile` gives
+      // every `.claude/agents/*.md` node — as the source), never a hard-coded
+      // list of roles, so the row's enabled state moves with §7.3's table on
+      // its own.
+      {
+        kind: "item",
+        id: "new-agent-from-node",
+        label: "New agent from this node…",
+        icon: Bot,
+        disabled: agentCannotImport,
+        hint: agentCannotImport ? `Agents can't import ${nodeType.label} nodes` : undefined,
+        onSelect: () =>
+          useUiStore.getState().openAgentWizard({
+            position: { x: node.position.x + 320, y: node.position.y },
+            contextNodeId: node.id,
+          }),
+      },
       {
         kind: "item",
         id: "rename",
@@ -494,7 +536,11 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
   // a priority tag (the model lives on the portrait nameplate instead).
   const tagRow = (
     <div className="flex items-center gap-1">
-      {agentBacked && <span className={TAG}>{`P${agentMeta?.priority ?? 3}`}</span>}
+      {/* D-19: one source of truth for the priority default — a sidecar
+          entry with no `priority` key reads the same `1` the store and the
+          agent editor use, not a second hard-coded `3` that disagreed with
+          both. */}
+      {agentBacked && <span className={TAG}>{`P${agentMeta?.priority ?? DEFAULT_PRIORITY}`}</span>}
       <span className={TAG} title="file size / 4 — estimate">
         {file !== undefined ? `${formatTokenCount(tokensForBytes(file.sizeBytes))} tok file` : "0 tok file"}
       </span>
@@ -639,11 +685,17 @@ function MemoryNodeCardInner({ data, selected }: NodeProps<CanvasNode>) {
           {orderTag}
           <div className="flex flex-col gap-1.5 pb-2 pl-8 pr-2.5 pt-[5px]">
             <div className="flex h-[14px] items-center gap-1.5 pr-[22px]">
+              {/* WO15 Block 1 — the plate shows the node type's LABEL, not
+                  the stored role id, and the tooltip carries the one-line
+                  hint. Same source of truth as the wizard grid and the
+                  Inspector's Node type field (`config/nodeTypes.ts`), so the
+                  three surfaces can't drift. CSS uppercase, as before. */}
               <span
                 className="truncate font-pixel text-[8px] uppercase leading-none"
                 style={{ color: role }}
+                title={`Node type: ${nodeType.label} — ${nodeType.hint}`}
               >
-                {node.role}
+                {nodeType.label}
               </span>
               <div className="flex-1" />
               {liveAndPin}

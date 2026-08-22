@@ -18,6 +18,9 @@ import {
 import { compilePreview, compileWrite } from "./api";
 import { play as sfxPlay } from "../scene/sfx";
 import { diffLines, type DiffHunk } from "../ui/diff";
+import { flushMetaSave, useAgentsStore } from "../store/agents";
+import { useBuiltinSkillStates } from "../agents/builtinSkills";
+import { skillsMaterialize } from "../agents/api";
 import type { CompilePreview, PreviewFile, ValidationError } from "./types";
 
 type Phase = "loading" | "errors" | "preview" | "writing" | "done" | "failed";
@@ -43,7 +46,7 @@ const ROOT_FILE: Partial<Record<CompileTarget, string>> = {
 };
 
 interface TargetBudget {
-  target: CompileTarget | "agent";
+  target: CompileTarget | "agent" | "skill";
   totalTokens: number;
   warn: boolean;
   warnReason: string | null;
@@ -410,7 +413,51 @@ export function CompileModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [canClose, onClose]);
 
-  const files = useMemo(() => preview?.files ?? [], [preview]);
+  // ── Built-in skills (Block 4, A-14) ─────────────────────────────────
+  //
+  // These rows are NOT compiler output: `compile.rs` is forbidden from
+  // writing `.claude/skills/` (D-4), and a SKILL.md cannot carry a line-1
+  // GENERATED header. The modal adds them so the one place that shows "what
+  // is about to be written" stays the whole truth, and `skills_materialize`
+  // writes them after `compile_write` returns.
+  //
+  // `modified` built-ins never appear: a user-edited skill would be
+  // silently clobbered, and reset is an explicit rail action instead.
+  const builtins = useBuiltinSkillStates();
+  const skillRows = useMemo(
+    () =>
+      builtins
+        .filter((b) => b.include && b.state !== "modified")
+        .map((b) => ({
+          id: b.id,
+          file: {
+            relPath: `.claude/skills/${b.id}/SKILL.md`,
+            target: "skill" as const,
+            oldContent: b.onDisk?.content ?? null,
+            newContent: b.content,
+            handwritten: false,
+            unchanged: b.state === "materialized",
+          } satisfies PreviewFile,
+        })),
+    [builtins],
+  );
+  const skillIdByPath = useMemo(
+    () => new Map(skillRows.map((r) => [r.file.relPath, r.id])),
+    [skillRows],
+  );
+
+  // Gated on `preview`, not merged unconditionally: while the compile
+  // preview is loading there is no file list yet, and a lone skill row
+  // would flash a budget bar for a compile that hasn't been read out.
+  const files = useMemo(
+    () => (preview === null ? [] : [...preview.files, ...skillRows.map((r) => r.file)]),
+    [preview, skillRows],
+  );
+
+  // A row the preview effect never seeded (a skill toggled on while the
+  // modal was open) falls back to the same rule that effect uses.
+  const isApproved = (f: PreviewFile) => approved[f.relPath] ?? (!f.unchanged && !f.handwritten);
+  const isCollapsed = (f: PreviewFile) => collapsed[f.relPath] ?? f.unchanged;
 
   const diffs = useMemo(() => {
     const map = new Map<string, { hunks: DiffHunk[]; adds: number; dels: number }>();
@@ -444,13 +491,19 @@ export function CompileModal({
   // into their own budget row keeps that weight visible instead of silently
   // dropping it from every total on screen.
   const targetBudgets = useMemo<TargetBudget[]>(() => {
-    const TARGET_ROW_ORDER: readonly (CompileTarget | "agent")[] = [...ALL_TARGETS, "agent"];
+    const TARGET_ROW_ORDER: readonly (CompileTarget | "agent" | "skill")[] = [
+      ...ALL_TARGETS,
+      "agent",
+      "skill",
+    ];
     const out: TargetBudget[] = [];
     for (const t of TARGET_ROW_ORDER) {
       const targetFiles = files.filter((f) => f.target === t);
       if (targetFiles.length === 0) continue;
       const totalTokens = targetFiles.reduce((sum, f) => sum + compiledTokens(f.newContent), 0);
-      const rootName = t === "agent" ? undefined : ROOT_FILE[t];
+      // Neither "agent" nor "skill" has a single root file to budget
+      // against — both are per-item outputs, so they total and never warn.
+      const rootName = t === "agent" || t === "skill" ? undefined : ROOT_FILE[t];
       const root = rootName !== undefined ? targetFiles.find((f) => f.relPath === rootName) : undefined;
       let warn = false;
       let warnReason: string | null = null;
@@ -473,7 +526,7 @@ export function CompileModal({
     return out;
   }, [files]);
 
-  const approvedFiles = files.filter((f) => approved[f.relPath] === true);
+  const approvedFiles = files.filter((f) => isApproved(f));
   const handwrittenApproved = approvedFiles.filter((f) => f.handwritten).length;
   const frozen = phase === "writing";
 
@@ -488,14 +541,53 @@ export function CompileModal({
     if (approvedFiles.length === 0 || frozen) return;
     setPhase("writing");
     setErrText(null);
-    compileWrite(
-      root,
-      approvedFiles.map((f) => ({ relPath: f.relPath, content: f.newContent })),
-    )
-      .then((paths) => {
-        setWritten(paths);
+    const skillApproved = approvedFiles.filter((f) => f.target === "skill");
+    const compileApproved = approvedFiles.filter((f) => f.target !== "skill");
+    // The include toggles ride the 700 ms sidecar debounce. Flush before the
+    // first await so `.cowtext/agents.json` records the toggle that put this
+    // skill in the write set, in the same breath as the file it describes.
+    if (skillApproved.length > 0) flushMetaSave();
+    void (async () => {
+      // Two writers, in this order (D-4): the compiler first, then the
+      // skills. A skill failure after this line must NOT throw away the
+      // compile result — the files are on disk, and saying otherwise would
+      // send the user looking for damage that isn't there.
+      const compiled =
+        compileApproved.length > 0
+          ? await compileWrite(
+              root,
+              compileApproved.map((f) => ({ relPath: f.relPath, content: f.newContent })),
+            )
+          : [];
+      let skillWritten: string[] = [];
+      let skillErr: string | null = null;
+      if (skillApproved.length > 0) {
+        try {
+          const res = await skillsMaterialize(
+            root,
+            skillApproved.map((f) => ({
+              id: skillIdByPath.get(f.relPath) ?? "",
+              content: f.newContent,
+            })),
+          );
+          skillWritten = res.written;
+          // A-21 — re-scan the skills ONLY. `loadAgents` is a project-open
+          // reset: it clears drafts, the rail selection and every autosave
+          // timer, so compiling would throw away a skill edit the user has
+          // not saved yet (skills have no autosave). A Compile must never
+          // cost the user work in an unrelated editor.
+          await useAgentsStore.getState().reloadSkills(root);
+        } catch (e: unknown) {
+          skillErr = String(e);
+        }
+      }
+      return { written: [...compiled, ...skillWritten], skillErr };
+    })()
+      .then(({ written: landed, skillErr }) => {
+        setWritten(landed);
+        setErrText(skillErr);
         setPhase("done");
-        sfxPlay("compile_ok");
+        sfxPlay(skillErr === null ? "compile_ok" : "error_soft");
         // New files (e.g. .cursor/rules/) should appear in the file rail.
         void useProjectStore.getState().rescan();
       })
@@ -615,6 +707,13 @@ export function CompileModal({
             </ul>
           ) : phase === "done" ? (
             <div className="flex flex-col gap-2 p-4">
+              {/* The compile landed; a built-in skill did not. Both facts
+                  are true, so both are on screen. */}
+              {errText !== null && (
+                <div className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
+                  {`Built-in skills were not written: ${errText}`}
+                </div>
+              )}
               <p className="text-sm text-content">
                 wrote {written.length} {written.length === 1 ? "file" : "files"}
               </p>
@@ -650,14 +749,14 @@ export function CompileModal({
                       hunks={d.hunks}
                       adds={d.adds}
                       dels={d.dels}
-                      approved={approved[f.relPath] === true}
-                      collapsed={collapsed[f.relPath] === true}
+                      approved={isApproved(f)}
+                      collapsed={isCollapsed(f)}
                       frozen={frozen}
                       onToggleApproved={() =>
-                        setApproved((a) => ({ ...a, [f.relPath]: a[f.relPath] !== true }))
+                        setApproved((a) => ({ ...a, [f.relPath]: !isApproved(f) }))
                       }
                       onToggleCollapsed={() =>
-                        setCollapsed((c) => ({ ...c, [f.relPath]: c[f.relPath] !== true }))
+                        setCollapsed((c) => ({ ...c, [f.relPath]: !isCollapsed(f) }))
                       }
                     />
                   );

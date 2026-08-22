@@ -144,6 +144,45 @@ async fn an_unresolvable_binary_is_reported_absent() {
     // The identity fields still come back, so the panel can render the row.
     assert_eq!(got.name, "Not Installed");
     assert_eq!(got.emits, "NOTHING.md");
+    // WO15 Block 5a: the row is measured even when the answer is "absent",
+    // and a PATH miss must never approach the version timeout — nothing was
+    // spawned. The slack absorbs a loaded CI box, not a hung child.
+    assert!(
+        got.elapsed_ms <= 3_500,
+        "an absent binary took {} ms",
+        got.elapsed_ms
+    );
+}
+
+/// The timeout is a user-facing promise (the title screen scans on mount),
+/// so it is pinned rather than merely written down.
+#[test]
+fn version_timeout_is_three_seconds() {
+    assert_eq!(VERSION_TIMEOUT, Duration::from_secs(3));
+}
+
+/// `absent()` is the base row every other row is built from, so a stale
+/// duration leaking through `..absent(p)` would be invisible. Pin the zero.
+#[test]
+fn absent_rows_report_no_elapsed_time() {
+    for p in PROBES {
+        assert_eq!(absent(p).elapsed_ms, 0, "{} absent row carries a duration", p.id);
+    }
+}
+
+/// The wire name `src/project/toolchain.ts` reads is `elapsedMs`, not
+/// `elapsed_ms` — the `rename_all` attribute is load-bearing, so pin it.
+#[test]
+fn wire_shape_is_camel_case() {
+    let row = AiTool {
+        elapsed_ms: 42,
+        ..absent(&PROBES[0])
+    };
+    let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
+    assert_eq!(v["elapsedMs"], 42);
+    assert!(v.get("elapsed_ms").is_none());
+    assert_eq!(v["found"], false);
+    assert_eq!(v["id"], "claude");
 }
 
 /// The command always answers with one row per target, in table order —

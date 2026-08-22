@@ -15,29 +15,41 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ImagePlus, Pencil, RefreshCw, Trash2 } from "lucide-react";
-import { useAgentsStore, type Selection } from "../store/agents";
+import { DEFAULT_PRIORITY, useAgentsStore, type Selection } from "../store/agents";
 import {
+  AGENT_LOCAL_HINT,
   DescriptionEditor,
   FieldRow,
   FieldLabel,
-  LocalOnlyBadge,
-  ModelPicker,
   RuntimeLimits,
   Stepper,
   SystemPromptEditor,
   joinDescription,
   validateDescription,
 } from "../agents/AgentEditor";
+import { ModelPicker } from "../agents/ModelPicker";
+import { providerForModel } from "../agents/modelCatalog";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { ToolsField } from "../agents/ToolPicker";
+import { useBuiltinSkillStates } from "../agents/builtinSkills";
 import { normalizeFileName, slugForFile } from "../wizard/paths";
 import { ContextMenu } from "../ui/ContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import { TwoPaneModal } from "../ui/TwoPaneModal";
 import { PreviewPane, type PreviewTab } from "../ui/PreviewPane";
+import { LocalOnlyBadge } from "../ui/LocalOnlyBadge";
 import type { PreviewFile } from "../compile/types";
-import { pushToastWithAction } from "../store/toasts";
-import type { FmFields } from "../agents/types";
+import { pushToast, pushToastWithAction } from "../store/toasts";
+import { useGraphStore } from "../store/graph";
+import { NODE_TYPE_BY_ROLE } from "../config/nodeTypes";
+import { useUiStore } from "../store/ui";
+import {
+  AGENT_PRESETS,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_PROVIDER,
+  type AgentPreset,
+} from "../resources";
+import type { FmFields, ProviderId } from "../agents/types";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -142,14 +154,37 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const select = useAgentsStore((s) => s.select);
   const skills = useAgentsStore((s) => s.skills);
   const agents = useAgentsStore((s) => s.agents);
+  const setBuiltinInclude = useAgentsStore((s) => s.setBuiltinInclude);
+  const builtins = useBuiltinSkillStates();
+
+  // Block 5b — the canvas menus open this wizard with a prefill; the rail's
+  // plain "Create agent" opens it with none. Read once per render, never
+  // copied into local state: `openAgentWizard` resets both fields, and a
+  // stale copy is exactly how the last node's id leaks into the next agent.
+  const agentWizard = useUiStore((s) => s.agentWizard);
+  const nodes = useGraphStore((s) => s.nodes);
+  const adoptFile = useGraphStore((s) => s.adoptFile);
+  const addEdge = useGraphStore((s) => s.addEdge);
+  const contextNode =
+    agentWizard.contextNodeId === null
+      ? null
+      : (nodes.find((n) => n.id === agentWizard.contextNodeId) ?? null);
 
   const [name, setName] = useState("");
   const [fileName, setFileName] = useState("");
   const [fileNameTouched, setFileNameTouched] = useState(false);
   const [fileEditOpen, setFileEditOpen] = useState(false);
   const [withMemory, setWithMemory] = useState(true);
-  const [model, setModel] = useState<string | null>(null);
-  const [priority, setPriority] = useState(3);
+  const [provider, setProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
+  const [model, setModel] = useState<string | null>(DEFAULT_AGENT_MODEL);
+  const [priority, setPriority] = useState(DEFAULT_PRIORITY);
+  const [presetId, setPresetId] = useState<string | null>(null);
+  // Bumped by every preset click: `ToolsField` derives its inherit/restrict
+  // radio from `tools` ONCE (useState initialiser), so a preset that fills
+  // tools behind its back would leave the radio showing the old mode. A
+  // remount is the honest fix — the alternative is a second copy of that
+  // mode rule living here.
+  const [presetNonce, setPresetNonce] = useState(0);
   const [influence, setInfluence] = useState(50);
   const [nickname, setNickname] = useState("");
   const [tools, setTools] = useState<string[]>([]);
@@ -157,6 +192,9 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const [maxTurns, setMaxTurns] = useState<string | null>(null);
   const [permissionMode, setPermissionMode] = useState<string | null>(null);
   const [skillNames, setSkillNames] = useState<string[]>([]);
+  // Tester #5 — built-in ids whose compile toggle this modal INTENDS to turn
+  // on. Held here, applied in `submit` only: see `toggleBuiltinSkill`.
+  const [pendingBuiltinIncludes, setPendingBuiltinIncludes] = useState<string[]>([]);
   const [whenToUse, setWhenToUse] = useState("");
   const [whenNotToUse, setWhenNotToUse] = useState("");
   const [duties, setDuties] = useState("");
@@ -236,12 +274,97 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     setSkillNames((cur) => (cur.includes(name_) ? cur.filter((x) => x !== name_) : [...cur, name_]));
   };
 
+  /** D-20 — attaching a VIRTUAL built-in also turns its compile toggle on.
+   *  Without this the agent's `skills:` would name a file that never gets
+   *  written: the skill is bundled, not on disk, until a compile
+   *  materialises it.
+   *
+   *  Tester #5 — that toggle is NOT flipped here. `setBuiltinInclude` rides
+   *  the 700 ms sidecar debounce, so ticking a box would put
+   *  `.cowtext/agents.json` on disk while this modal is still open and the
+   *  footer is still promising "Nothing is written until you confirm"
+   *  (§7.6). The intent is parked in `pendingBuiltinIncludes` and applied in
+   *  `submit`, after `createAgent` succeeds; Cancel drops it and writes
+   *  nothing. Detaching deliberately does NOT turn it back off — another
+   *  agent may rely on it, and un-including is a Skills-rail decision, not
+   *  a side effect of this checkbox. */
+  const toggleBuiltinSkill = (id: string, label: string, virtual: boolean) => {
+    const attaching = !skillNames.includes(label);
+    toggleSkill(label);
+    if (attaching && virtual) {
+      setPendingBuiltinIncludes((cur) => (cur.includes(id) ? cur : [...cur, id]));
+    }
+  };
+
+  /** Block 3c — a preset fills the fields and then gets out of the way:
+   *  every one of them stays editable, and nothing is written anywhere
+   *  until Create. `Custom` clears back to the blank sheet. */
+  const applyPreset = (preset: AgentPreset | null) => {
+    setPresetId(preset?.id ?? null);
+    setPresetNonce((n) => n + 1);
+    if (preset === null) {
+      setName("");
+      setDuties("");
+      setWhenToUse("");
+      setTools([]);
+      setPriority(DEFAULT_PRIORITY);
+      setModel(DEFAULT_AGENT_MODEL);
+      setProvider(DEFAULT_PROVIDER);
+      return;
+    }
+    setName(preset.name);
+    setDuties(preset.description);
+    setWhenToUse(preset.whenToUse);
+    setTools(preset.mode === "inherit" ? [] : preset.tools);
+    setPriority(preset.priority);
+    if (preset.model !== undefined) {
+      setModel(preset.model);
+      setProvider(providerForModel(preset.model) ?? DEFAULT_PROVIDER);
+    }
+  };
+
   const composedDescription = joinDescription(whenToUse, whenNotToUse);
   const others = agents.map((a) => ({
     label: a.fields.name !== null && a.fields.name !== "" ? a.fields.name : a.fileName,
     description: a.fields.description ?? "",
   }));
-  const descriptionValidation = validateDescription(whenToUse, composedDescription, others);
+  const descriptionValidation = validateDescription(name, whenToUse, composedDescription, others);
+
+  // D-13 — `model:` is written for Anthropic only; every other provider
+  // keeps the key out of the file (the picker says so with LocalOnlyBadge).
+  const frontmatterModel = provider === "anthropic" ? model : null;
+
+  // Block 4 — built-ins first (they exist in a project with no
+  // `.claude/skills/` at all), then the project's own. A built-in the user
+  // edited on disk is listed ONCE, from the built-in row, wearing the badge
+  // that says where it came from (D-5).
+  const skillRows = [
+    ...builtins.map((b) => ({
+      key: `builtin:${b.id}`,
+      builtinId: b.id,
+      virtual: b.state === "virtual",
+      label:
+        b.onDisk !== null && b.onDisk.fields.name !== null && b.onDisk.fields.name !== ""
+          ? b.onDisk.fields.name
+          : b.name,
+      badge:
+        b.state === "virtual"
+          ? "bundled"
+          : b.state === "materialized"
+            ? "materialized"
+            : "modified from built-in",
+    })),
+    ...skills
+      .filter((sk) => !builtins.some((b) => b.id === sk.dirName))
+      .map((sk) => ({
+        key: `project:${sk.dirName}`,
+        builtinId: null,
+        virtual: false,
+        label: sk.fields.name !== null && sk.fields.name !== "" ? sk.fields.name : sk.dirName,
+        badge: null,
+      })),
+  ];
+  const attachedVirtual = skillRows.some((r) => r.virtual && skillNames.includes(r.label));
 
   const canSubmit = name.trim() !== "" && !collision && !busy && descriptionValidation.blocking === null;
 
@@ -276,7 +399,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
           const patchedFields: FmFields = {
             ...doc.fields,
             description: composedDescription === "" ? null : composedDescription,
-            model,
+            model: frontmatterModel,
             tools,
             skills: skillNames,
             disallowedTools,
@@ -309,10 +432,69 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
         priority,
         influence,
         avatarSeed,
+        // D-13 / A-20 — the provider is recorded whether or not it reached
+        // the file, so reopening the agent shows the chip the user picked;
+        // the model rides the sidecar for exactly the providers whose file
+        // format has no `model:` key. Anthropic writes it to frontmatter
+        // instead (see `frontmatterModel`), so the sidecar stores `null` —
+        // one home per value, never two that can disagree.
+        provider,
+        model: provider === "anthropic" ? null : model,
       });
-      return createdFileName;
+      // Tester #5 — the deferred include toggles land here, on the same
+      // sidecar debounce as the `updateMeta` above (one write, not two).
+      // Reached only after `createAgent` and every post-create step
+      // succeeded: the rollback path above throws before this line. Only
+      // ids the agent is STILL attached to are applied — deferring made
+      // attach-then-detach observable, and turning on a compile toggle for
+      // a skill nothing references would add an unreferenced file to the
+      // next Compile's write set. (An id already on stays on: this only
+      // ever writes `true`.)
+      for (const id of pendingBuiltinIncludes) {
+        const row = skillRows.find((r) => r.builtinId === id);
+        if (row !== undefined && skillNames.includes(row.label)) setBuiltinInclude(id, true);
+      }
+
+      // Block 5b — placement, then the edge. Adopt first even when only a
+      // context node was named: `addEdge` needs a source, and an agent with
+      // no node has none. `adoptFile` is idempotent and returns the id
+      // either way (D-17).
+      let edgeWarning: string | null = null;
+      if (agentWizard.position !== null || agentWizard.contextNodeId !== null) {
+        const agentNodeId = adoptFile(
+          `.claude/agents/${createdFileName}`,
+          name.trim(),
+          agentWizard.position ?? undefined,
+        );
+        if (agentWizard.contextNodeId !== null) {
+          const edgeId = addEdge({
+            source: agentNodeId,
+            target: agentWizard.contextNodeId,
+            kind: "imports",
+          });
+          // Tester #2 — `addEdge` returns null when `edgeRules` denies the
+          // pair (a `command` or `skill` node cannot be imported) or when
+          // the node vanished while the modal was open. The Context row
+          // promised an edge; staying silent about not drawing one is the
+          // lie. The canvas menu disables the item for those roles
+          // (FX-U4b) — this is the net under it, so it must survive the
+          // menu being right.
+          if (edgeId === null) {
+            const target = useGraphStore
+              .getState()
+              .nodes.find((n) => n.id === agentWizard.contextNodeId);
+            edgeWarning =
+              target === undefined
+                ? "Agent created, but the context node is no longer on the graph — no context edge was added."
+                : target.deprecated !== undefined
+                  ? "Agent created, but the context node is deprecated — no context edge was added."
+                  : `Agent created, but ${NODE_TYPE_BY_ROLE[target.role].label} nodes cannot be imported — no context edge was added.`;
+          }
+        }
+      }
+      return { fileName: createdFileName, edgeWarning };
     })()
-      .then((fileNameOk) => {
+      .then(({ fileName: fileNameOk, edgeWarning }) => {
         pushToastWithAction({
           severity: "success",
           title: "Agent created",
@@ -327,6 +509,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
             },
           },
         });
+        if (edgeWarning !== null) pushToast({ severity: "warning", title: edgeWarning });
         onClose();
       })
       .catch((e: unknown) => {
@@ -342,7 +525,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     newContent: composeAgentFile({
       name: name.trim(),
       description: composedDescription,
-      model,
+      model: frontmatterModel,
       tools,
       skills: skillNames,
       disallowedTools,
@@ -369,6 +552,46 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
           {error}
         </div>
       )}
+
+      {/* Block 5b — what the canvas asked for, in words, before any field.
+          The edge is drawn on Create; naming it here is the only warning
+          the user gets that this wizard is about to touch the graph. */}
+      {(contextNode !== null || agentWizard.position !== null) && (
+        <div className="flex items-center gap-2 rounded border border-accent-border bg-accent-surface px-2.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate text-xs text-accent-text">
+            {contextNode !== null
+              ? `Context: ${contextNode.title} — imported by this agent`
+              : "Placed on the canvas where you clicked"}
+          </span>
+        </div>
+      )}
+
+      {/* Preset — Block 3c */}
+      <div>
+        <FieldLabel>Preset</FieldLabel>
+        <div role="radiogroup" aria-label="Preset" className="flex flex-wrap items-center gap-1.5">
+          <PresetChip
+            label="Custom"
+            on={presetId === null}
+            disabled={busy}
+            title="Start from an empty sheet"
+            onClick={() => applyPreset(null)}
+          />
+          {AGENT_PRESETS.map((p) => (
+            <PresetChip
+              key={p.id}
+              label={p.name}
+              on={presetId === p.id}
+              disabled={busy}
+              title={p.whenToUse}
+              onClick={() => applyPreset(p)}
+            />
+          ))}
+        </div>
+        <p className="pt-1 text-2xs leading-snug text-content-muted">
+          Fills the fields below — every one of them stays editable.
+        </p>
+      </div>
 
       {/* Identity — Block A4 */}
       <div>
@@ -423,11 +646,20 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
       {/* Runtime — Block C/D */}
       <div>
         <FieldLabel>Model</FieldLabel>
-        <ModelPicker value={model} disabled={busy} onChange={setModel} />
+        <ModelPicker
+          provider={provider}
+          model={model}
+          disabled={busy}
+          onChange={(v) => {
+            setProvider(v.provider);
+            setModel(v.model);
+          }}
+        />
       </div>
       <div>
         <FieldLabel>Tools</FieldLabel>
         <ToolsField
+          key={`tools-${presetNonce}`}
           tools={tools}
           disallowedTools={disallowedTools}
           disabled={busy}
@@ -443,7 +675,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
         onChangePermissionMode={setPermissionMode}
       />
 
-      {skills.length > 0 && (
+      {skillRows.length > 0 && (
         <div>
           <FieldLabel>Skills</FieldLabel>
           <p className="mb-1 text-xs leading-snug text-content-muted">
@@ -451,21 +683,29 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
             intent only.
           </p>
           <ul className="flex flex-col gap-0.5 rounded border border-border-subtle bg-surface-inset p-1.5">
-            {skills.map((sk) => {
-              const label = sk.fields.name !== null && sk.fields.name !== "" ? sk.fields.name : sk.dirName;
-              return (
-                <li key={sk.dirName} className="flex h-[22px] items-center gap-2 px-1">
-                  <input
-                    type="checkbox"
-                    checked={skillNames.includes(label)}
-                    onChange={() => toggleSkill(label)}
-                    className="h-3 w-3 accent-[var(--accent)]"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-xs text-content">{label}</span>
-                </li>
-              );
-            })}
+            {skillRows.map((row) => (
+              <li key={row.key} className="flex h-[22px] items-center gap-2 px-1">
+                <input
+                  type="checkbox"
+                  checked={skillNames.includes(row.label)}
+                  onChange={() =>
+                    row.builtinId === null
+                      ? toggleSkill(row.label)
+                      : toggleBuiltinSkill(row.builtinId, row.label, row.virtual)
+                  }
+                  className="h-3 w-3 accent-[var(--accent)]"
+                />
+                <span className="min-w-0 flex-1 truncate text-xs text-content">{row.label}</span>
+                {row.badge !== null && <SkillBadge label={row.badge} />}
+              </li>
+            ))}
           </ul>
+          {attachedVirtual && (
+            <p className="pt-1 text-2xs leading-snug text-content-muted">
+              A bundled skill is written to .claude/skills/ by the next Compile — it is included
+              there for review first.
+            </p>
+          )}
         </div>
       )}
 
@@ -473,7 +713,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-3 rounded border border-border-subtle bg-surface-inset p-3">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-2xs uppercase tracking-wider text-content-muted">Local only</span>
-          <LocalOnlyBadge />
+          <LocalOnlyBadge hint={AGENT_LOCAL_HINT} />
         </div>
         <div className="flex items-center gap-3">
           <AvatarButton
@@ -577,6 +817,50 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
       footerNote="Nothing is written until you confirm."
       footer={footer}
     />
+  );
+}
+
+/** Block 3c chip. Blue = the user picked it (accent law); the whole row is
+ *  a radiogroup, so exactly one is ever on. */
+function PresetChip({
+  label,
+  on,
+  disabled,
+  title,
+  onClick,
+}: {
+  label: string;
+  on: boolean;
+  disabled: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={on}
+      disabled={disabled}
+      title={title}
+      onClick={onClick}
+      className={`flex h-control-sm flex-none items-center rounded border px-2 text-xs transition-colors duration-fast disabled:cursor-not-allowed disabled:opacity-60 ${
+        on
+          ? "border-accent-border bg-accent-surface text-accent-text"
+          : "border-border bg-surface-2 text-content-secondary hover:border-border-strong hover:text-content"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Neutral state chip — `bundled` / `materialized` / `modified from
+ *  built-in`. Not a warning, so not amber. */
+function SkillBadge({ label }: { label: string }) {
+  return (
+    <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-muted">
+      {label}
+    </span>
   );
 }
 

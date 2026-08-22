@@ -1,6 +1,15 @@
 // Git wizard (WO11 G2 — §5.10). Marty's ratified scope: `git init` if the
 // project is not already a repo, plus a `.gitignore` composer. No staging,
-// commits, branches or remotes — see WO11_CONTRACT.md §8.
+// remotes or pushes — see WO11_CONTRACT.md §8.
+//
+// WO15 Block 0 adds exactly one write to that scope: an opt-out "Make the
+// first commit" toggle on the init panel. It is opt-OUT (default on) because
+// a repo with no commit is a state most tools handle badly (no HEAD, no
+// diff, no `git log`), and the commit it makes is the empty-project one —
+// `.gitignore` + `.cowtext/` + `context/`, nothing the user has not already
+// seen this wizard create. Everything else about the commit lives in Rust
+// (§3.2): identity is checked BEFORE any mutation, an existing repo is never
+// re-initialised, and `.gitignore` lines are appended, never rewritten.
 //
 // Three states off one `git_status` probe, same shell idiom as
 // ProjectWizard/NodeWizard (~560px, surface-1, r-xl, elev-4, Esc, scrim
@@ -21,10 +30,11 @@
 // upstream states) does not depend on that shape.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FolderGit2, X } from "lucide-react";
+import { AlertTriangle, Check, FolderGit2, X } from "lucide-react";
 import { gitignoreWrite, gitInit, gitStatus } from "./api";
+import { BranchPicker, isValidBranchName } from "./BranchPicker";
 import { GITIGNORE_PRESETS } from "./gitignorePresets";
-import type { GitStatus } from "./types";
+import type { GitInitResult, GitStatus } from "./types";
 import { diffLines, type DiffHunk } from "../ui/diff";
 
 const ICON_BTN =
@@ -135,19 +145,61 @@ function DiffView({ hunks }: { hunks: DiffHunk[] }) {
   );
 }
 
-/** Mirrors `validate_branch` in `src-tauri/src/worktree.rs` (D1b: the same
- *  rule set `git_init`'s branch argument is validated against server-side).
- *  A client-side pre-check only — Rust re-validates and is the source of
- *  truth; this just avoids offering an Init button that would round-trip
- *  into a guaranteed error. */
-const INVALID_BRANCH_CHARS = ["~", "^", ":", "?", "*", "[", "\\"];
-function isValidBranchName(name: string): boolean {
-  if (name === "" || /\s/.test(name)) return false;
-  if (INVALID_BRANCH_CHARS.some((c) => name.includes(c))) return false;
-  if (name.startsWith("-")) return false;
-  if (name.includes("..")) return false;
-  if (name.endsWith(".lock")) return false;
-  return true;
+/** 34×19 pill toggle, accent-toned — this one is a user decision about the
+ *  user's own repository ("blue is you"), unlike ProjectWizard's amber hooks
+ *  toggle which promises agent behaviour. */
+function Toggle({
+  checked,
+  disabled = false,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast disabled:opacity-50 ${
+        checked ? "border-accent-border bg-accent-surface" : "border-border-strong bg-surface-2"
+      }`}
+    >
+      <span
+        className={`absolute top-[2px] h-[13px] w-[13px] rounded-pill transition-all duration-fast ${
+          checked ? "left-[16px] bg-accent" : "left-[2px] bg-content-muted"
+        }`}
+      />
+    </button>
+  );
+}
+
+/** The git identity the first commit will be attributed to — the same two
+ *  values Rust refuses to commit without (WO15 §3.2 `GIT_IDENTITY_ERR`).
+ *  Shown before the button that needs them, so "not configured" is
+ *  something you read rather than something you hit. */
+function IdentityRow({ status }: { status: GitStatus }) {
+  const configured = status.identityName !== null && status.identityEmail !== null;
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="flex-none font-mono text-2xs uppercase tracking-wider text-content-muted">
+        identity
+      </span>
+      <span
+        className={`min-w-0 flex-1 truncate font-mono text-xs ${
+          configured ? "text-content-secondary" : "text-warning-text"
+        }`}
+      >
+        {configured ? `${status.identityName} <${status.identityEmail}>` : "not configured"}
+      </span>
+    </div>
+  );
 }
 
 /** Composition rule, frozen (§5.10): existing content preserved verbatim and
@@ -217,12 +269,14 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
   const [reviewed, setReviewed] = useState(false);
 
   // D1b: default-branch choice offered at init time. Default "main" per
-  // contract; the resolved name (never null from this UI — the segmented
-  // control always picks one of the three) is what gets sent to `gitInit`.
-  const [branchChoice, setBranchChoice] = useState<"main" | "master" | "custom">("main");
-  const [customBranch, setCustomBranch] = useState("");
-  const resolvedBranch = branchChoice === "custom" ? customBranch.trim() : branchChoice;
-  const branchIsValid = isValidBranchName(resolvedBranch);
+  // contract; the resolved name (never null from this UI — `BranchPicker`
+  // always resolves to a string) is what gets sent to `gitInit`.
+  const [branch, setBranch] = useState("main");
+  const branchIsValid = isValidBranchName(branch);
+  // WO15 Block 0 — opt-out first commit. `false` here reproduces the
+  // pre-WO15 behaviour byte-for-byte (init, nothing else).
+  const [makeCommit, setMakeCommit] = useState(true);
+  const [initResult, setInitResult] = useState<GitInitResult | null>(null);
 
   const canClose = phase !== "initializing" && phase !== "writing";
 
@@ -264,9 +318,15 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
     if (!branchIsValid) return;
     setPhase("initializing");
     setErrText(null);
-    gitInit(root, resolvedBranch)
-      .then((s) => {
-        setStatus(s);
+    // WO15 §3.2: `gitInit` resolves to a `GitInitResult` envelope. With
+    // `commit` true this is a WRITE (a `.gitignore` append and one commit) —
+    // the toggle above the button is its approval, and a missing identity
+    // rejects before anything is created, so a failure here leaves the
+    // folder exactly as it was.
+    gitInit(root, branch, makeCommit)
+      .then((r) => {
+        setStatus(r.status);
+        setInitResult(r);
         setPhase("ready");
       })
       .catch((e: unknown) => {
@@ -406,49 +466,47 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                 <p className="truncate rounded border border-border-subtle bg-surface-inset px-2.5 py-1.5 font-mono text-xs text-content-secondary" title={root}>
                   {root}
                 </p>
-                <div>
-                  <p className="mb-1.5 font-mono text-2xs uppercase tracking-wider text-content-muted">
-                    default branch
-                  </p>
-                  <div className="flex items-center gap-1.5">
-                    <div className="flex h-control-sm flex-none overflow-hidden rounded border border-border">
-                      {(["main", "master", "custom"] as const).map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() => setBranchChoice(opt)}
-                          disabled={phase === "initializing"}
-                          className={`h-full px-2.5 font-mono text-xs transition-colors duration-fast disabled:opacity-50 ${
-                            branchChoice === opt
-                              ? "bg-accent-surface text-accent-text"
-                              : "bg-surface-2 text-content-muted hover:bg-surface-3"
-                          }`}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                    {branchChoice === "custom" && (
-                      <input
-                        type="text"
-                        value={customBranch}
-                        onChange={(e) => setCustomBranch(e.target.value)}
-                        disabled={phase === "initializing"}
-                        placeholder="branch-name"
-                        className="h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 font-mono text-xs text-content placeholder:text-content-disabled focus:border-accent disabled:opacity-50"
-                      />
-                    )}
-                  </div>
-                  {branchChoice === "custom" && !branchIsValid && (
-                    <p className="mt-1 text-2xs leading-snug text-content-muted">
-                      Branch name can&apos;t be empty, contain whitespace or any of{" "}
-                      <span className="font-mono">~^:?*[\</span>, start with{" "}
-                      <span className="font-mono">-</span>, contain{" "}
-                      <span className="font-mono">..</span>, or end with{" "}
-                      <span className="font-mono">.lock</span>.
+                <BranchPicker
+                  value={branch}
+                  onChange={setBranch}
+                  disabled={phase === "initializing"}
+                />
+
+                <div className="flex items-start justify-between gap-3 rounded border border-border-subtle bg-surface-inset px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-content">Make the first commit</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-content-muted">
+                      Adds <span className="font-mono">.gitignore</span>,{" "}
+                      <span className="font-mono">.cowtext/</span> and{" "}
+                      <span className="font-mono">context/</span> and commits them as{" "}
+                      <span className="font-mono">chore: init cowtext project</span>. No remote, no
+                      push.
                     </p>
-                  )}
+                  </div>
+                  <Toggle
+                    checked={makeCommit}
+                    disabled={phase === "initializing"}
+                    label="Make the first commit"
+                    onChange={setMakeCommit}
+                  />
                 </div>
+
+                {makeCommit && <IdentityRow status={status} />}
+
+                {makeCommit &&
+                  (status.identityName === null || status.identityEmail === null) && (
+                    <div className="flex items-start gap-2 rounded border border-warning bg-warning-surface px-3 py-2">
+                      <AlertTriangle
+                        size={13}
+                        strokeWidth={1.8}
+                        className="mt-0.5 flex-none text-warning-text"
+                      />
+                      <p className="text-xs leading-relaxed text-warning-text">
+                        {"Git identity is not configured — the first commit will fail. Set user.name and user.email, or turn the toggle off."}
+                      </p>
+                    </div>
+                  )}
+
                 <button
                   onClick={doInit}
                   disabled={phase === "initializing" || !branchIsValid}
@@ -457,8 +515,9 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                   {phase === "initializing" ? "· · ·" : "Initialize a git repository here"}
                 </button>
                 <p className="text-xs leading-relaxed text-content-muted">
-                  Runs <span className="font-mono">git init</span> and nothing else — no commit, no
-                  remote, no first add.
+                  {makeCommit
+                    ? "Runs git init, appends Cowtext's lines to .gitignore, and makes one commit — no remote, no push."
+                    : "Runs git init and nothing else — no commit, no remote, no first add."}
                 </p>
               </div>
             )}
@@ -476,10 +535,45 @@ export function GitWizard({ root, onClose }: { root: string; onClose: () => void
                   {status.branch !== null && (
                     <span className="font-mono text-content-muted">{status.branch}</span>
                   )}
+                  {/* Only after THIS dialog initialised the repo — the
+                      envelope is the only honest source for "did a commit
+                      happen", and a pre-existing repo never gets one. The
+                      tone follows the answer: "no commits" is not a success,
+                      it is the state a failed first commit leaves behind. */}
+                  {initResult !== null && (
+                    <span
+                      className={`font-mono ${
+                        initResult.committed ? "text-success-text" : "text-warning-text"
+                      }`}
+                    >
+                      {initResult.committed ? "1 commit" : "no commits"}
+                    </span>
+                  )}
                   {status.gitVersion !== null && (
                     <span className="font-mono text-content-disabled">{status.gitVersion}</span>
                   )}
                 </div>
+
+                {/* The Retry shape (WO15 fix round, tester #3): `git init`
+                    succeeded, the commit did not, and the second press found
+                    a repo — so `git_init` took the D-15 skip path and can
+                    never commit into it from here. Say what actually
+                    happened and name the way out, instead of a green badge
+                    over an empty history. */}
+                {initResult !== null &&
+                  initResult.skippedExistingRepo &&
+                  initResult.commitCount === 0 && (
+                    <div className="flex items-start gap-2 rounded border border-warning bg-warning-surface px-3 py-2">
+                      <AlertTriangle
+                        size={13}
+                        strokeWidth={1.8}
+                        className="mt-0.5 flex-none text-warning-text"
+                      />
+                      <p className="text-xs leading-relaxed text-warning-text">
+                        {"Repository exists but has no commits yet — commit from your terminal (git add -A && git commit)."}
+                      </p>
+                    </div>
+                  )}
 
                 <div>
                   <p className="mb-1.5 font-mono text-2xs uppercase tracking-wider text-content-muted">

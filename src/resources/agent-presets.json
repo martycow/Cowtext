@@ -1,0 +1,58 @@
+{
+  "presets": [
+    {
+      "id": "reviewer",
+      "name": "Reviewer",
+      "description": "Reads a change set and reports risks with file and line; never edits.",
+      "whenToUse": "Use when a pull request or diff needs a second pair of eyes for bugs, security issues and missing tests before it merges.",
+      "tools": ["Read", "Glob", "Grep"],
+      "mode": "restrict",
+      "priority": 1
+    },
+    {
+      "id": "test-writer",
+      "name": "Test writer",
+      "description": "Adds focused tests for existing behaviour and for the bug being fixed.",
+      "whenToUse": "Use when a module or fix has no test covering it and you want tests written before or alongside the change.",
+      "tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+      "mode": "restrict",
+      "priority": 1
+    },
+    {
+      "id": "docs-writer",
+      "name": "Docs writer",
+      "description": "Writes and updates documentation from the code as it is, not as it was planned.",
+      "whenToUse": "Use when a README, manual or design doc must be written or brought back in line with the current code.",
+      "tools": ["Read", "Glob", "Grep", "Edit", "Write"],
+      "mode": "restrict",
+      "priority": 1
+    },
+    {
+      "id": "refactorer",
+      "name": "Refactorer",
+      "description": "Restructures code without changing behaviour, in small verifiable steps.",
+      "whenToUse": "Use when a file or module has grown hard to change and needs restructuring with the tests kept green.",
+      "tools": [],
+      "mode": "inherit",
+      "priority": 1
+    },
+    {
+      "id": "planner",
+      "name": "Planner",
+      "description": "Turns a goal into an ordered, file-level plan before any code is written.",
+      "whenToUse": "Use when a task spans several files or is unclear enough that a written plan should be agreed before implementation.",
+      "tools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion", "ExitPlanMode"],
+      "mode": "restrict",
+      "priority": 1
+    },
+    {
+      "id": "debugger",
+      "name": "Debugger",
+      "description": "Reproduces a failure, finds the root cause and proposes the smallest fix.",
+      "whenToUse": "Use when a test fails or a bug is reported and the cause is not yet known.",
+      "tools": ["Read", "Glob", "Grep", "Bash", "BashOutput"],
+      "mode": "restrict",
+      "priority": 1
+    }
+  ]
+}

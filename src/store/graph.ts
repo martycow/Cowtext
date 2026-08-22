@@ -662,7 +662,12 @@ interface GraphState {
     content: string;
     position?: { x: number; y: number };
   }) => Promise<string | null>;
-  adoptFile: (relPath: string, title?: string) => void;
+  /** Adds a node for an existing `.md` file. Returns the node id — the new
+   *  node's, or the ALREADY-ADOPTED node's when `relPath` is on the graph
+   *  (WO15 D-17), so a caller that needs to draw an edge to it never has to
+   *  re-scan `nodes` to find out what it just did. `position` (flow-space,
+   *  rounded on save) replaces the viewport-centre cascade when given. */
+  adoptFile: (relPath: string, title?: string, position?: { x: number; y: number }) => string;
   updateNode: (id: string, patch: Partial<Omit<MemoryNode, "id">>) => void;
   moveNode: (id: string, position: { x: number; y: number }) => void;
   deleteNodes: (ids: string[]) => void;
@@ -1099,24 +1104,37 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     });
   },
 
-  adoptFile: (relPath, title) => {
+  adoptFile: (relPath, title, at) => {
     const s = get();
-    if (s.nodes.some((n) => sameRelPath(n.filePath, relPath))) return;
+    // Already adopted: hand back the existing id rather than nothing, so
+    // "adopt then link" is safe to call twice (WO15 D-17).
+    const existing = s.nodes.find((n) => sameRelPath(n.filePath, relPath));
+    if (existing !== undefined) return existing.id;
     pushHistory("adopt");
-    const fileName = relPath.split("/").pop() ?? relPath;
+    // Separator-normalized basename (WO15 audit F8, §7.8): a `.md` path
+    // stored with backslashes — easy to produce on Windows — used to fail
+    // the bare "/" split and title the node with the WHOLE path, one line
+    // below a duplicate guard that already normalizes via `sameRelPath`.
+    // `canonPath` is deliberately not used here: it lower-cases, and this
+    // basename becomes the node's visible title.
+    const fileName = relPath.replace(/\\/g, "/").split("/").pop() ?? relPath;
     const derived = fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
     const i = s.nodes.length;
     // WO10 item 7: land where the user is looking. `viewportCenter()` is null
     // only when no canvas is mounted, in which case the old fixed cascade
     // from (80, 80) is still the best available answer. Either way the
     // cascade offset stays, so adopting six files in a row fans them out
-    // instead of stacking six cards on one pixel.
+    // instead of stacking six cards on one pixel. An explicit `at` (the
+    // canvas menu's flow position, WO15 Block 5b) skips the whole cascade:
+    // the caller already knows exactly where the user pointed.
     const centre = viewportCenter();
     const spread = { x: (i % 4) * 28, y: Math.floor(i / 4) * 24 };
     const position =
-      centre !== null
-        ? { x: centre.x + spread.x, y: centre.y + spread.y }
-        : { x: 80 + (i % 4) * 280, y: 80 + Math.floor(i / 4) * 140 };
+      at !== undefined
+        ? { x: at.x, y: at.y }
+        : centre !== null
+          ? { x: centre.x + spread.x, y: centre.y + spread.y }
+          : { x: 80 + (i % 4) * 280, y: 80 + Math.floor(i / 4) * 140 };
     const node: MemoryNode = {
       id: makeId(),
       title: title !== undefined && title !== "" ? title : derived,
@@ -1144,6 +1162,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     // Existing file, unknown content — read it for the review baseline
     // (Block C §T4). Best-effort: initSnapshots tolerates a missing file.
     if (s.root !== null) void useReviewStore.getState().initSnapshots(s.root, [relPath]);
+    return node.id;
   },
 
   updateNode: (id, patch) => {

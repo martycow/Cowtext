@@ -142,6 +142,12 @@ export function ContextMenu(props: {
       ref={menuRef}
       role="menu"
       tabIndex={-1}
+      // Stable hook for the UI-scale rule (WO15 A-16 / D-7): this element is
+      // a portal root on document.body, so `zoom: var(--ui-scale)` on the
+      // chrome containers cannot reach it by nesting. Styling selects on the
+      // attribute, never on `[role=menu]` — the role is semantics, not a
+      // styling contract.
+      data-portal="menu"
       aria-activedescendant={activeId !== undefined ? `ct-menu-item-${activeId}` : undefined}
       onKeyDown={onKeyDown}
       style={{ position: "fixed", left: pos.left, top: pos.top, visibility: pos.ready ? "visible" : "hidden" }}

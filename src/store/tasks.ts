@@ -39,12 +39,24 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "done",
 ];
 
+/** WO15 D-6 — LABELS ONLY. The stored ids above and the text `task_update`
+ *  writes into the file (`in production` / `in testing`) are unchanged:
+ *  renaming them would break every TASKS.md a user already has, and the
+ *  parser's alias table is what makes "in review" readable on disk. This
+ *  map is the display layer, and the board/dialog pick it up automatically. */
 export const STATUS_LABELS: Record<TaskStatus, string> = {
-  "new": "New",
-  "in-production": "In production",
-  "in-testing": "In testing",
+  "new": "Todo",
+  "in-production": "In progress",
+  "in-testing": "In review",
   "done": "Done",
 };
+
+/** WO15 D-6 — the Task type chips offered in the New Task dialog. Task type
+ *  is FREE TEXT on disk and stays that way (the parser has no vocabulary for
+ *  it): these are the four the UI offers, plus a `none` chip that stores
+ *  `""`. A file that already carries `spike` still displays it. */
+export const TASK_TYPE_OPTIONS = ["bug", "feature", "chore", "docs"] as const;
+export type TaskTypeOption = (typeof TASK_TYPE_OPTIONS)[number];
 
 /** Normalized status of a task (Rust emits the enum; this is the defensive
  *  fallback for anything older/foreign). */

@@ -18,9 +18,18 @@
 // its `alreadyManaged` / `compileOwned` guards — rather than re-implementing
 // the scan.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, FolderOpen, Plug, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  Plug,
+  Plus,
+  X,
+} from "lucide-react";
 import { projectInit, projectMetaRead, projectMetaWrite } from "./api";
 import {
   EMPTY_PROJECT_META,
@@ -33,6 +42,14 @@ import {
 } from "./types";
 import { hooksStatus, type HooksStatus } from "../fs/api";
 import { HooksModal } from "../inspector/HooksModal";
+import { gitInit, gitStatus } from "../git/api";
+import { BranchPicker, isValidBranchName } from "../git/BranchPicker";
+import type { GitInitResult, GitStatus } from "../git/types";
+import { presetApply } from "../preset/api";
+import { PRINCIPLES, PROVIDER_SUPPORT_SENTENCE, STACK_CATEGORIES } from "../resources";
+import { useHooksAddr } from "../store/project";
+import { useSettingsStore } from "../store/settings";
+import { buildProjectGraph } from "../wizard/projectGraph";
 
 const ICON_BTN =
   "grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content";
@@ -55,28 +72,80 @@ function FieldLabel({ children }: { children: string }) {
   );
 }
 
-/** 34×19 pill toggle — amber, mirrors NodeWizard's/NewAgentDialog's
- *  AmberToggle. Installing hooks is a promise about agent behaviour (Claude
- *  Code will start reporting to the barn), not a user action in itself, so
- *  amber is correct per the accent law (F4). */
-function AmberToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+/** 34×19 pill toggle — mirrors NodeWizard's/NewAgentDialog's AmberToggle.
+ *
+ *  Tone is the accent law, not decoration: installing hooks is a promise
+ *  about AGENT behaviour (Claude Code will start reporting to the barn), so
+ *  it is amber (F4); `git init` is the user acting on the user's own folder,
+ *  so it is blue. Two accents, never on the same control. */
+function PillToggle({
+  checked,
+  onChange,
+  tone = "amber",
+  disabled = false,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  tone?: "amber" | "accent";
+  disabled?: boolean;
+  label?: string;
+}) {
+  const on =
+    tone === "amber" ? "border-amber-border bg-amber-surface" : "border-accent-border bg-accent-surface";
+  const knobOn = tone === "amber" ? "bg-amber" : "bg-accent";
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast ${
-        checked ? "border-amber-border bg-amber-surface" : "border-border-strong bg-surface-2"
+      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast disabled:opacity-50 ${
+        checked ? on : "border-border-strong bg-surface-2"
       }`}
     >
       <span
         className={`absolute top-[2px] h-[13px] w-[13px] rounded-pill transition-all duration-fast ${
-          checked ? "left-[16px] bg-amber" : "left-[2px] bg-content-muted"
+          checked ? `left-[16px] ${knobOn}` : "left-[2px] bg-content-muted"
         }`}
       />
     </button>
   );
+}
+
+/** 15px checkbox square, same geometry and palette as CompileModal's and
+ *  GitWizard's (DESIGN_SPEC: 15px, r-xs, blue — a user-initiated choice).
+ *  Presentational on purpose: every call site here nests it inside the row
+ *  `<button role="checkbox">` that owns the click, so there is exactly one
+ *  interactive element per row (GitWizard's D1a lesson — a button inside a
+ *  button nets two handlers that cancel each other through bubbling). */
+function CheckSquare({ checked }: { checked: boolean }) {
+  return (
+    <span
+      role="presentation"
+      className={`mt-px grid h-[15px] w-[15px] flex-none place-items-center rounded-xs border transition-colors duration-fast ${
+        checked ? "border-accent bg-accent" : "border-border-strong bg-surface-1"
+      }`}
+    >
+      {checked && <Check size={11} strokeWidth={3} className="text-content-inverse" />}
+    </span>
+  );
+}
+
+/** The hint under a principle's label: the first line of its markdown body
+ *  that is neither the `#` heading (which only repeats the label) nor
+ *  blank — i.e. the rule itself, in the words it will be written to disk
+ *  in. */
+function principleHint(body: string): string {
+  const lines = body.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    return trimmed;
+  }
+  return lines[0]?.trim() ?? "";
 }
 
 /** A multi-line list field. Free text rather than a chip editor: typing five
@@ -181,18 +250,32 @@ function Disclosure({
   );
 }
 
-const STEPS = ["Folder", "Project", "Create"] as const;
+/** WO15 Block 6 — the New Project path gains three steps between "Project"
+ *  and "Create". Convert keeps its three: it inherits an existing project's
+ *  context by import, so principles/stack/git are not its questions to ask
+ *  (a folder being converted is nearly always a repo already). */
+const NEW_STEPS = ["Folder", "Project", "Principles", "Stack", "Git", "Create"] as const;
+const CONVERT_STEPS = ["Folder", "Project", "Create"] as const;
+
+/** Step indices, by name — the render below reads these instead of magic
+ *  numbers, because "step 2" means Principles in one mode and Create in the
+ *  other. */
+const STEP_FOLDER = 0;
+const STEP_PROJECT = 1;
+const STEP_PRINCIPLES = 2;
+const STEP_STACK = 3;
+const STEP_GIT = 4;
 
 /** WO14 declutter — a left-rail numbered stepper replaces the header's flat
  *  pill row, so the wizard reads as a real sequence (numbered circles, a
  *  connecting line, a done-state check) instead of small text chips easy to
  *  miss above the form. Edit mode never renders this (it has no steps). */
-function StepRail({ step }: { step: number }) {
+function StepRail({ steps, step }: { steps: readonly string[]; step: number }) {
   return (
     <div className="flex w-[136px] flex-none flex-col border-r border-border-subtle px-4 py-4">
-      {STEPS.map((label, i) => (
+      {steps.map((label, i) => (
         <div key={label} className="relative flex items-start gap-2.5 pb-7 last:pb-0">
-          {i < STEPS.length - 1 && (
+          {i < steps.length - 1 && (
             <span
               aria-hidden
               className="absolute bottom-[-4px] left-[10px] top-[22px] w-px bg-border-default"
@@ -222,6 +305,15 @@ function StepRail({ step }: { step: number }) {
   );
 }
 
+/** What the wizard actually did (WO15 §4.13, D-16). `graphApplied` tells
+ *  App.tsx to SKIP its own starter adoption — the wizard already wrote a
+ *  graph, and adopting `context/project.md` a second time would mint a
+ *  duplicate node. `git` is `null` when the Git step was off or skipped. */
+export interface ProjectWizardOutcome {
+  graphApplied: boolean;
+  git: GitInitResult | null;
+}
+
 export function ProjectWizard({
   mode,
   /** Required in "edit" mode — the already-open project. Ignored otherwise,
@@ -234,8 +326,10 @@ export function ProjectWizard({
   root?: string;
   onClose: () => void;
   /** Called after a successful scaffold. `openImport` asks the host to run
-   *  the existing ImportReviewModal once the project has finished loading. */
-  onDone: (root: string, openImport: boolean) => void;
+   *  the existing ImportReviewModal once the project has finished loading.
+   *  `outcome` is filled by U2; absent means "assume nothing was applied",
+   *  which is exactly today's behaviour. */
+  onDone: (root: string, openImport: boolean, outcome?: ProjectWizardOutcome) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const isEdit = mode === "edit";
@@ -249,6 +343,35 @@ export function ProjectWizard({
   const [error, setError] = useState<string | null>(null);
   const [installHooks, setInstallHooks] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
+
+  // ── Block 6 — principles, stack, git ─────────────────────────────────
+  // Nothing here touches disk. Every selection feeds `buildProjectGraph`,
+  // whose plan is what the Create step LISTS and what Create WRITES — one
+  // computation, so the preview cannot drift from the result.
+  const [principleIds, setPrincipleIds] = useState<readonly string[]>([]);
+  const [stackIds, setStackIds] = useState<readonly string[]>([]);
+  const [fixedStack, setFixedStack] = useState(false);
+  const [stackQuery, setStackQuery] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [initGit, setInitGit] = useState(true);
+  const [gitProbe, setGitProbe] = useState<GitStatus | null>(null);
+  const [gitProbeFailed, setGitProbeFailed] = useState(false);
+  const [gitResult, setGitResult] = useState<GitInitResult | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
+  // `projectInit` + `presetApply` succeeded once already — a Retry after a
+  // failed `git_init` must not run them again: `preset_apply` fails closed
+  // on a project that already has a non-empty graph (`preset.rs:219-227`),
+  // which would turn a recoverable git error into a permanent dead end.
+  const scaffolded = useRef(false);
+  // Render-time twin of `scaffolded` (a ref cannot re-render): once true the
+  // Create step becomes a RESULT block and the wizard stops being cancellable
+  // — the files exist, so the only honest exit is into the project.
+  const [created, setCreated] = useState(false);
+  const openBtnRef = useRef<HTMLButtonElement>(null);
+  // The hooks modal is offered exactly once per Create, not again on a git
+  // Retry — approving a diff twice for one wizard run is a trust-boundary
+  // annoyance, not a feature.
+  const hooksPrompted = useRef(false);
 
   // D2 fix — `meta` loads asynchronously in edit mode (below), but the
   // fields keyed on `fieldKey` (ListField's raw-text seed) only re-seed when
@@ -289,15 +412,80 @@ export function ProjectWizard({
   const fieldKey = `${mode}:${root ?? ""}:${metaGen}`;
 
   const isConvert = mode === "convert";
+  const isNew = mode === "new";
   const title = isEdit
     ? "Project properties"
     : isConvert
       ? "Convert existing project"
       : "New project";
 
+  const steps = isNew ? NEW_STEPS : CONVERT_STEPS;
+  const lastStep = steps.length - 1;
+
+  // The ticks the user made on the title screen (or in Settings) — a brand
+  // new project starts compiled for exactly those targets. Subscribed, not
+  // read once, so the Create step's preview follows a change made in
+  // another window without a remount.
+  const defaultCompileTargets = useSettingsStore((s) => s.defaultCompileTargets);
+
+  // D-2 — the hooks receiver's address comes from the one Rust const through
+  // the store, never from a literal in copy: a hard-coded port is a sentence
+  // that keeps rendering confidently after the port moves.
+  const hooksAddr = useHooksAddr();
+
+  // THE plan: rendered as "Will create" on the last step, applied verbatim
+  // by Create. Pure, in memory, deterministic (§4.11).
+  const plan = useMemo(
+    () =>
+      buildProjectGraph({
+        projectName: meta.name,
+        principleIds,
+        stackItemIds: stackIds,
+        fixedStackRule: fixedStack,
+        compileTargets: defaultCompileTargets,
+      }),
+    [meta.name, principleIds, stackIds, fixedStack, defaultCompileTargets],
+  );
+
+  // Git state, all derived from one probe. `gitOn` is the single truth the
+  // Create step, the Will-create list and `create()` all read — a toggle
+  // that is on but unusable (no git, already a repo) is OFF here.
+  const gitAvailable = gitProbe !== null && gitProbe.gitAvailable;
+  const gitIsRepo = gitProbe !== null && gitProbe.isRepo;
+  const gitIdentityMissing =
+    gitProbe !== null && (gitProbe.identityName === null || gitProbe.identityEmail === null);
+  const gitOn = isNew && initGit && gitAvailable && !gitIsRepo;
+  const branchOk = !gitOn || isValidBranchName(branch);
+  // The probe is asynchronous, and until it lands `gitAvailable` is false —
+  // i.e. `gitOn` reads exactly like "no git here" while the answer is still
+  // unknown. Creating during that window would silently skip the repo the
+  // user asked for, so Create waits (tester #9). A FAILED probe is a real
+  // answer ("no git"), not a pending one — it must not block Create.
+  const gitProbePending = isNew && root !== null && gitProbe === null && !gitProbeFailed;
+
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
+
+  // Probe as soon as a folder is known — the Git step needs it, and so does
+  // the Create step's file list. Read-only; a failure is not an error the
+  // user has to clear, it just means the git step has nothing to offer.
+  useEffect(() => {
+    if (!isNew || root === null) return;
+    let live = true;
+    setGitProbe(null);
+    setGitProbeFailed(false);
+    void gitStatus(root)
+      .then((s) => {
+        if (live) setGitProbe(s);
+      })
+      .catch(() => {
+        if (live) setGitProbeFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [isNew, root]);
 
   // Load what is already on disk so editing is editing, not retyping. A
   // project with no sidecar yet (everything predating WO10) simply starts
@@ -318,16 +506,6 @@ export function ProjectWizard({
       live = false;
     };
   }, [isEdit, openRoot]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // F4 — HooksModal owns Escape while it's the top layer; the wizard
-      // must not also close underneath it on the same keypress.
-      if (e.key === "Escape" && !busy && !hooksOpen) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, hooksOpen, onClose]);
 
   // F4 — edit mode's second discoverable entry point: a live status row
   // instead of the Create-step toggle (there is no Create step to put it
@@ -364,38 +542,102 @@ export function ProjectWizard({
       .catch((e: unknown) => setError(String(e)));
   };
 
+  /** Hand the finished project to the host. In `new` mode the outcome is
+   *  read off state at click time (not snapshotted at Create), so a git
+   *  Retry between Create and Open project is reflected in what App.tsx
+   *  gets. `graphApplied` keeps App from adopting `context/project.md` a
+   *  second time (§4.13, D-16). */
+  const openProject = useCallback(() => {
+    if (root === null) return;
+    onDone(root, isConvert, isNew ? { graphApplied: true, git: gitResult } : undefined);
+  }, [root, isConvert, isNew, gitResult, onDone]);
+
+  /** The one write path. Order is fixed and each step is guarded so a
+   *  failure in a later one never re-runs an earlier one (Retry):
+   *    1. `projectInit`  — sidecar + folders + `context/project.md`
+   *    2. `presetApply`  — the plan's graph and stub files. ALWAYS in `new`
+   *       mode (D-16), even with nothing ticked: the project's own node has
+   *       to exist for the first commit to contain a graph.
+   *    3. `gitInit(root, branch, true)` — repo + `.gitignore` + one commit.
+   *  Only step 3 is allowed to fail recoverably; its error is shown on this
+   *  step and the button becomes Retry. */
   const create = () => {
     if (root === null) return;
     setBusy(true);
     setError(null);
-    // Editing writes the sidecar (and refreshes the rendered node if one is
-    // there); creating scaffolds the whole layout. Both are idempotent and
-    // neither clobbers a file the user wrote.
-    const work = isEdit ? projectMetaWrite(root, meta) : projectInit(root, meta).then(() => undefined);
-    work
-      .then(() => {
+    setGitError(null);
+    void (async () => {
+      try {
+        if (isEdit) {
+          await projectMetaWrite(root, meta);
+        } else if (!scaffolded.current) {
+          await projectInit(root, meta);
+          if (isNew) {
+            try {
+              await presetApply(root, plan.graphJson, plan.stubs);
+            } catch (e: unknown) {
+              // `preset_apply` fails closed on a folder that already holds a
+              // real graph (`preset.rs:219-227`) — which means "New project"
+              // was pointed at an existing Cowtext project. Rust's sentence
+              // is kept verbatim; the way out is added, because the wizard
+              // itself has no way to merge two graphs.
+              const text = String(e);
+              setError(
+                text.includes("already has a graph")
+                  ? `${text} — this folder is already a Cowtext project. Cancel and use Open folder instead.`
+                  : text,
+              );
+              setBusy(false);
+              return;
+            }
+          }
+          scaffolded.current = true;
+          // From here on the folder has files in it. In `new` mode the step
+          // turns into a result block that survives a git failure, a Retry
+          // and the hooks modal — the user sees what landed before the
+          // wizard hands over (tester #6).
+          if (isNew) setCreated(true);
+        }
+
+        if (gitOn && gitResult === null) {
+          try {
+            setGitResult(await gitInit(root, branch, true));
+          } catch (e: unknown) {
+            // Recoverable: the project itself is created and intact (Rust
+            // rejects a commit with no identity BEFORE touching the folder,
+            // A-4). Stay here so the user can fix git and press Retry.
+            setGitError(String(e));
+            setBusy(false);
+            return;
+          }
+        }
+
         setBusy(false);
         // F4 — the toggle is a promise to open the trust-boundary modal
         // next, not a write itself. `.claude/agents` (created by
         // projectInit, just above) must exist before HooksModal's preview
-        // runs, and `onDone` must wait for the modal's own close so at most
-        // one modal is ever on screen.
-        if (installHooks) {
+        // runs, and at most one modal is ever on screen. Offered once per
+        // run: a git Retry must not re-ask for the same diff.
+        if (installHooks && !hooksPrompted.current) {
+          hooksPrompted.current = true;
           setHooksOpen(true);
           return;
         }
-        onDone(root, isConvert);
-      })
-      .catch((e: unknown) => {
+        // `new` mode stops here: the result block is the last step, and
+        // Open project is what calls `onDone`. Convert/edit are unchanged.
+        if (isNew) return;
+        onDone(root, isConvert, undefined);
+      } catch (e: unknown) {
         setBusy(false);
         setError(String(e));
-      });
+      }
+    })();
   };
 
   // F4 — single close handler for both entry points (Create-step toggle,
   // edit-mode status row): edit mode has no `onDone` transition to make, it
-  // just refreshes the row; new/convert mode finishes the wizard exactly as
-  // it would have without the toggle.
+  // just refreshes the row; convert mode finishes the wizard exactly as it
+  // would have without the toggle; `new` mode returns to its result block.
   const closeHooksModal = () => {
     setHooksOpen(false);
     if (root === null) return;
@@ -403,19 +645,117 @@ export function ProjectWizard({
       void hooksStatus(root)
         .then((s) => setEditHooksStatus(s))
         .catch(() => {});
-    } else {
-      onDone(root, isConvert);
+    } else if (!isNew) {
+      onDone(root, isConvert, undefined);
     }
+    // `new` mode falls back to the result block underneath — it still has
+    // the git line (and, if git failed, Retry) to show before handing over.
   };
 
+  /** Escape, the scrim and the header × share one handler, because after
+   *  Create there is nothing left to cancel: the files are on disk, so
+   *  every dismissal is "open the project" instead. */
+  const dismiss = useCallback(() => {
+    if (created) openProject();
+    else onClose();
+  }, [created, openProject, onClose]);
+
+  // Keyboard safety: the primary button changes identity at Create, so move
+  // focus onto its replacement. Never while the hooks modal is up — that
+  // layer owns focus until it closes.
+  useEffect(() => {
+    if (created && !hooksOpen) openBtnRef.current?.focus();
+  }, [created, hooksOpen]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // F4 — HooksModal owns Escape while it's the top layer; the wizard
+      // must not also close underneath it on the same keypress.
+      if (e.key === "Escape" && !busy && !hooksOpen) dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, hooksOpen, dismiss]);
+
   const patch = (p: Partial<ProjectMeta>) => setMeta((m) => ({ ...m, ...p }));
-  const canCreate = root !== null && meta.name.trim() !== "" && !busy && !hooksOpen;
+  const canCreate =
+    root !== null &&
+    meta.name.trim() !== "" &&
+    !busy &&
+    !hooksOpen &&
+    branchOk &&
+    !gitProbePending;
+
+  const toggleIn = (list: readonly string[], id: string): string[] =>
+    list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+
+  // Every file this wizard is about to create, in write order — the same
+  // plan Create applies, never a second description of it.
+  const willCreate: { path: string; note?: string }[] = isNew
+    ? [
+        { path: ".cowtext/project.json", note: "project properties" },
+        { path: ".cowtext/graph.json", note: "the graph" },
+        { path: ".claude/agents/", note: "agent definitions live here" },
+        ...plan.summary.relPaths.map((relPath, i) => ({
+          path: relPath,
+          note: plan.summary.names[i],
+        })),
+        // Before Create this row is a promise; after Create the same row is
+        // a claim, so it only survives when git really ran. A failed init
+        // (identity rejected before any mutation, A-4) or the D-15 skip
+        // wrote no `.gitignore`, and a green check on a file that is not
+        // there is the exact lie this block exists to avoid.
+        ...(gitOn && (!created || (gitResult !== null && !gitResult.skippedExistingRepo))
+          ? [{ path: ".gitignore", note: "committed with the first commit" }]
+          : []),
+      ]
+    : [
+        { path: ".cowtext/project.json" },
+        { path: "context/project.md" },
+        { path: "context/" },
+        { path: ".claude/agents/" },
+      ];
+
+  /** Read off `GitInitResult`, never recomputed from the UI's own hopes —
+   *  and never green just because the call resolved. Three answers:
+   *
+   *   • a real init            → `branch main · 1 commit`        (success)
+   *   • skipped, zero commits  → the shape a Retry lands in after `git init`
+   *     succeeded and the commit did not: the repo now exists, so `git_init`
+   *     takes the D-15 skip path and can never commit into it. Painting that
+   *     green would claim a commit that is not there (tester #3). (warning)
+   *   • skipped, with commits  → a repository that was already here and was
+   *     left untouched — information, not an achievement.          (info) */
+  const gitResultLine: { tone: "success" | "warning" | "info"; text: string } | null =
+    gitResult === null
+      ? null
+      : gitResult.skippedExistingRepo
+        ? gitResult.commitCount === 0
+          ? {
+              tone: "warning",
+              text: "Repository exists but has no commits yet — commit from your terminal (git add -A && git commit).",
+            }
+          : { tone: "info", text: "Existing repository detected — git init skipped" }
+        : {
+            tone: gitResult.committed ? "success" : "warning",
+            text: `branch ${gitResult.status.branch ?? branch} · ${gitResult.commitCount} commit${
+              gitResult.commitCount === 1 ? "" : "s"
+            }`,
+          };
+
+  const stackQ = stackQuery.trim().toLowerCase();
+  const stackGroups = STACK_CATEGORIES.map((category) => ({
+    category,
+    items: category.items.filter(
+      (item) => stackQ === "" || item.label.toLowerCase().includes(stackQ),
+    ),
+  })).filter((g) => g.items.length > 0);
 
   return (
     <div
       className="fixed inset-0 z-modal flex items-center justify-center bg-[var(--scrim)]"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy && !hooksOpen) onClose();
+        if (e.target === e.currentTarget && !busy && !hooksOpen) dismiss();
       }}
     >
       <div
@@ -429,13 +769,18 @@ export function ProjectWizard({
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
           <span className="text-[15px] font-semibold">{title}</span>
           <div className="min-w-0 flex-1" />
-          <button onClick={onClose} title="Close" disabled={busy || hooksOpen} className={ICON_BTN}>
+          <button
+            onClick={dismiss}
+            title={created ? "Open project" : "Close"}
+            disabled={busy || hooksOpen}
+            className={ICON_BTN}
+          >
             <X size={14} strokeWidth={1.5} />
           </button>
         </div>
 
         <div className="flex min-h-0 flex-1">
-          {!isEdit && <StepRail step={step} />}
+          {!isEdit && <StepRail steps={steps} step={step} />}
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
           {error !== null && (
             <div className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
@@ -590,60 +935,336 @@ export function ProjectWizard({
             </div>
           )}
 
-          {step === 2 && (
+          {isNew && step === STEP_PRINCIPLES && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm leading-relaxed text-content-secondary">
+                Rules the agents working here must follow. Each one you tick becomes a rule node
+                with its own file in <span className="font-mono">context/principles/</span>, always
+                loaded — editable afterwards like any other node.
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {PRINCIPLES.map((p) => {
+                  const checked = principleIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      onClick={() => setPrincipleIds((list) => toggleIn(list, p.id))}
+                      className={`flex items-start gap-2 rounded border px-2.5 py-2 text-left transition-colors duration-fast ${
+                        checked
+                          ? "border-accent-border bg-accent-surface"
+                          : "border-border bg-surface-2 hover:border-border-strong"
+                      }`}
+                    >
+                      <CheckSquare checked={checked} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-medium text-content">{p.label}</span>
+                        <span className="block text-2xs leading-snug text-content-muted">
+                          {principleHint(p.body)}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {isNew && step === STEP_STACK && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm leading-relaxed text-content-secondary">
+                What this project is built with. Everything you tick becomes one architecture node
+                at <span className="font-mono">context/stack.md</span>; tick nothing and no stack
+                node is created.
+              </p>
+              <input
+                value={stackQuery}
+                onChange={(e) => setStackQuery(e.target.value)}
+                placeholder="Search the stack…"
+                aria-label="Search the stack"
+                className={INPUT}
+              />
+              {stackGroups.length === 0 ? (
+                <p className="text-xs text-content-muted">Nothing in the list matches that search.</p>
+              ) : (
+                stackGroups.map(({ category, items }) => (
+                  <div key={category.id}>
+                    <p className="mb-1.5 font-mono text-2xs uppercase tracking-wider text-content-muted">
+                      {category.label}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {items.map((item) => {
+                        const checked = stackIds.includes(item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="checkbox"
+                            aria-checked={checked}
+                            onClick={() => setStackIds((list) => toggleIn(list, item.id))}
+                            className={`flex h-control-sm items-center gap-1.5 rounded border px-2 text-xs transition-colors duration-fast ${
+                              checked
+                                ? "border-accent-border bg-accent-surface text-accent-text"
+                                : "border-border bg-surface-2 text-content-secondary hover:border-border-strong"
+                            }`}
+                          >
+                            <CheckSquare checked={checked} />
+                            {item.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={fixedStack}
+                onClick={() => setFixedStack((v) => !v)}
+                className={`flex items-start gap-2 rounded border px-2.5 py-2 text-left transition-colors duration-fast ${
+                  fixedStack
+                    ? "border-accent-border bg-accent-surface"
+                    : "border-border bg-surface-2 hover:border-border-strong"
+                }`}
+              >
+                <CheckSquare checked={fixedStack} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-medium text-content">
+                    Fixed stack — ask before adding a dependency
+                  </span>
+                  <span className="block text-2xs leading-snug text-content-muted">
+                    Adds that rule node and a closing line to{" "}
+                    <span className="font-mono">context/stack.md</span>.
+                  </span>
+                </span>
+              </button>
+            </div>
+          )}
+
+          {isNew && step === STEP_GIT && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm leading-relaxed text-content-secondary">
+                A new project is easiest to undo when it starts as a repository. Cowtext can run{" "}
+                <span className="font-mono">git init</span> here and commit the files it is about
+                to create — once, when you click Create.
+              </p>
+
+              {gitProbe === null && !gitProbeFailed && (
+                <p className="text-xs text-content-muted">checking git…</p>
+              )}
+
+              {(gitProbeFailed || (gitProbe !== null && !gitAvailable)) && (
+                <p className="rounded border border-border-subtle bg-surface-inset px-3 py-2 text-xs text-content-secondary">
+                  git not found on PATH — skipping
+                </p>
+              )}
+
+              {gitAvailable && (
+                <>
+                  <div
+                    className={`flex items-start justify-between gap-3 rounded border px-3 py-2 ${
+                      gitOn ? "border-accent-border bg-accent-surface" : "border-border-subtle bg-surface-inset"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-content">
+                        Initialize git and make the first commit
+                      </p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-content-secondary">
+                        Runs <span className="font-mono">git init</span>, adds Cowtext&apos;s lines
+                        to <span className="font-mono">.gitignore</span>, and commits once as{" "}
+                        <span className="font-mono">chore: init cowtext project</span>. No remote,
+                        no push.
+                      </p>
+                    </div>
+                    <PillToggle
+                      tone="accent"
+                      checked={gitOn}
+                      disabled={gitIsRepo}
+                      label="Initialize git and make the first commit"
+                      onChange={setInitGit}
+                    />
+                  </div>
+
+                  {gitIsRepo && (
+                    <p className="rounded border border-border-subtle bg-surface-inset px-3 py-2 text-xs text-content-secondary">
+                      Existing repository detected — git init skipped
+                    </p>
+                  )}
+
+                  <BranchPicker value={branch} onChange={setBranch} disabled={!gitOn} />
+
+                  {gitOn && (
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="flex-none font-mono text-2xs uppercase tracking-wider text-content-muted">
+                        identity
+                      </span>
+                      <span
+                        className={`min-w-0 flex-1 truncate font-mono text-xs ${
+                          gitIdentityMissing ? "text-warning-text" : "text-content-secondary"
+                        }`}
+                      >
+                        {gitIdentityMissing
+                          ? "not configured"
+                          : `${gitProbe?.identityName} <${gitProbe?.identityEmail}>`}
+                      </span>
+                    </div>
+                  )}
+
+                  {gitOn && gitIdentityMissing && (
+                    <div className="flex items-start gap-2 rounded border border-warning bg-warning-surface px-3 py-2">
+                      <AlertTriangle
+                        size={13}
+                        strokeWidth={1.8}
+                        className="mt-0.5 flex-none text-warning-text"
+                      />
+                      {/* One source line on purpose: the sentence is
+                          contract copy (§6 U2) and must survive a literal
+                          grep, not just render correctly. */}
+                      <p className="text-xs leading-relaxed text-warning-text">
+                        {"Git identity is not configured — the first commit will fail. Set user.name and user.email, or turn the toggle off."}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {step === lastStep && (
             <div className="flex flex-col gap-3">
               <p className="truncate font-mono text-xs text-content-secondary" title={root ?? ""}>
                 {root}
               </p>
+              {created && (
+                <p className="text-sm leading-relaxed text-content-secondary">
+                  <span className="font-medium text-success-text">Created.</span> Everything listed
+                  below is on disk now.
+                </p>
+              )}
+              {/* The live plan, not a fixed list: every principle and stack
+                  tick shows up here as the file it will become, straight
+                  off `buildProjectGraph`'s summary — the same object Create
+                  hands to `presetApply`, and afterwards the receipt for what
+                  it wrote. */}
               <div className="rounded border border-border-subtle bg-surface-inset p-3">
                 <p className="mb-2 font-mono text-2xs uppercase tracking-wider text-content-muted">
-                  Will create
+                  {created ? "Created" : "Will create"}
                 </p>
-                <ul className="flex flex-col gap-1 font-mono text-xs text-content-secondary">
-                  {[
-                    ".cowtext/project.json",
-                    "context/project.md",
-                    "context/",
-                    ".claude/agents/",
-                  ].map((p) => (
-                    <li key={p} className="flex items-center gap-1.5">
-                      <Check size={11} strokeWidth={2} className="flex-none text-success-text" />
-                      {p}
+                <ul className="flex flex-col gap-1 text-xs text-content-secondary">
+                  {willCreate.map((f) => (
+                    <li key={f.path} className="flex items-baseline gap-1.5">
+                      {/* The green check is the DONE marker, so before Create
+                          the same list gets a neutral "+" — a row of ticks
+                          under "Will create" reads as work already finished. */}
+                      {created ? (
+                        <Check
+                          size={11}
+                          strokeWidth={2}
+                          className="mt-px flex-none self-start text-success-text"
+                        />
+                      ) : (
+                        <Plus
+                          size={11}
+                          strokeWidth={2}
+                          className="mt-px flex-none self-start text-content-muted"
+                        />
+                      )}
+                      <span className="flex-none font-mono">{f.path}</span>
+                      {f.note !== undefined && (
+                        <span className="min-w-0 flex-1 truncate text-content-muted">{f.note}</span>
+                      )}
                     </li>
                   ))}
                 </ul>
-              </div>
-              <div className="flex items-start gap-2 rounded border border-border-subtle bg-surface-inset px-3 py-2">
-                <AlertTriangle
-                  size={13}
-                  strokeWidth={1.8}
-                  className="mt-0.5 flex-none text-amber-text"
-                />
-                <p className="text-xs leading-relaxed text-content-secondary">
-                  Existing files are never overwritten. If{" "}
-                  <span className="font-mono">context/project.md</span> is already there, yours is
-                  kept and Cowtext just records the properties.
-                </p>
-              </div>
-              <div className="flex items-start justify-between gap-3 rounded border border-amber-border bg-amber-surface px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <p className="font-mono text-2xs uppercase tracking-wider text-amber-text">
-                    Install Claude Code hooks
+                {!created && (
+                  <p className="mt-2 text-xs text-content-muted">
+                    Nothing is written until you click Create.
                   </p>
-                  <p className="mt-1 text-xs leading-relaxed text-content-secondary">
-                    This edits <span className="break-all font-mono">.claude/settings.json</span>{" "}
-                    in your project so Claude Code reports file activity to Cowtext on{" "}
-                    <span className="font-mono">127.0.0.1:4923</span>. Nothing is written until you
-                    approve the exact diff below.
+                )}
+              </div>
+              {!created && (
+                <div className="flex items-start gap-2 rounded border border-border-subtle bg-surface-inset px-3 py-2">
+                  <AlertTriangle
+                    size={13}
+                    strokeWidth={1.8}
+                    className="mt-0.5 flex-none text-amber-text"
+                  />
+                  <p className="text-xs leading-relaxed text-content-secondary">
+                    Existing files are never overwritten. If{" "}
+                    <span className="font-mono">context/project.md</span> is already there, yours is
+                    kept and Cowtext just records the properties.
                   </p>
                 </div>
-                <AmberToggle checked={installHooks} onChange={setInstallHooks} />
-              </div>
-              {isConvert && (
-                <p className="text-sm leading-relaxed text-content-secondary">
-                  Afterwards, the importer opens so you can review which of this project&apos;s
-                  existing context files become Memory Nodes.
+              )}
+              {!created && (
+                <div className="flex items-start justify-between gap-3 rounded border border-amber-border bg-amber-surface px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono text-2xs uppercase tracking-wider text-amber-text">
+                      Install Claude Code hooks
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+                      This edits <span className="break-all font-mono">.claude/settings.json</span>{" "}
+                      in your project so Claude Code reports file activity to Cowtext on{" "}
+                      <span className="font-mono">{hooksAddr}</span>. Nothing is written until you
+                      approve the exact diff below.
+                    </p>
+                  </div>
+                  <PillToggle
+                    checked={installHooks}
+                    onChange={setInstallHooks}
+                    label="Install Claude Code hooks"
+                  />
+                </div>
+              )}
+
+              {/* Git, on the step where the button that runs it lives. The
+                  summary line before, the envelope's own answer after —
+                  never a guess about what git did. */}
+              {isNew && gitResult === null && gitError === null && (
+                <p className="text-xs leading-relaxed text-content-muted">
+                  {gitOn
+                    ? `Git: git init on branch ${branch === "" ? "(none)" : branch}, then one commit.`
+                    : gitIsRepo
+                      ? "Git: existing repository detected — git init skipped."
+                      : gitAvailable
+                        ? "Git: skipped — this folder stays untracked."
+                        : gitProbe === null && !gitProbeFailed
+                          ? "Git: checking…"
+                          : "Git: not found on PATH — skipping."}
                 </p>
+              )}
+              {gitResultLine !== null && (
+                <p
+                  className={`rounded border px-3 py-2 font-mono text-xs ${
+                    gitResultLine.tone === "success"
+                      ? "border-success bg-success-surface text-success-text"
+                      : gitResultLine.tone === "warning"
+                        ? "border-warning bg-warning-surface text-warning-text"
+                        : "border-border-subtle bg-surface-inset text-content-secondary"
+                  }`}
+                >
+                  {gitResultLine.text}
+                </p>
+              )}
+              {gitError !== null && (
+                <div className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
+                  {gitError}
+                </div>
+              )}
+
+              {isConvert && (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm leading-relaxed text-content-secondary">
+                    {"Imports the CLAUDE.md, AGENTS.md or .cursor/rules you already have — preview first."}
+                  </p>
+                  <p className="text-xs leading-relaxed text-content-muted">
+                    {PROVIDER_SUPPORT_SENTENCE}
+                  </p>
+                </div>
               )}
             </div>
           )}
@@ -652,26 +1273,62 @@ export function ProjectWizard({
 
         <div className="flex h-[50px] flex-none items-center gap-3 border-t border-border-subtle px-4">
           <span className="min-w-0 flex-1 truncate text-sm text-content-secondary">
-            {isEdit
-              ? "These properties compile into context/project.md."
-              : step === 0
-                ? "Choose where this project lives."
-                : step === 1
-                  ? "This becomes a pinned Memory Node."
-                  : "Review and create."}
+            {created
+              ? "Files are written. Open the project to continue."
+              : isEdit
+                ? "These properties compile into context/project.md."
+                : step === STEP_FOLDER
+                  ? "Choose where this project lives."
+                  : step === STEP_PROJECT
+                    ? "This becomes a pinned Memory Node."
+                    : isNew && step === STEP_PRINCIPLES
+                      ? "Each principle becomes a rule node."
+                      : isNew && step === STEP_STACK
+                        ? "The stack becomes one architecture node."
+                        : isNew && step === STEP_GIT
+                          ? "The repository is created when you click Create."
+                          : gitProbePending
+                            ? "Checking git…"
+                            : "Review and create."}
           </span>
-          {step > 0 && !isEdit && (
+          {/* Back and Cancel both stop existing once the files exist:
+              re-answering a question that has already been written to disk
+              is not a thing this wizard can honour, and there is nothing
+              left to cancel. Every remaining exit opens the project. */}
+          {!created && step > 0 && !isEdit && (
             <button onClick={() => setStep(step - 1)} disabled={busy} className={SECONDARY_BTN}>
               Back
             </button>
           )}
-          <button onClick={onClose} disabled={busy || hooksOpen} className={SECONDARY_BTN}>
-            Cancel
-          </button>
-          {step < 2 && !isEdit ? (
+          {!created && (
+            <button onClick={onClose} disabled={busy || hooksOpen} className={SECONDARY_BTN}>
+              Cancel
+            </button>
+          )}
+          {created ? (
+            <>
+              {gitError !== null && (
+                <button onClick={create} disabled={busy} className={SECONDARY_BTN}>
+                  {busy ? "· · ·" : "Retry"}
+                </button>
+              )}
+              <button
+                ref={openBtnRef}
+                onClick={openProject}
+                disabled={busy || hooksOpen}
+                className={PRIMARY_BTN}
+              >
+                Open project
+              </button>
+            </>
+          ) : step < lastStep && !isEdit ? (
             <button
               onClick={() => setStep(step + 1)}
-              disabled={root === null || (step === 1 && meta.name.trim() === "")}
+              disabled={
+                root === null ||
+                (step === STEP_PROJECT && meta.name.trim() === "") ||
+                (isNew && step === STEP_GIT && !branchOk)
+              }
               className={PRIMARY_BTN}
             >
               Next

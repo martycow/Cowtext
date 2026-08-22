@@ -15,8 +15,10 @@
 // the graph has no nodes it renders built-in demo props so it works with no
 // project open and no backend. It never imports React Flow, src/canvas/,
 // src/compile/, or src/inspector/; its only store writes are the sanctioned
-// DemoPlayer pushEvent/setDemoMode calls (contract §4).
-// Demo mode: the "Demo" button (top-right overlay) toggles a scripted
+// DemoPlayer pushEvent/setDemoMode calls (contract §4) and the legend's
+// useUiStore.setHooksModalOpen(true) (WO15 §4.3/§6 B1 — App.tsx owns the
+// single HooksModal mount, so the barn asks the store, never the component).
+// Demo mode: the "Demo" button (bottom-right legend strip) toggles a scripted
 // BarnEvent sequence; `autoDemo` starts it automatically.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -28,6 +30,7 @@ import { Application, Container } from "pixi.js";
 import { useGraphStore, type MemoryNode } from "../store/graph";
 import { useEventsStore } from "../store/events";
 import { useSettingsStore } from "../store/settings";
+import { useUiStore } from "../store/ui";
 import { PALETTE } from "./palette";
 import { buildLayout, COW_HOME_TILE } from "./sceneGraph";
 import { Cow, type IdleStage } from "./cow";
@@ -54,7 +57,6 @@ export interface BarnSceneProps {
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-const INITIAL_ZOOM = 2;
 
 // E5 waiting choreography thresholds + idle FPS throttle (§7.3/§7.4)
 const IDLE_COFFEE_MS = 5_000;
@@ -71,7 +73,14 @@ function idleStageFor(idleMs: number): IdleStage {
 }
 
 /** Bottom-left session totals — non-demo events only (§7.6). Amber is the
- *  agent's colour; Silkscreen is sanctioned in the barn HUD. */
+ *  agent's colour. WO15 §6 B1.1: the counters spell their nouns out ("12
+ *  reads", not "R 12") and each token carries the tooltip that says which
+ *  hook event feeds it — the old glyphs read as a debug HUD to anyone who
+ *  had not read the manual. Mono, not Silkscreen: these are numbers the
+ *  agent produced, and mono digits do not jitter as they tick.
+ *  The wrapper stays pointer-transparent so drag-panning works over the
+ *  corner; only the three tokens themselves take the pointer, which is
+ *  what native `title` tooltips need. */
 function SessionTicker(): ReactElement {
   const events = useEventsStore((s) => s.events);
   let reads = 0;
@@ -84,8 +93,86 @@ function SessionTicker(): ReactElement {
     else if (e.kind === "stop") turns += 1;
   }
   return (
-    <div className="pointer-events-none absolute bottom-2 left-2 z-[1] font-pixel text-2xs text-[var(--amber)]">
-      R {reads} · W {writes} · ✓ {turns}
+    <div className="pointer-events-none absolute bottom-2 left-2 z-canvas-ui font-mono text-micro text-amber-text">
+      <span className="pointer-events-auto cursor-help" title="Files the agent read (hook events this session)">
+        {reads} reads
+      </span>
+      {" · "}
+      <span className="pointer-events-auto cursor-help" title="Edits and writes">
+        {writes} writes
+      </span>
+      {" · "}
+      <span className="pointer-events-auto cursor-help" title="Completed turns (Stop events)">
+        {turns} turns
+      </span>
+    </div>
+  );
+}
+
+const LEGEND_LINE = "Cow = the agent · calves = subagents · desk lights = files being read/written";
+// Split so no two conflicting utilities (px-2/px-3) ever land in one class
+// list — Tailwind resolves those by stylesheet order, not attribute order.
+const STRIP_BTN = "h-7 rounded border text-sm transition-colors duration-fast";
+const STRIP_IDLE = "border-border bg-surface-2 text-content hover:bg-surface-3";
+const STRIP_ON = "border-amber-border bg-amber-surface text-amber-text hover:bg-surface-3";
+
+/** Bottom-right HUD strip (WO15 §6 B1.2) — the barn's key, plus the two
+ *  controls that make an empty barn useful: Demo (moved here from the old
+ *  top-right corner) and Connect hooks.
+ *
+ *  Collapsing hides the legend *line* only; the button row stays. A strip
+ *  that swallowed Demo when collapsed would hide the single affordance a
+ *  first-run, hook-less barn has. Open state is mount-local by contract —
+ *  "remembers nothing": no settings key, no localStorage, and it resets
+ *  every time the view is toggled away and back.
+ *
+ *  No motion: the panel appears/disappears rather than sliding, so calm mode
+ *  and prefers-reduced-motion have nothing to suppress here. */
+function BarnLegend({
+  demoRunning,
+  onToggleDemo,
+}: {
+  demoRunning: boolean;
+  onToggleDemo: () => void;
+}): ReactElement {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="pointer-events-none absolute bottom-2 right-2 z-canvas-ui flex flex-col items-end gap-1">
+      <div
+        id="barn-legend-body"
+        hidden={!open}
+        className="max-w-[340px] rounded-lg border border-border bg-surface-1 px-2 py-1 text-xs text-content-secondary shadow-popover"
+      >
+        {LEGEND_LINE}
+      </div>
+      <div className="pointer-events-auto flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onToggleDemo}
+          title="Play a scripted barn sequence — no files are touched"
+          className={`${STRIP_BTN} px-3 ${demoRunning ? STRIP_ON : STRIP_IDLE}`}
+        >
+          {demoRunning ? "Stop demo" : "Demo"}
+        </button>
+        <button
+          type="button"
+          onClick={() => useUiStore.getState().setHooksModalOpen(true)}
+          title="Set up Claude Code hooks so the barn shows real activity"
+          className={`${STRIP_BTN} px-3 ${STRIP_IDLE}`}
+        >
+          Connect hooks
+        </button>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls="barn-legend-body"
+          onClick={() => setOpen((v) => !v)}
+          title={open ? "Hide the legend" : "Show the legend"}
+          className={`${STRIP_BTN} px-2 ${STRIP_IDLE}`}
+        >
+          Legend <span aria-hidden="true">{open ? "▾" : "▴"}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -113,7 +200,7 @@ function FpsOverlay({ appRef, ready }: { appRef: RefObject<Application | null>; 
 
   if (!showFps || !ready) return null;
   return (
-    <div className="absolute left-2 top-2 z-[1] font-pixel text-2xs text-[var(--amber)]">
+    <div className="pointer-events-none absolute left-2 top-2 z-canvas-ui font-pixel text-2xs text-amber">
       {fps} fps{idle ? " · idle" : ""}
     </div>
   );
@@ -166,7 +253,6 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       camera.addChild(hover.view);
       cleanups.push(() => hover.destroy());
       app.stage.addChild(camera);
-      camera.scale.set(INITIAL_ZOOM);
       const centerCamera = (): void => {
         // integer camera positions — sub-pixel pans break the 16-bit spell
         camera.position.set(
@@ -174,7 +260,20 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
           Math.round(app.screen.height / 2 - layout.center.y * camera.scale.y),
         );
       };
-      centerCamera();
+      // WO15 D-21 — wide-screen fit: the largest rung of the same integer
+      // zoom ladder the wheel uses whose world bounds still fit the host,
+      // instead of a fixed 2×. A 2560×1440 window used to show a stamp-sized
+      // barn in an ocean of night; a 1280×720 window with both side panels
+      // open used to *clip* the floor at 2×. Snap, never tween: there is no
+      // animation to reduce, so calm mode and prefers-reduced-motion see the
+      // same first frame everyone else does.
+      const fitCamera = (): void => {
+        const { width, height } = layout.fitBounds;
+        const fit = Math.floor(Math.min(app.screen.width / width, app.screen.height / height));
+        camera.scale.set(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit)));
+        centerCamera();
+      };
+      fitCamera();
 
       const cow = new Cow(COW_HOME_TILE);
       layout.objects.addChild(cow.view);
@@ -382,9 +481,11 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
         canvas.removeEventListener("pointerleave", onLeave);
         canvas.removeEventListener("wheel", onWheel);
       });
-      // re-center on host resize — only until the user has panned/zoomed
+      // re-fit + re-center on host resize — only until the user has
+      // panned/zoomed (§7.7): once they have chosen a rung, opening the
+      // inspector must not yank the barn back to the auto zoom.
       const onResize = (): void => {
-        if (!userMoved) centerCamera();
+        if (!userMoved) fitCamera();
       };
       app.renderer.on("resize", onResize);
       cleanups.push(() => {
@@ -447,23 +548,16 @@ export function BarnScene({ autoDemo = false, connectEvents }: BarnSceneProps): 
       <FpsOverlay appRef={appRef} ready={ready} />
       {ready && (
         <>
-          <button
-            type="button"
-            onClick={() => {
+          <SessionTicker />
+          <BarnLegend
+            demoRunning={demoRunning}
+            onToggleDemo={() => {
               const demo = demoRef.current;
               if (demo === null) return;
               if (demo.running) demo.stop();
               else demo.start();
             }}
-            className={`absolute right-2 top-2 z-[1] h-7 rounded border px-3 text-sm transition-colors duration-fast ${
-              demoRunning
-                ? "border-amber-border bg-amber-surface text-amber-text hover:bg-surface-3"
-                : "border-border bg-surface-2 text-content hover:bg-surface-3"
-            }`}
-          >
-            {demoRunning ? "Stop demo" : "Demo"}
-          </button>
-          <SessionTicker />
+          />
         </>
       )}
     </div>

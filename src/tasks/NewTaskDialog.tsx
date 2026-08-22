@@ -14,6 +14,7 @@ import {
   TASK_FILE_NAMES,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  TASK_TYPE_OPTIONS,
   useTasksStore,
   type TaskPriority,
   type TaskStatus,
@@ -35,6 +36,11 @@ const PRIMARY_BTN =
 type FileChoice = (typeof TASK_FILE_NAMES)[number];
 const PRIORITIES = ["none", ...TASK_PRIORITIES] as const;
 const STATUS_ORDER = TASK_STATUSES;
+// D-6: chips, not free text. Task type stays free text ON DISK (a file that
+// already says `spike` keeps saying it) — this is only the vocabulary the
+// dialog offers, with the same `none` chip Priority next to it already uses.
+const TASK_TYPES = ["none", ...TASK_TYPE_OPTIONS] as const;
+type TaskTypeChoice = (typeof TASK_TYPES)[number];
 
 function Segmented<T extends string>({
   value,
@@ -101,10 +107,11 @@ export function NewTaskDialog({
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [priority, setPriority] = useState<TaskPriority | null>(null);
-  // F6: free text (`composeLine`) has no token grammar for Task Type, so
+  // F6: free text (`composeLine`) has no token grammar for Task type, so
   // this rides a follow-up `update()` call after append — same mechanism
-  // the Status field below already uses.
-  const [taskType, setTaskType] = useState("");
+  // the Status field below already uses. `none` is the UI's empty value;
+  // what reaches disk is the lowercase id, or `""` for none.
+  const [taskType, setTaskType] = useState<TaskTypeChoice>("none");
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState<TaskStatus>("new");
   const [busy, setBusy] = useState(false);
@@ -138,12 +145,14 @@ export function NewTaskDialog({
     setBusy(true);
     setError(null);
     const text = composeLine(name, description, tags, agent, priority);
-    const trimmedTaskType = taskType.trim();
+    // The single UI→disk conversion for the type chips: `none` is a UI
+    // value only and must never reach the file as the literal "none".
+    const chosenTaskType = taskType === "none" ? "" : taskType;
     void (async () => {
       const err = await append(relPath, text);
       if (err !== null) throw new Error(err);
       const wantsStatus = file === "TASKS.md" && status !== "new";
-      if (wantsStatus || trimmedTaskType !== "") {
+      if (wantsStatus || chosenTaskType !== "") {
         const fresh = useTasksStore
           .getState()
           .tasks.find((t) => t.relPath === relPath && t.name === name.trim());
@@ -155,7 +164,7 @@ export function NewTaskDialog({
           const patch: TaskPatch = fullPatch(fresh, {
             status: wantsStatus ? status : fresh.status,
             done: wantsStatus ? status === "done" : fresh.done,
-            taskType: trimmedTaskType === "" ? fresh.taskType : trimmedTaskType,
+            taskType: chosenTaskType === "" ? fresh.taskType : chosenTaskType,
           });
           const err2 = await update(fresh, patch);
           if (err2 !== null) throw new Error(err2);
@@ -230,21 +239,8 @@ export function NewTaskDialog({
             <TagPicker items={tags} disabled={false} onChange={setTags} />
           </div>
           <div>
-            <FieldLabel>Task Type</FieldLabel>
-            <input
-              list="new-task-type-suggestions"
-              value={taskType}
-              onChange={(e) => setTaskType(e.target.value)}
-              placeholder="e.g. bug, feature, chore"
-              className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent"
-            />
-            <datalist id="new-task-type-suggestions">
-              <option value="bug" />
-              <option value="feature" />
-              <option value="chore" />
-              <option value="spike" />
-              <option value="docs" />
-            </datalist>
+            <FieldLabel>Task type</FieldLabel>
+            <Segmented value={taskType} options={TASK_TYPES} onChange={setTaskType} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

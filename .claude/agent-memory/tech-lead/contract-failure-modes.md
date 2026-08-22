@@ -1,6 +1,6 @@
 ---
 name: contract-failure-modes
-description: The eleven recurring defect classes Cowtext work-order contracts must pre-empt, distilled from the WO02, WO03, WO06, WO11 and WO13 audits
+description: The thirteen recurring defect classes Cowtext work-order contracts must pre-empt, distilled from the WO02, WO03, WO06, WO11, WO13 and WO15 audits
 metadata:
   type: project
 ---
@@ -136,7 +136,34 @@ already shipped a real defect once:
     invisible to the compiler once the field leaves the wire — it just reads `false` forever
     (`assemble.rs`, `handoff.rs`, WO13-D11). Any wire-field rename needs both halves of the sweep.
 
-**Why:** these are the defects that cost extra audit rounds in WO02, WO03, WO06, WO11 and WO13;
+12. **A dispatcher plan's file:line anchors are claims, not facts — and a wire type gaining a
+    required field breaks every UI literal of that type.** WO15 contracting (2026-08-21): the
+    plan cited `src/wizard/starter.ts` (does not exist), `compile.rs::TargetIn` (does not exist),
+    `loadSettings` (it is `load()`), and asked R1 to re-implement `preset_apply`'s empty-graph
+    guard and BUGS.md's `probe_status` fix — both already landed. Adding `AiTool.elapsedMs`
+    would have failed `tsc` at Stage 0 exit because `TitleScreen.tsx` builds five placeholder
+    `AiTool` literals. Fix pattern: Grep/Read every anchor before freezing it, and for every
+    required field added to a TS wire type, grep `: <Type> = {` / `<Type>[] = [` literals in
+    UI code and put the patch in the Stage 0 manifest.
+
+13. **A contract line that says "→ reload the store" after a write is a concurrency
+    instruction, not a refresh.** WO15-F2: §6 U3 prescribed "`skillsMaterialize` → `loadAgents(root)`"
+    for the Compile modal and the Reset strip. `loadAgents` is the project-open reset: it clears every
+    autosave timer and sets `drafts: {}`, `selection: null`. So the first Compile that includes a
+    built-in skill silently discarded any unsaved skill edit (skills are explicit-save) and blanked
+    the Inspector — class 9 re-entering through in-memory state instead of disk. Fix pattern: a
+    post-write refresh must be the narrowest action that makes the new disk truth visible
+    (`reloadSkills` = rescan, set `skills` only); reserve the full reload for project open and an
+    explicit user "Rescan". When drafting, grep the contract for `load<Store>(root)` and ask what
+    else that action resets.
+    **Class 10, second instance, same author:** D-13 (the decision table) said the sidecar persists
+    `{provider, model}`; §3.8 and §4.6 (the wire sections I wrote from it) carried `provider` alone.
+    U3 implemented the wire sections and reported the gap; the ModelPicker's badge then promised
+    a model is "kept locally" that nothing kept (WO15-F1). The tell: any decision-table row that
+    names a wire shape must be diffed against the wire section before freezing — copy the shape
+    into the decision row verbatim, or reference the section instead of restating it.
+
+**Why:** these are the defects that cost extra audit rounds in WO02, WO03, WO06, WO11, WO13 and WO15;
 all eleven are seam defects, invisible inside any single lane's diff — every lane in WO06 reported
 success, and WO13 passed clippy, 751 Rust tests, tsc, the production build and 95 Vitest specs
 with five HIGHs open.

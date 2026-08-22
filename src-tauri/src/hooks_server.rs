@@ -1,6 +1,12 @@
-//! Hook receiver (plan §7): axum on 127.0.0.1:4923, single route
+//! Hook receiver (plan §7): axum on [`BIND_ADDR`], single route
 //! `POST /event`. Normalizes Claude Code hook JSON to [`BarnEvent`] and
 //! re-emits it on the Tauri event bus as `"barn://event"`.
+//!
+//! [`BIND_ADDR`] is the single source of truth for the hooks port (WO15
+//! D-2): `hooks.rs` renders the curl command and the installed-hook marker
+//! from it, and the UI reads it over the [`hooks_addr`] command. No other
+//! module may hard-code the port — the WO15 gate greps `src-tauri/src` for
+//! the literal and expects the const below plus test files, nothing else.
 //!
 //! Hooks must never see errors: any body — including garbage — gets a 200
 //! with an empty response. A failed bind (port taken) logs and gives up;
@@ -17,7 +23,21 @@ use tauri::{AppHandle, Emitter};
 /// Tauri event channel the frontend listens on.
 const BARN_EVENT: &str = "barn://event";
 
-const BIND_ADDR: (&str, u16) = ("127.0.0.1", 4923);
+pub(crate) const BIND_ADDR: (&str, u16) = ("127.0.0.1", 4923);
+
+/// `"<host>:<port>"` — the one string every other module renders from.
+/// The exact content is pinned in `hooks_server/tests.rs`, deliberately not
+/// repeated here: a doc comment carrying the literal would be a second copy
+/// of the number the gate above exists to forbid.
+pub(crate) fn bind_addr_string() -> String {
+    format!("{}:{}", BIND_ADDR.0, BIND_ADDR.1)
+}
+
+/// The hooks receiver's bind address, for the Settings/Hooks UI (WO15 D-2).
+#[tauri::command]
+pub fn hooks_addr() -> String {
+    bind_addr_string()
+}
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -58,7 +78,8 @@ pub fn start(app: AppHandle) {
             Ok(l) => l,
             Err(e) => {
                 eprintln!(
-                    "cowtext: hooks server could not bind 127.0.0.1:4923 ({e}) — live monitor disabled"
+                    "cowtext: hooks server could not bind {} ({e}) — live monitor disabled",
+                    bind_addr_string()
                 );
                 return;
             }

@@ -48,6 +48,36 @@ export const LENS_MODES: readonly LensMode[] = ["none", "activity", "weight", "l
 // settings.json and silently defeat Rust's own safety-net fallback.
 export const DEFAULT_SESSION_TOKEN_CEILING = 200_000;
 
+// ── Appearance (WO15 Block 7 / §4.1) ───────────────────────────────────
+//
+// Scale is a PERCENT, not a ratio: it is what the segmented control shows
+// and what settings.json stores. App.tsx divides by 100 for the
+// `--ui-scale` custom property. D-7: the scale applies to chrome containers
+// and portal roots via CSS `zoom` — never to `.react-flow` or the Barn host
+// (both are px-frozen geometry).
+
+export type UiScale = 85 | 100 | 115 | 130;
+export const UI_SCALES: readonly UiScale[] = [85, 100, 115, 130];
+
+export type UiFont = "system" | "plex";
+export type CodeFont = "jetbrains" | "system-mono";
+
+/** No new fonts are bundled (WO15 §7.9): every family below is either a
+ *  system stack or one already loaded by `main.tsx`. Each value is the
+ *  whole `font-family` list, applied to `--font-ui` by App.tsx. */
+export const UI_FONT_STACKS: Record<UiFont, string> = {
+  system: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+  plex: '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+};
+
+export const CODE_FONT_STACKS: Record<CodeFont, string> = {
+  jetbrains: '"JetBrains Mono", ui-monospace, Consolas, monospace',
+  "system-mono": 'ui-monospace, Consolas, "Courier New", monospace',
+};
+
+/** Node-type help stays open for the first N launches (Block 1.3). */
+export const NODE_TYPE_HELP_OPEN_LAUNCHES = 3;
+
 export interface AppSettings {
   version: 1;
   masterVolume: number; // 0..1
@@ -89,6 +119,26 @@ export interface AppSettings {
    *  graph.json yet (`graph.ts::loadGraph`). Additive, tolerant-merge
    *  field — an older settings.json simply falls back to `["claude"]`. */
   defaultCompileTargets: CompileTarget[];
+  /** WO15 Block 7: chrome zoom, in percent. One of {@link UI_SCALES}. */
+  uiScale: UiScale;
+  /** WO15 Block 7: the UI text family — see {@link UI_FONT_STACKS}. */
+  uiFont: UiFont;
+  /** WO15 Block 7: the monospace family — see {@link CODE_FONT_STACKS}. */
+  codeFont: CodeFont;
+  /** WO15 Block 1.3: how many times this install has been launched.
+   *  Incremented exactly once per `load()` (the `loading` guard keeps
+   *  StrictMode's double effect to one bump). Drives first-run affordances
+   *  like the Inspector's node-type help. */
+  launchCount: number;
+  /** WO15 Block 1.3: `null` = the user has never touched the node-type help
+   *  disclosure, so `launchCount` decides (see
+   *  {@link selectNodeTypeHelpOpen}); a boolean is an explicit choice that
+   *  wins from then on. */
+  nodeTypeHelpCollapsed: boolean | null;
+  /** WO15 Block 5b: `fileName` of the agent the Run dialog last spawned,
+   *  used as its default the next time nothing else selects one. `""` = no
+   *  memory yet. Not a path — the same key `useAgentsStore.meta` uses. */
+  lastRunAgentFile: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -111,6 +161,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sessionTokenCeiling: DEFAULT_SESSION_TOKEN_CEILING,
   collapsedSections: [],
   defaultCompileTargets: ["claude"],
+  uiScale: 100,
+  uiFont: "plex",
+  codeFont: "jetbrains",
+  launchCount: 0,
+  nodeTypeHelpCollapsed: null,
+  lastRunAgentFile: "",
 };
 
 export interface SettingsState extends AppSettings {
@@ -142,6 +198,11 @@ export interface SettingsState extends AppSettings {
   /** Collapse/expand one Inspector section by key. */
   setSectionCollapsed: (key: string, collapsed: boolean) => void;
   setDefaultCompileTargets: (targets: CompileTarget[]) => void;
+  setUiScale: (v: UiScale) => void;
+  setUiFont: (v: UiFont) => void;
+  setCodeFont: (v: CodeFont) => void;
+  setNodeTypeHelpCollapsed: (v: boolean | null) => void;
+  setLastRunAgentFile: (fileName: string) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -151,6 +212,17 @@ export function selectReducedMotion(s: SettingsState): boolean {
 /** Sound is hard-off when muted OR calm (calm implies mute). */
 export function selectSoundOff(s: SettingsState): boolean {
   return s.muted || s.calmMode;
+}
+
+/** Is the Inspector's node-type help disclosure open? (Block 1.3.) Until the
+ *  user collapses or expands it themselves (`nodeTypeHelpCollapsed === null`)
+ *  it stays open for the first {@link NODE_TYPE_HELP_OPEN_LAUNCHES} launches
+ *  — the state where the taxonomy is genuinely new — and closes on its own
+ *  afterwards. Once touched, the explicit choice wins forever. */
+export function selectNodeTypeHelpOpen(s: SettingsState): boolean {
+  return s.nodeTypeHelpCollapsed === null
+    ? s.launchCount <= NODE_TYPE_HELP_OPEN_LAUNCHES
+    : !s.nodeTypeHelpCollapsed;
 }
 
 /** Dedupe/compare key: trailing slash stripped, lowercased (Windows paths). */
@@ -182,8 +254,10 @@ function mergeRecentProjects(raw: unknown): RecentProject[] {
   return out;
 }
 
-/** Tolerant merge: unknown fields ignored, missing fields default, bad types default. */
-function mergeSettings(raw: unknown): AppSettings {
+/** Tolerant merge: unknown fields ignored, missing fields default, bad types
+ *  default. Exported (pure, no store access) so `settings.test.ts` can pin
+ *  the merge rules for every field without a running app — WO15 §4.1. */
+export function mergeSettings(raw: unknown): AppSettings {
   const out = { ...DEFAULT_SETTINGS };
   if (typeof raw !== "object" || raw === null) return out;
   const r = raw as Record<string, unknown>;
@@ -230,7 +304,86 @@ function mergeSettings(raw: unknown): AppSettings {
       (t): t is CompileTarget => typeof t === "string",
     );
   }
+  // WO15 §4.1 — the six appearance/first-run fields. Same tolerance rule as
+  // everything above: an unknown or badly-typed value falls back to the
+  // default rather than being carried through, so a settings.json edited by
+  // hand (or written by a newer build) can never put the UI in a state no
+  // control can leave.
+  if (typeof r.uiScale === "number" && UI_SCALES.some((s) => s === r.uiScale)) {
+    out.uiScale = r.uiScale as UiScale;
+  }
+  if (r.uiFont === "system" || r.uiFont === "plex") out.uiFont = r.uiFont;
+  if (r.codeFont === "jetbrains" || r.codeFont === "system-mono") out.codeFont = r.codeFont;
+  if (
+    typeof r.launchCount === "number" &&
+    Number.isFinite(r.launchCount) &&
+    r.launchCount >= 0
+  ) {
+    out.launchCount = Math.floor(r.launchCount);
+  }
+  if (typeof r.nodeTypeHelpCollapsed === "boolean" || r.nodeTypeHelpCollapsed === null) {
+    out.nodeTypeHelpCollapsed = r.nodeTypeHelpCollapsed;
+  }
+  if (typeof r.lastRunAgentFile === "string") out.lastRunAgentFile = r.lastRunAgentFile;
   return out;
+}
+
+/** What `read_app_settings` gave us. `{ ok: true, raw: null }` = the file
+ *  does not exist yet (a first launch, not a failure); `{ ok: false }` = the
+ *  IPC itself rejected. */
+export type SettingsRead = { ok: true; raw: string | null } | { ok: false };
+
+export interface SettingsLoad {
+  /** What the store adopts. `launchCount` is ALREADY incremented. */
+  settings: AppSettings;
+  /** May this be written back to `settings.json`? */
+  persist: boolean;
+  /** Why the file's contents were not used — `null` when they were (or when
+   *  there was no file). The IPC-rejection message is not repeated here; the
+   *  caller has the real error in hand for that case. */
+  problem: string | null;
+}
+
+function withLaunch(s: AppSettings): AppSettings {
+  return { ...s, launchCount: s.launchCount + 1 };
+}
+
+/** The pure core of `load()` — tester #4.
+ *
+ *  Two independent decisions, which the old inline version conflated:
+ *
+ *   1. WHAT TO SHOW. Always something: a settings.json we cannot read must
+ *      never stop the app from starting, so every failure path falls back to
+ *      `DEFAULT_SETTINGS`. And the launch still counts on every path — this
+ *      loader IS the "app launched" event (WO15 Block 1.3 / A-2), and a user
+ *      whose file is unreadable is still launching the app.
+ *
+ *   2. WHETHER TO WRITE IT BACK. Only when the read actually SUCCEEDED. The
+ *      old code persisted unconditionally, 500 ms after every launch: one
+ *      transient IPC failure, or a settings.json a text editor left
+ *      half-written, and the user's recent projects / panel sizes / claude
+ *      binary path were overwritten with defaults — permanently, from a
+ *      problem that might have been momentary. Falling back in MEMORY is
+ *      recoverable (relaunch); writing the fallback to disk is not.
+ *
+ *  "Succeeded" means the file parsed into a JSON object. No file at all is a
+ *  success (there is nothing to destroy, and the first launch is exactly
+ *  when settings.json should be created); a file holding `[]`, `"nope"` or
+ *  `null` is not — it is somebody's data in a shape we do not understand. */
+export function settingsAfterLoad(read: SettingsRead): SettingsLoad {
+  const defaults = withLaunch(DEFAULT_SETTINGS);
+  if (!read.ok) return { settings: defaults, persist: false, problem: "settings.json could not be read" };
+  if (read.raw === null) return { settings: defaults, persist: true, problem: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.raw);
+  } catch {
+    return { settings: defaults, persist: false, problem: "settings.json is not valid JSON" };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { settings: defaults, persist: false, problem: "settings.json is not a settings object" };
+  }
+  return { settings: withLaunch(mergeSettings(parsed)), persist: true, problem: null };
 }
 
 // Debounced persist — serialize exactly the AppSettings fields in declared
@@ -260,6 +413,12 @@ function persistNow(): void {
     sessionTokenCeiling: s.sessionTokenCeiling,
     collapsedSections: s.collapsedSections,
     defaultCompileTargets: s.defaultCompileTargets,
+    uiScale: s.uiScale,
+    uiFont: s.uiFont,
+    codeFont: s.codeFont,
+    launchCount: s.launchCount,
+    nodeTypeHelpCollapsed: s.nodeTypeHelpCollapsed,
+    lastRunAgentFile: s.lastRunAgentFile,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -310,19 +469,30 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
       set({ prefersReducedMotion: mq.matches });
       mq.addEventListener("change", (ev) => set({ prefersReducedMotion: ev.matches }));
-      let merged = { ...DEFAULT_SETTINGS };
+      let read: SettingsRead;
       try {
-        const raw = await invoke<string | null>("read_app_settings");
-        if (raw !== null) merged = mergeSettings(JSON.parse(raw) as unknown);
+        read = { ok: true, raw: await invoke<string | null>("read_app_settings") };
       } catch (e: unknown) {
-        // Parse or IPC failure → defaults; the app must still start.
+        // IPC failure → defaults; the app must still start.
         pushToast({
           severity: "danger",
           title: "Settings failed to load",
           detail: String(e),
         });
+        read = { ok: false };
       }
-      set({ ...merged, loaded: true });
+      // The launch counts on every path; the WRITE-BACK does not. See
+      // `settingsAfterLoad` — tester #4.
+      const outcome = settingsAfterLoad(read);
+      if (read.ok && outcome.problem !== null) {
+        pushToast({
+          severity: "danger",
+          title: "Settings failed to load",
+          detail: `${outcome.problem}. Defaults are in use for this session; your file was left untouched.`,
+        });
+      }
+      set({ ...outcome.settings, loaded: true });
+      if (outcome.persist) schedulePersist();
     })();
     return loading;
   },
@@ -419,6 +589,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setDefaultCompileTargets: (targets) => {
     set({ defaultCompileTargets: [...targets] });
+    schedulePersist();
+  },
+
+  setUiScale: (v) => {
+    set({ uiScale: v });
+    schedulePersist();
+  },
+  setUiFont: (v) => {
+    set({ uiFont: v });
+    schedulePersist();
+  },
+  setCodeFont: (v) => {
+    set({ codeFont: v });
+    schedulePersist();
+  },
+  setNodeTypeHelpCollapsed: (v) => {
+    set({ nodeTypeHelpCollapsed: v });
+    schedulePersist();
+  },
+  setLastRunAgentFile: (fileName) => {
+    set({ lastRunAgentFile: fileName });
     schedulePersist();
   },
 }));

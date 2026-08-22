@@ -24,7 +24,13 @@ import {
   skillSave,
 } from "../agents/api";
 import { agentAvatarClear, agentAvatarRead, agentAvatarSet } from "../agents/avatarApi";
-import type { AgentDoc, AgentsScan, FmFields, SkillDoc } from "../agents/types";
+import { PROVIDER_IDS } from "../agents/types";
+import type { AgentDoc, AgentsScan, FmFields, ProviderId, SkillDoc } from "../agents/types";
+// Data only (no store, no React) — the built-in skill ids the sidecar's
+// `builtinSkills` map is validated against. An id this build does not ship
+// is dropped on read AND on write (WO15 §3.8), so an old project's stale
+// entry never resurrects a skill that no longer exists.
+import { BUILTIN_SKILLS } from "../resources";
 
 // ── Types (contract §7.2) ───────────────────────────────────────────────
 
@@ -34,6 +40,12 @@ export interface Selection {
   kind: EntityKind;
   key: string; // fileName | dirName
 }
+
+/** WO15 §4.6 / Block 3b — the priority a brand-new agent starts at, and the
+ *  fallback for a sidecar entry with no `priority` key (D-19). One constant:
+ *  the wizard, the parser and the merge all read it, so "what does a new
+ *  agent weigh?" has exactly one answer. */
+export const DEFAULT_PRIORITY = 1;
 
 export interface AgentMeta {
   nickname: string;
@@ -47,15 +59,35 @@ export interface AgentMeta {
    *  null => inherit the global default; 0 => explicitly unbounded; >0 =>
    *  that ceiling. Same 0-is-unbounded convention as the global setting. */
   defaultTokenCeiling: number | null;
+  /** WO15 D-13 — which provider's model this agent is configured for.
+   *  Absent = unknown (a sidecar written before WO15, or a value this build
+   *  doesn't know); the UI derives it with
+   *  `providerForModel(model) ?? DEFAULT_PROVIDER`. Cowtext-local: it is
+   *  never written into the agent's own frontmatter. */
+  provider?: ProviderId;
+  /** WO15 A-20 (audit F1) — the model id chosen for a NON-Anthropic
+   *  provider. `null` = no choice recorded ("Inherit from the session").
+   *
+   *  Anthropic is the one agent format with a `model:` key
+   *  (PROVIDER_SUPPORT_MATRIX.md), so an Anthropic agent's model lives in
+   *  its frontmatter and NEVER here — `serializeMeta` drops it. For every
+   *  other provider the frontmatter has nowhere to put it, and the picker
+   *  says the choice is "kept locally": this field is that locality. Before
+   *  A-20 the choice reached neither file and was silently lost at Create.
+   *
+   *  Required (not `?:`) so `metaOrDefault(...).model` is always
+   *  `string | null` — exactly what `ModelPicker`'s `model` prop takes. */
+  model: string | null;
 }
 
 export const DEFAULT_META: AgentMeta = {
   nickname: "",
-  priority: 3,
+  priority: DEFAULT_PRIORITY,
   influence: 50,
   avatarSeed: "",
   defaultCwd: "",
   defaultTokenCeiling: null,
+  model: null,
 };
 
 /** Draft = the editable mirror of one doc. `rawContent` is used iff `raw`. */
@@ -78,6 +110,12 @@ export interface AgentsState {
   meta: Record<string, AgentMeta>; // key = agent fileName
   metaError: string | null; // non-null => meta writes blocked
   orphanKeys: string[];
+
+  /** WO15 Block 4 — which BUILT-IN skills this project includes in its
+   *  compile, read from the sidecar's `builtinSkills` map. An absent id is
+   *  `false` (nothing is included by default); reset to `{}` by
+   *  `loadAgents`, like every other per-project map here. */
+  builtinInclude: Record<string, boolean>;
 
   selection: Selection | null;
   drafts: Record<string, DocDraft>; // keyed by draftKey(selection)
@@ -116,7 +154,28 @@ export interface AgentsState {
    *  `discardStaleAgentDraft` (adopt the fresh content). */
   staleAgents: Record<string, boolean>;
 
+  /** FULL project-open reset: discards drafts, selection, meta, timers and
+   *  every per-file map, then re-scans. Reserved for opening a project and
+   *  for the Inspector's explicit "Rescan agents" recovery button (WO15
+   *  A-21) — anything that merely wants fresh SKILLS after writing one must
+   *  call {@link AgentsState.reloadSkills} instead.
+   *
+   *  Flushes the sidecar and every pending agent autosave, awaited, BEFORE
+   *  it discards anything (tester #10). */
   loadAgents(root: string): Promise<void>;
+  /** WO15 A-21 (audit F2) — narrow refresh after something wrote a skill on
+   *  disk (`skills_materialize`, "Reset to built-in"). Re-scans and replaces
+   *  ONLY `skills`/`skipped`; the derived built-in three-state view
+   *  (`useBuiltinSkillStates`) recomputes from that. Deliberately touches no
+   *  drafts, no selection, no `meta`/`builtinInclude`, and cancels no
+   *  autosave timer: those two call sites used `loadAgents`, which threw
+   *  away an unsaved SkillEditor draft (skills are explicit-save, so a draft
+   *  can be minutes old) and blanked the Inspector with no warning.
+   *
+   *  Best-effort: a failed re-scan leaves the current list on screen rather
+   *  than emptying the rail; `loadAgents` remains the surface that reports a
+   *  load error. A reply that arrives after the project changed is dropped. */
+  reloadSkills(root: string): Promise<void>;
   select(sel: Selection | null): void;
   updateDraft(sel: Selection, patch: Partial<DocDraft>): void;
   revertDraft(sel: Selection): void;
@@ -142,6 +201,10 @@ export interface AgentsState {
   attachSkill(fileName: string, skillName: string): void; // draft + autosave
   detachSkill(fileName: string, skillName: string): void; // draft + autosave
   updateMeta(fileName: string, patch: Partial<AgentMeta>): void; // 700 ms debounce
+  /** WO15 Block 4 — include/exclude one built-in skill from this project's
+   *  compile. Persists through the same 700 ms sidecar debounce
+   *  `updateMeta` uses; an unknown id is ignored. */
+  setBuiltinInclude(id: string, include: boolean): void;
   cleanupOrphans(): Promise<string | null>;
   /** WO11 G6 — lazily fetches and caches one agent's avatar; a no-op once
    *  the fileName key is already present in `avatars` (fetched or not). */
@@ -306,12 +369,58 @@ function clampNickname(v: unknown): string {
 function defaultMetaFor(fileName: string): AgentMeta {
   return {
     nickname: "",
-    priority: 3,
+    priority: DEFAULT_PRIORITY,
     influence: 50,
     avatarSeed: fileName.replace(/\.md$/i, ""),
     defaultCwd: "",
     defaultTokenCeiling: null,
+    model: null,
   };
+}
+
+/** A sidecar `provider` value, or `undefined` for anything this build does
+ *  not know (WO15 §3.8: "any other value reads as absent"). */
+function parseProvider(raw: unknown): ProviderId | undefined {
+  if (typeof raw !== "string") return undefined;
+  return PROVIDER_IDS.find((p) => p === raw);
+}
+
+/** A sidecar `model` value (WO15 A-20), or `null` for "no choice recorded".
+ *  Anything that is not a non-blank string — a number, an object, `""`, a
+ *  key the file never had — reads as `null`, i.e. "inherit from the
+ *  session": the same tolerance rule every other field here follows, and
+ *  the reason a hand-edited agents.json can never put the picker in a state
+ *  it cannot leave. The string is kept VERBATIM (no trimming, no casing):
+ *  model ids are opaque to Cowtext, and a custom id typed by the user is
+ *  exactly as valid as one from the catalog. */
+function parseModel(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  return raw;
+}
+
+/** The ids this build ships a built-in skill for — the read/write filter for
+ *  the sidecar's `builtinSkills` map. */
+const BUILTIN_SKILL_IDS: readonly string[] = BUILTIN_SKILLS.map((s) => s.id);
+
+/** `builtinSkills` per §3.8: only `include: true` entries exist, unknown ids
+ *  are ignored. Anything malformed reads as "nothing included". */
+function parseBuiltinInclude(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!BUILTIN_SKILL_IDS.includes(id)) continue;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    if ((value as Record<string, unknown>).include === true) out[id] = true;
+  }
+  return out;
+}
+
+/** Skill text comparison normal form (WO15 §4.6): CRLF → LF, then trailing
+ *  whitespace stripped. This is how "is the on-disk skill still the bundled
+ *  one?" is decided — a checkout with `core.autocrlf` on, or an editor that
+ *  added a final newline, must not read as "the user modified it". */
+export function normalizeSkillContent(s: string): string {
+  return s.replace(/\r\n/g, "\n").trimEnd();
 }
 
 /** null => inherit the global default; a finite number >= 0 is taken as-is
@@ -324,41 +433,59 @@ function parseCeiling(raw: unknown): number | null {
 function parseAgentMeta(raw: unknown, fileName: string): AgentMeta {
   const obj = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const avatarSeedRaw = obj.avatarSeed;
+  const provider = parseProvider(obj.provider);
   return {
     nickname: clampNickname(obj.nickname),
-    priority: clampInt(obj.priority, 3, 1, 5),
+    priority: clampInt(obj.priority, DEFAULT_PRIORITY, 1, 5),
     influence: clampInt(obj.influence, 50, 0, 100),
     avatarSeed: typeof avatarSeedRaw === "string" ? avatarSeedRaw : fileName.replace(/\.md$/i, ""),
     defaultCwd: typeof obj.defaultCwd === "string" ? obj.defaultCwd : "",
     defaultTokenCeiling: parseCeiling(obj.defaultTokenCeiling),
+    // Read unconditionally, even with no `provider` alongside it (a
+    // hand-edited file, or one written by a build that dropped the
+    // provider): keeping the id costs nothing, and `serializeMeta` is the
+    // one place that decides whether it may be written back out.
+    model: parseModel(obj.model),
+    ...(provider !== undefined ? { provider } : {}),
   };
 }
 
-interface ParsedMeta {
+export interface ParsedMeta {
   meta: Record<string, AgentMeta>;
   metaError: string | null;
   orphanKeys: string[];
   orphan: Record<string, unknown>;
+  builtinInclude: Record<string, boolean>;
 }
 
-function parseMetaJson(raw: string | null, agents: AgentDoc[]): ParsedMeta {
-  if (raw === null) return { meta: {}, metaError: null, orphanKeys: [], orphan: {} };
+const EMPTY_PARSED_META: ParsedMeta = {
+  meta: {},
+  metaError: null,
+  orphanKeys: [],
+  orphan: {},
+  builtinInclude: {},
+};
+
+/** Exported for `agents.test.ts` only (pure, no store access) — the same
+ *  reason `isDirty` is exported: the sidecar's wire shape is a contract
+ *  (§3.8 + A-20) and the round trip through {@link serializeMeta} is what
+ *  pins it. Nothing outside this module calls it in production. */
+export function parseMetaJson(raw: string | null, agents: AgentDoc[]): ParsedMeta {
+  if (raw === null) return { ...EMPTY_PARSED_META };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { meta: {}, metaError: "Could not parse .cowtext/agents.json", orphanKeys: [], orphan: {} };
+    return { ...EMPTY_PARSED_META, metaError: "Could not parse .cowtext/agents.json" };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { meta: {}, metaError: "agents.json is not an object", orphanKeys: [], orphan: {} };
+    return { ...EMPTY_PARSED_META, metaError: "agents.json is not an object" };
   }
   const obj = parsed as Record<string, unknown>;
   if (typeof obj.version !== "number" || obj.version !== 1) {
     return {
-      meta: {},
+      ...EMPTY_PARSED_META,
       metaError: `Unsupported agents.json version: ${JSON.stringify(obj.version)}`,
-      orphanKeys: [],
-      orphan: {},
     };
   }
   const agentsRaw =
@@ -378,10 +505,21 @@ function parseMetaJson(raw: string | null, agents: AgentDoc[]): ParsedMeta {
     }
   }
   orphanKeys.sort();
-  return { meta, metaError: null, orphanKeys, orphan };
+  return {
+    meta,
+    metaError: null,
+    orphanKeys,
+    orphan,
+    builtinInclude: parseBuiltinInclude(obj.builtinSkills),
+  };
 }
 
-function serializeMeta(meta: Record<string, AgentMeta>, orphan: Record<string, unknown>): string {
+/** Exported for tests — see {@link parseMetaJson}. */
+export function serializeMeta(
+  meta: Record<string, AgentMeta>,
+  orphan: Record<string, unknown>,
+  builtinInclude: Record<string, boolean>,
+): string {
   const agentsOut: Record<string, unknown> = {};
   const keys = [...new Set([...Object.keys(meta), ...Object.keys(orphan)])].sort();
   for (const k of keys) {
@@ -398,17 +536,45 @@ function serializeMeta(meta: Record<string, AgentMeta>, orphan: Record<string, u
         avatarSeed: m.avatarSeed,
         defaultCwd: m.defaultCwd,
         defaultTokenCeiling: m.defaultTokenCeiling,
+        // Emitted only when set (§3.8): an agent whose provider was never
+        // chosen keeps the key out of the file rather than baking today's
+        // default into every project's sidecar.
+        ...(m.provider !== undefined ? { provider: m.provider } : {}),
+        // `model` (A-20) — emitted only for a NON-Anthropic provider that
+        // actually has an id. Two exclusions, each for its own reason:
+        //   • no provider ⇒ nothing to interpret the id against, and the
+        //     UI would derive the provider from the FRONTMATTER model
+        //     anyway, so a stray sidecar id could only contradict it;
+        //   • anthropic ⇒ `model:` belongs in the agent's frontmatter,
+        //     which Claude Code actually reads. Writing it here too would
+        //     create a second source of truth that silently wins or loses
+        //     depending on which surface you opened last.
+        ...(m.model !== null && m.provider !== undefined && m.provider !== "anthropic"
+          ? { model: m.model }
+          : {}),
       };
     } else {
       agentsOut[k] = orphan[k];
     }
+  }
+  // `builtinSkills` — only `include: true` entries, only ids this build
+  // ships, sorted, and the whole key omitted when nothing is included
+  // (§3.8). Absence IS false, so a project that includes nothing looks
+  // exactly like one written before WO15.
+  const builtinOut: Record<string, { include: true }> = {};
+  for (const id of [...BUILTIN_SKILL_IDS].sort()) {
+    if (builtinInclude[id] === true) builtinOut[id] = { include: true };
   }
   // Version stays 1 through the orchestrator's two added keys. The bump rule
   // exists for BREAKING schema changes; these are additive with defaults, and
   // parseMetaJson hard-rejects any version !== 1 — so bumping would make an
   // older build discard every agent's meta instead of just ignoring two keys
   // it does not know. Backward AND forward compatible is worth more here.
-  const stable = { version: 1, agents: agentsOut };
+  const stable = {
+    version: 1,
+    agents: agentsOut,
+    ...(Object.keys(builtinOut).length > 0 ? { builtinSkills: builtinOut } : {}),
+  };
   return `${JSON.stringify(stable, null, 2)}\n`;
 }
 
@@ -440,7 +606,7 @@ function reconcileOrphan(key: string): AgentMeta | undefined {
 async function flushMetaSaveInternal(): Promise<void> {
   const s = useAgentsStore.getState();
   if (s.root === null || s.metaError !== null) return;
-  const content = serializeMeta(s.meta, orphanRaw);
+  const content = serializeMeta(s.meta, orphanRaw, s.builtinInclude);
   try {
     await agentsMetaWrite(s.root, content);
   } catch {
@@ -456,10 +622,16 @@ function scheduleMetaSave(): void {
 }
 
 /** Forces an immediate sidecar write, bypassing the debounce. Wired into
- *  App.tsx's beforeunload flush (lane C). */
-export function flushMetaSave(): void {
+ *  App.tsx's beforeunload flush (lane C).
+ *
+ *  Returns the write's promise (never rejects — `flushMetaSaveInternal`
+ *  swallows) so a caller that is about to DESTROY the state this writes from
+ *  can await it; the fire-and-forget call sites are unaffected, since
+ *  ignoring a returned promise is exactly what they already do. */
+export function flushMetaSave(): Promise<void> {
   clearTimeout(metaSaveTimer);
-  void flushMetaSaveInternal();
+  metaSaveTimer = undefined;
+  return flushMetaSaveInternal();
 }
 
 // ── Agent document autosave (WO11 §5.7 / D4) ────────────────────────────
@@ -662,6 +834,17 @@ export async function flushAgentSaveFor(fileName: string): Promise<void> {
   await runAgentSave(fileName);
 }
 
+/** Awaited counterpart of `flushAgentSave()` below: settles EVERY file that
+ *  has a queue entry, in parallel. Used by `loadAgents`, which clears those
+ *  queues outright a line later — a 500 ms debounce still counting down at
+ *  that moment holds the user's last keystroke, and clearing the timer threw
+ *  it away silently (tester #10). Runs while `root` still names the OLD
+ *  project, so each write lands where it belongs. Never rejects
+ *  (`runAgentSave` resolves failures as a message string). */
+async function flushPendingAgentSaves(): Promise<void> {
+  await Promise.all([...agentSaveQueues.keys()].map((fileName) => flushAgentSaveFor(fileName)));
+}
+
 /** Best-effort flush of every pending agent autosave — mirrors
  *  `flushMetaSave`'s idiom (fire, don't await) because its exported contract
  *  is `(): void`. Wired into App.tsx's beforeunload handler, agent selection
@@ -720,6 +903,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   meta: {},
   metaError: null,
   orphanKeys: [],
+  builtinInclude: {},
 
   selection: null,
   drafts: {},
@@ -733,6 +917,15 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   staleAgents: {},
 
   loadAgents: async (root) => {
+    // Tester #10 — everything below this point DISCARDS state. A sidecar
+    // toggle flipped less than 700 ms ago and a keystroke less than 500 ms
+    // ago are, at this instant, still nothing but a pending timer; the old
+    // first two statements of this action (`clearTimeout` + `.clear()`)
+    // deleted them without a trace. Flush both first, awaited, while
+    // `root`/`meta`/`drafts` still describe the project those writes are
+    // for. Neither call can reject.
+    await flushMetaSave();
+    await flushPendingAgentSaves();
     clearTimeout(metaSaveTimer);
     orphanRaw = {};
     for (const q of agentSaveQueues.values()) clearTimeout(q.timer);
@@ -747,6 +940,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
       meta: {},
       metaError: null,
       orphanKeys: [],
+      builtinInclude: {},
       selection: null,
       drafts: {},
       busy: false,
@@ -772,11 +966,25 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         meta: parsed.meta,
         metaError: parsed.metaError,
         orphanKeys: parsed.orphanKeys,
+        builtinInclude: parsed.builtinInclude,
         loading: false,
         reloadNonce,
       });
     } catch (e) {
       set({ loading: false, loadError: String(e) });
+    }
+  },
+
+  reloadSkills: async (root) => {
+    try {
+      const scan: AgentsScan = await agentsScan(root);
+      // The project may have closed or switched while the scan was in
+      // flight; a late reply must never repopulate another project's rail.
+      if (get().root !== root) return;
+      set({ skills: scan.skills, skipped: scan.skipped });
+    } catch {
+      // Best-effort — see the interface doc comment. Nothing is cleared on
+      // this path, so a transient read failure costs the user nothing.
     }
   },
 
@@ -1245,7 +1453,10 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
       const base = st.meta[fileName] ?? defaultMetaFor(fileName);
       const merged: AgentMeta = {
         nickname: patch.nickname !== undefined ? clampNickname(patch.nickname) : base.nickname,
-        priority: patch.priority !== undefined ? clampInt(patch.priority, 3, 1, 5) : base.priority,
+        priority:
+          patch.priority !== undefined
+            ? clampInt(patch.priority, DEFAULT_PRIORITY, 1, 5)
+            : base.priority,
         influence: patch.influence !== undefined ? clampInt(patch.influence, 50, 0, 100) : base.influence,
         avatarSeed: patch.avatarSeed !== undefined ? patch.avatarSeed : base.avatarSeed,
         defaultCwd: patch.defaultCwd !== undefined ? patch.defaultCwd : base.defaultCwd,
@@ -1253,8 +1464,29 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
           patch.defaultTokenCeiling !== undefined
             ? parseCeiling(patch.defaultTokenCeiling)
             : base.defaultTokenCeiling,
+        provider: patch.provider !== undefined ? patch.provider : base.provider,
+        // Same merge rule as `provider` (A-20): an explicit `null` in the
+        // patch IS a value — "inherit from the session" — and must be able
+        // to clear a previously recorded id, which is why this tests
+        // `undefined` rather than nullishness.
+        model: patch.model !== undefined ? patch.model : base.model,
       };
       return { meta: { ...st.meta, [fileName]: merged } };
+    });
+    scheduleMetaSave();
+  },
+
+  setBuiltinInclude: (id, include) => {
+    if (get().metaError !== null) return;
+    if (!BUILTIN_SKILL_IDS.includes(id)) return;
+    set((st) => {
+      if ((st.builtinInclude[id] === true) === include) return {};
+      const next = { ...st.builtinInclude };
+      // Absence IS false (§3.8) — store it the way it serializes, so the
+      // map and the file can never disagree about what "off" looks like.
+      if (include) next[id] = true;
+      else delete next[id];
+      return { builtinInclude: next };
     });
     scheduleMetaSave();
   },
@@ -1268,7 +1500,7 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     try {
       orphanRaw = {};
       clearTimeout(metaSaveTimer);
-      const content = serializeMeta(get().meta, orphanRaw);
+      const content = serializeMeta(get().meta, orphanRaw, get().builtinInclude);
       await agentsMetaWrite(s.root, content);
       set({ orphanKeys: [] });
       return null;

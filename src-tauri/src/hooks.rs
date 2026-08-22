@@ -19,12 +19,22 @@ use std::fs;
 const SETTINGS_REL_PATH: &str = ".claude/settings.json";
 
 /// The hook command from plan §7. `|| true` guarantees hooks never block
-/// Claude Code when the app is closed.
-const HOOK_COMMAND: &str =
-    "curl -s -m 1 -X POST --data-binary @- http://127.0.0.1:4923/event || true";
+/// Claude Code when the app is closed. Built from
+/// [`crate::hooks_server::bind_addr_string`] so the address written into a
+/// user's `.claude/settings.json` can never drift from the address the
+/// receiver actually listens on (WO15 D-2) — this is a function, not a
+/// `const`, only because that formatting is not const-evaluable.
+fn hook_command() -> String {
+    format!(
+        "curl -s -m 1 -X POST --data-binary @- http://{}/event || true",
+        crate::hooks_server::bind_addr_string()
+    )
+}
 
 /// Substring that identifies an already-installed Cowtext hook entry.
-const HOOK_MARKER: &str = "127.0.0.1:4923/event";
+fn hook_marker() -> String {
+    format!("{}/event", crate::hooks_server::bind_addr_string())
+}
 
 const POST_TOOL_USE_MATCHER: &str = "Read|Edit|Write|Grep|Glob";
 
@@ -133,7 +143,8 @@ fn merge_hooks(existing: Option<&str>) -> Result<String, String> {
 /// entry. Shared by `merge_hooks` and `hooks_status` so the two paths
 /// cannot drift.
 fn event_already_installed(arr: &[Value]) -> bool {
-    arr.iter().any(|entry| entry.to_string().contains(HOOK_MARKER))
+    let marker = hook_marker();
+    arr.iter().any(|entry| entry.to_string().contains(&marker))
 }
 
 #[derive(Serialize, Debug)]
@@ -216,7 +227,7 @@ fn hook_entry(matcher: Option<&str>) -> Value {
     }
     entry.insert(
         "hooks".to_string(),
-        json!([{ "type": "command", "command": HOOK_COMMAND }]),
+        json!([{ "type": "command", "command": hook_command() }]),
     );
     Value::Object(entry)
 }

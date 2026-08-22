@@ -15,7 +15,7 @@ mod tests;
 
 use crate::frontmatter::{self, FmFields};
 use crate::project::{checked_root, resolve_within_root, write_atomic};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -871,6 +871,97 @@ pub fn skill_delete(root: String, dir_name: String) -> Result<(), String> {
         return Err(format!("No such skill: {dir_name}"));
     }
     fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+/// One bundled skill to write to disk (WO15 §3.4).
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInput {
+    /// Skill directory slug — must already satisfy `preset::slugify(id)? == id`.
+    pub id: String,
+    /// Full SKILL.md text, frontmatter first.
+    pub content: String,
+}
+
+#[derive(Serialize, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsMaterialized {
+    /// `.claude/skills/<id>/SKILL.md`, forward slashes, in input order.
+    pub written: Vec<String>,
+}
+
+/// True when `content` opens with a frontmatter fence and closes it (WO15
+/// §3.4 grammar): starts with `---\n` or `---\r\n`, and the remainder holds
+/// a `\n---` closing line. Deliberately a shape check, not a parse — the
+/// caller is shipping a bundled file, and the only failure worth naming is
+/// "this is not a SKILL.md at all". A frontmatter block with no fields at
+/// all (`---\n---\n`) has no closing line *after the opener* and so does not
+/// pass; no bundled skill lacks `name`/`description`, and a would-be empty
+/// block is far more likely to be a truncated resource than an intent.
+fn has_frontmatter_block(content: &str) -> bool {
+    content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+        .is_some_and(|rest| rest.contains("\n---"))
+}
+
+/// Writes bundled (built-in) skills to disk after the Compile diff was
+/// approved (WO15 Block 4, D-4). Create-or-replace on purpose: this is also
+/// the "Reset to built-in" path. Under [`agent_fs_guard`], like every other
+/// `.claude/skills/` writer.
+///
+/// Every entry is validated before *any* entry is written: a batch with one
+/// bad id must not leave half the built-ins on disk and half not, because
+/// the rail's badges are computed from what it finds there. An I/O failure
+/// part-way through is different in kind — the disk, not the request — and
+/// returns `Err` with the earlier writes standing; the caller reloads and
+/// sees the truth. Empty input is a successful no-op, so the CompileModal
+/// can call this unconditionally after a write.
+///
+/// `compile_write` cannot do this job: `compile.rs` forbids writing under
+/// `.claude/skills/`, and a SKILL.md cannot carry a line-1 GENERATED header
+/// (line 1 must be the frontmatter fence). Hence a separate command, gated
+/// on the same approval.
+#[tauri::command]
+pub fn skills_materialize(
+    root: String,
+    skills: Vec<SkillInput>,
+) -> Result<SkillsMaterialized, String> {
+    let mut seen: Vec<&str> = Vec::with_capacity(skills.len());
+    for skill in &skills {
+        let id = &skill.id;
+        validate_component(id)?;
+        // The id is a directory name we build a path from, so it must be
+        // exactly what `skill_create` would have produced — not merely
+        // slugifiable. "Task Format" and "Task-Format" both slugify to
+        // "task-format"; accepting them would write a directory the rail
+        // then fails to match against its bundled id.
+        if &crate::preset::slugify(id)? != id {
+            return Err(format!("Skill id is not a slug: {id:?}"));
+        }
+        if seen.contains(&id.as_str()) {
+            return Err(format!("Duplicate skill id: {id:?}"));
+        }
+        seen.push(id);
+        if !has_frontmatter_block(&skill.content) {
+            return Err("SKILL.md content must begin with a frontmatter block".to_string());
+        }
+    }
+
+    let root_path = checked_root(&root)?;
+    let _guard = agent_fs_guard();
+    let mut written = Vec::with_capacity(skills.len());
+    for skill in &skills {
+        let rel_path = format!(".claude/skills/{}/SKILL.md", skill.id);
+        let path = resolve_within_root(&root_path, &rel_path)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("No parent directory: {}", path.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        write_atomic(&path, &skill.content)?;
+        written.push(rel_path);
+    }
+    Ok(SkillsMaterialized { written })
 }
 
 /// Convert a legacy context `.md` file (anywhere under `root`, outside

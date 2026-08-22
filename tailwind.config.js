@@ -86,9 +86,15 @@ export default {
           selected:       'var(--edge-selected)',
         },
       },
+      // WO15 Block 7 — `font-sans` / `font-mono` resolve through the CSS
+      // variables so Settings → Appearance repaints every one of the ~900
+      // `font-mono` call sites by writing one custom property on <html>.
+      // Literal stacks here would have pinned them to JetBrains Mono for
+      // ever. `font-pixel` keeps its literal: Silkscreen is brand, not a
+      // preference (three sanctioned uses, DESIGN_SPEC.md).
       fontFamily: {
-        sans:  ['IBM Plex Sans', 'system-ui', 'sans-serif'],
-        mono:  ['JetBrains Mono', 'ui-monospace', 'Consolas', 'monospace'],
+        sans:  ['var(--font-ui)'],
+        mono:  ['var(--font-mono)'],
         pixel: ['Silkscreen', 'monospace'],
       },
       fontSize: {

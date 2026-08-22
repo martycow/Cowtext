@@ -82,6 +82,39 @@ Re-triaged 2026-08-19 around the **v2 four-layer model** (see ROADMAP.md): L1 co
 | Cowtext as a plugin | new | medium | distribution, hooks, wo08 |  | Installable Claude Code plugin: hook config + skill for unmapped reads / node update suggestions. |
 | Barn Raising | new | high | progression, retention, barn, wo08 |  | Barn size/furnishing derive from project history: node count→cabinets, sessions→weather, git age→loft. |
 
+## P1 — proposed, blocked on Marty's checkpoint (opened 2026-08-22)
+
+The six blocks proposed in `docs/INPUT_PROMPT.md` after the P0 round (WO15). **None
+may start without Marty's confirmation** — the plan says stop at the P0 checkpoint
+and present a report first. The decision itself is tracked as an open task in
+`docs/tasks/TASKS.md` ("WO15 P1 checkpoint decision").
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| P1.1 Accessibility pass | new | high | p1, a11y, ui |  | Keyboard-only operation; modal focus trap; 200 % zoom / reflow; Windows High Contrast; reduced motion; accessible names on every control; control target sizes; text size and contrast. Note: the WO15 Appearance section already ships a UI-scale control (chrome + portals, **not** canvas node cards — D-7), so 200 % reflow has a partial answer and a known exclusion to test against. |
+| P1.2 Frontend interaction tests | new | high | p1, testing, vitest |  | Behaviour tests for: title screen, Compile modal, Settings, Tasks empty state, Agents empty state, project switching, stale-state prevention. Vitest runs in `node` today, so component rendering needs a DOM environment — **a new testing library requires permission before install** (explicit instruction). |
+| P1.3 React state-synchronization audit | new | high | p1, react, state |  | Audit every `exhaustive-deps` suppression; `AddAgentDialog` cwd; project switch; modal open/close state; session selection. The WO15 fix round already made `AddAgentDialog`'s cwd effect mount-only — that is one instance of the class, not the class. |
+| P1.4 Bidirectional invoke reachability | new | medium | p1, gates, testing |  | Every frontend `invoke` name is registered **and** every registered Rust command has a consumer or an explicit internal marker, checked automatically by exact name. **Partly landed in WO15**: `scripts/truth.mjs` T3 counts the handler list and T4 proves TS-names ⊂ handler-list with a WARN branch for handlers no TS file calls. What remains: turn that WARN into a FAIL behind an explicit allowlist of internal-only commands. Supersedes the older "Bidirectional invoke-reachability gate" row below. |
+| P1.5 Documentation / context compression | new | high | p1, docs |  | A real README (five-minute quick start, trust model, what is generated, limitations, troubleshooting) plus the support matrix; and `docs/fleet/ACTIVITY_LOG.md` reduced to the three most recent sessions with older entries archived **only** via `git mv`. Blocked on Marty for the archive move: `docs/_archive/` is write-frozen by docs-guard. |
+| P1.6 Replace the no-op frontend test | new | medium | p1, testing, hygiene |  | Replace the placeholder test with a real behaviour test, or delete it until the feature it points at exists. A test that asserts nothing is worse than no test — it makes the suite count lie. |
+
+## WO15 debts (opened 2026-08-22)
+
+Recorded at close-out; none blocks the release gate. Every row was read in the tree
+by project-manager unless the Description says otherwise.
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| ACTIVITY_LOG hook-row bloat: `log-subagent.ps1` appends one row per SubagentStop | new | high | wo15, fleet, docs, hooks |  | `.claude/scripts/log-subagent.ps1` appends a table row to `docs/fleet/ACTIVITY_LOG.md` on every SubagentStop, each row listing the entire dirty worktree — ~1,900 rows today against ~175 lines of human log. Fix: point the hook at its own file (e.g. `docs/fleet/subagent-activity.md`, or outside `docs/` as machine output) and move the existing rows out via `git mv` / a one-time split. Until then the human log is unreadable past the first screen and every session's diff is dominated by hook noise. Pairs with P1.5's archive move. |
+| `npm run lint`: 16 react-refresh warnings | new | medium | wo15, lint, hygiene |  | 0 errors, 16 warnings, all `react-refresh/only-export-components` — files that export both a component and a non-component (constants, helpers). Harmless at runtime; they mask a real new warning by making "warnings exist" the normal state. Fix by moving the non-component exports into sibling modules, then lower the tester's ceiling from 16 to 0. |
+| `Inspector.tsx` size | new | medium | wo15, refactor, inspector |  | The Inspector is the largest file in `src/` and gained sections again this round (AssembleSection, Advanced, the node-type popover, the `surface` prop). Splitting it is explicitly **P2**, not now — this row exists so the next work order that touches it budgets for the split instead of adding a tenth section. |
+| `Segmented` is duplicated three times | new | low | wo15, ui, duplication |  | `src/inspector/Inspector.tsx:1793`, `src/settings/SettingsModal.tsx:92`, `src/tasks/NewTaskDialog.tsx:45` — three private copies of the same segmented control (the SettingsModal one is generic over `string \| number`, the other two over `string`). The WO15 round reported two; there are three. Extract to `src/ui/Segmented.tsx` when a fourth caller appears — same trigger rule as the TagPicker popup shell row below. |
+| Wizard result block has no sidecar-independent hooks CTA | new | low | wo15, wizard, hooks |  | The New Project wizard's result block offers the hooks step only through the flow that just ran; a user who skipped it has no direct "install hooks now" action from the result screen. Small, and the HooksModal is one click away from the Event log — filed so it is not rediscovered as a bug. |
+| `lastRunAgentFile` is app-global, not per project | new | low | wo15, settings, sessions |  | `src/store/settings.ts:141` stores the last Run agent in **app** settings (written at `:612`, read at `src/sessions/AddAgentDialog.tsx:75`), so opening project B pre-selects an agent file from project A. Same class as the compile-targets leak the title-screen round fixed. Fix: move it to the project sidecar, or clear it on project switch. |
+| `stackItemById` has no production importer | new | low | wo15, dead-code, resources |  | `src/resources/index.ts:135` is exported and imported only by `src/resources/resources.test.ts` (audit N2). Contract-mandated export; either give it a caller or drop it with its test. |
+| Document the UI-scale selector's structural assumption | new | low | wo15, styles, docs |  | The zoom rules key off `body > *:not(#root)` and portal roots (`src/styles/index.css:97-116`). A future non-portal body child — an overlay library, a devtool — would be scaled silently with no obvious cause. Audit §11.2: write the assumption next to `--ui-scale` in `src/styles/tokens.css`. |
+| `COWTEXT_GITIGNORE_LINES` mirror pinned by comment only | new | low | wo15, git, mirrors |  | `src-tauri/src/git.rs:323-324` and `src/git/gitignorePresets.ts:67-69` must stay identical and are kept so by a comment ("kept identical on purpose"), not a test (audit N10). Drift costs a duplicate `.gitignore` line — cheap, but it is exactly the mirror-pair shape that has bitten twice before. Pin it with a test on the next contract that touches either file. |
+
 ## Re-homing needed / Carried forward
 
 Fell through dispatch/phase gaps and have no current WO home. Must not be lost.
@@ -89,7 +122,7 @@ Fell through dispatch/phase gaps and have no current WO home. Must not be lost.
 | Name | Status | Priority | Tags | Agent | Description |
 |---|---|---|---|---|---|
 | Full preservation of unknown enum values | new | medium | data-model, compat, wo04-wo07 |  | WO04 amendment routed this to WO06, but WO06's contract was frozen, so it fell through. Needs re-homing to WO07 or a follow-up. Enums survive round-trip without loss (tolerant read/drop-on-write); governs schema stability across versions. |
-| Bidirectional invoke-reachability gate | new | medium | testing, gates, wo04-wo07 |  | Counting registered commands proves registration, not reachability; diffing invoke names in both directions catches registered-but-uncalled commands. WO03's `default-run` and WO06's `handoff_node_propose` both shipped unreachable; count-based gates cannot see this. Needs re-homing to a future WO with test discipline. |
+| Bidirectional invoke-reachability gate | superseded | medium | testing, gates, wo04-wo07, p1 |  | **Re-homed 2026-08-22 to P1.4 above.** Counting registered commands proves registration, not reachability; diffing invoke names in both directions catches registered-but-uncalled commands. WO03's `default-run` and WO06's `handoff_node_propose` both shipped unreachable; count-based gates cannot see this. Half of it landed in WO15's `scripts/truth.mjs` (T3 counts, T4 proves one direction with a WARN for the other); the remaining half is the FAIL-with-allowlist in P1.4. |
 | Auditor has no shell | new | medium | process, gates, wo07+ |  | Tech-lead cannot run gates (Bash disabled), so its gate sections are static inference. Either grant it a shell or stop asking it for gate status. Process/permission decision for Marty. |
 
 ## Observations from WO03 audit (2026-08-19) — backlog, no fix round

@@ -1,0 +1,77 @@
+{
+  "categories": [
+    {
+      "id": "languages",
+      "label": "Languages",
+      "items": [
+        { "id": "typescript", "label": "TypeScript" },
+        { "id": "python", "label": "Python" },
+        { "id": "rust", "label": "Rust" },
+        { "id": "go", "label": "Go" },
+        { "id": "csharp", "label": "C#" },
+        { "id": "java", "label": "Java" },
+        { "id": "kotlin", "label": "Kotlin" },
+        { "id": "swift", "label": "Swift" }
+      ]
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend",
+      "items": [
+        { "id": "react", "label": "React" },
+        { "id": "vue", "label": "Vue" },
+        { "id": "svelte", "label": "Svelte" },
+        { "id": "nextjs", "label": "Next.js" },
+        { "id": "tauri", "label": "Tauri" },
+        { "id": "electron", "label": "Electron" }
+      ]
+    },
+    {
+      "id": "backend",
+      "label": "Backend",
+      "items": [
+        { "id": "node-express", "label": "Node/Express" },
+        { "id": "fastapi", "label": "FastAPI" },
+        { "id": "django", "label": "Django" },
+        { "id": "axum", "label": "axum" },
+        { "id": "actix", "label": "Actix" },
+        { "id": "aspnet", "label": "ASP.NET" },
+        { "id": "spring", "label": "Spring" }
+      ]
+    },
+    {
+      "id": "engines",
+      "label": "Engines/Graphics",
+      "items": [
+        { "id": "unity", "label": "Unity" },
+        { "id": "unreal", "label": "Unreal" },
+        { "id": "godot", "label": "Godot" },
+        { "id": "pixijs", "label": "PixiJS" },
+        { "id": "threejs", "label": "Three.js" }
+      ]
+    },
+    {
+      "id": "data",
+      "label": "Data",
+      "items": [
+        { "id": "postgresql", "label": "PostgreSQL" },
+        { "id": "sqlite", "label": "SQLite" },
+        { "id": "redis", "label": "Redis" },
+        { "id": "prisma", "label": "Prisma" },
+        { "id": "drizzle", "label": "Drizzle" }
+      ]
+    },
+    {
+      "id": "tooling",
+      "label": "Tooling",
+      "items": [
+        { "id": "pnpm", "label": "pnpm" },
+        { "id": "vite", "label": "Vite" },
+        { "id": "tailwind", "label": "Tailwind" },
+        { "id": "zustand", "label": "Zustand" },
+        { "id": "vitest", "label": "Vitest" },
+        { "id": "playwright", "label": "Playwright" }
+      ]
+    }
+  ]
+}

@@ -20,10 +20,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ExternalLink, FolderOpen, RotateCw, Square, X } from "lucide-react";
+import { ExternalLink, FolderOpen, Plus, RotateCw, Square, X } from "lucide-react";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { agentMemoryStatus, type AgentMemoryStatus } from "../agents/api";
 import { metaOrDefault, seedFor, useAgentsStore } from "../store/agents";
+import { useUiStore } from "../store/ui";
+import { PROVIDER_SUPPORT_SENTENCE } from "../resources";
 import { useSessionsStore, type Session, type SessionStatus } from "../store/sessions";
 import { budgetPct } from "../sessions/budget";
 import { agentContextTokens, ctxPercent } from "../store/tokens";
@@ -364,6 +366,7 @@ export function OrchestratorView({ root }: { root: string }) {
   const agents = useAgentsStore((s) => s.agents);
   const loading = useAgentsStore((s) => s.loading);
   const sessions = useSessionsStore((s) => s.sessions);
+  const openAgentWizard = useUiStore((s) => s.openAgentWizard);
   const [selected, setSelected] = useState<string | null>(null);
 
   // The store's own fileName order — no agent is privileged.
@@ -394,11 +397,17 @@ export function OrchestratorView({ root }: { root: string }) {
   if (ordered.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6">
-        <span className="text-base text-content-secondary">No agents defined yet.</span>
-        <span className="max-w-[380px] text-center text-sm text-content-muted">
-          Agents live in <span className="font-mono">.claude/agents/*.md</span>. Add one from the Agents section of
-          the Hierarchy panel, and it shows up here with its own workspace and budget.
+        <span className="text-base text-content-secondary">No agents yet</span>
+        <span className="max-w-[420px] text-center text-sm text-content-muted">
+          {`Agent definitions are Claude Code files in .claude/agents/. ${PROVIDER_SUPPORT_SENTENCE}`}
         </span>
+        <button
+          onClick={() => openAgentWizard()}
+          className="mt-1 flex h-control flex-none items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
+        >
+          <Plus size={13} strokeWidth={1.5} />
+          Create agent
+        </button>
       </div>
     );
   }

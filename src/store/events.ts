@@ -42,6 +42,13 @@ const MAX_EVENTS = 200;
 export interface LogEvent extends BarnEvent {
   /** Present and true only for demo-player events. Absent on live events. */
   demo?: true;
+  /** WO15 D-14: human-readable text for a locally generated informational
+   *  row (the toolchain-scan timing line, …). TS-ONLY — the `BarnEvent` wire
+   *  shape is frozen and Rust never sends this. */
+  note?: string;
+  /** WO15 D-14: this row was made by Cowtext itself, not by a hook. Kept
+   *  when the demo purge runs (that filters `demo`, not `local`). */
+  local?: true;
 }
 
 export interface EventsState {
@@ -51,8 +58,21 @@ export interface EventsState {
   demoMode: boolean;
   /** Trims to MAX; single entry point (hooks AND demo). */
   pushEvent: (e: BarnEvent, opts?: { demo?: boolean }) => void;
+  /** WO15 §4.4 — appends a locally generated informational row through the
+   *  same ring trim as {@link pushEvent}. Always `kind: "other"` with
+   *  `sessionId: "local"`, which is exactly what makes it invisible to
+   *  `lastLiveTs`/`lensLiveTs` (they only look at read/edit/write) and to
+   *  `SessionTicker`'s per-session counters. */
+  pushLocal: (note: string, opts?: { toolName?: string }) => void;
   clear: () => void;
   setDemoMode: (on: boolean) => void;
+}
+
+/** The one ring-trim rule, shared by both push paths. */
+function appendTrimmed(events: LogEvent[], entry: LogEvent): LogEvent[] {
+  return events.length >= MAX_EVENTS
+    ? [...events.slice(events.length - MAX_EVENTS + 1), entry]
+    : [...events, entry];
 }
 
 export const useEventsStore = create<EventsState>((set) => ({
@@ -62,18 +82,28 @@ export const useEventsStore = create<EventsState>((set) => ({
   pushEvent: (e, opts) =>
     set((st) => {
       const entry: LogEvent = opts?.demo === true ? { ...e, demo: true } : e;
-      return {
-        events:
-          st.events.length >= MAX_EVENTS
-            ? [...st.events.slice(st.events.length - MAX_EVENTS + 1), entry]
-            : [...st.events, entry],
+      return { events: appendTrimmed(st.events, entry) };
+    }),
+
+  pushLocal: (note, opts) =>
+    set((st) => {
+      const entry: LogEvent = {
+        kind: "other",
+        toolName: opts?.toolName ?? "cowtext",
+        sessionId: "local",
+        ts: Date.now(),
+        note,
+        local: true,
       };
+      return { events: appendTrimmed(st.events, entry) };
     }),
 
   clear: () => set({ events: [] }),
 
   // Stopping the demo purges its tagged rows from the ring (contract §7.5)
-  // so handoff/session counters never see rehearsal data.
+  // so handoff/session counters never see rehearsal data. The filter is on
+  // `demo` alone: `pushLocal` rows (WO15 §4.4) are Cowtext's own log, not
+  // rehearsal data, and survive the purge.
   setDemoMode: (on) =>
     set((st) =>
       on

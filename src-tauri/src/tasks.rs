@@ -211,13 +211,20 @@ fn convention_stem(rel_path: &str) -> String {
 /// as spaces so the canonical kebab-case bucket strings ("in-production")
 /// round-trip through this same function. Unrecognized/empty text falls
 /// back to `"new"`.
+///
+/// WO15 D-6 relabels the third bucket "In review" in the UI while leaving
+/// the stored id (`in-testing`) and the text `task_update` writes to disk
+/// (`in testing`) alone — file-format compatibility. So `"in review"` and
+/// the bare `"review"` are accepted here as input aliases; the dash→space
+/// pass above means `"in-review"` arrives as `"in review"` and needs no
+/// separate arm.
 fn bucket_for_status_input(raw: &str) -> &'static str {
     let normalized = raw.trim().to_ascii_lowercase().replace('-', " ");
     let normalized: String = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     match normalized.as_str() {
         "new" | "todo" => "new",
         "in progress" | "in production" | "wip" | "doing" => "in-production",
-        "testing" | "in testing" | "review" => "in-testing",
+        "testing" | "in testing" | "in review" | "review" => "in-testing",
         "done" | "closed" => "done",
         _ => "new",
     }

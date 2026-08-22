@@ -17,22 +17,28 @@
 // same reasoning as WO10 §2.4: these sections aren't optional per node.
 import { Fragment, type ReactNode } from "react";
 
+// WO15 Block 2 — the order changes again, for the same reason it exists:
+// what a node IS (metadata) and what it will BECOME (brief → assemble) are
+// the two things you came to the panel for, so they read first. Position was
+// never one of them — it is now inside "Advanced" ("node.advanced"), which
+// replaces "node.position" as a key rather than adding a second one: a
+// section that only holds X/Y is not a component, it is a footnote.
 export type MemoryNodeSectionKey =
   | "node.metadata"
+  | "node.assemble"
   | "node.context"
   | "node.relations"
   | "node.file"
-  | "node.position"
-  | "node.assemble"
+  | "node.advanced"
   | "node.actions";
 
 export const MEMORY_NODE_ORDER: readonly MemoryNodeSectionKey[] = [
   "node.metadata",
+  "node.assemble",
   "node.context",
   "node.relations",
   "node.file",
-  "node.position",
-  "node.assemble",
+  "node.advanced",
   "node.actions",
 ];
 
@@ -40,16 +46,16 @@ export type AgentNodeSectionKey =
   | "node.agent"
   | "node.context"
   | "node.relations"
-  | "node.position"
   | "node.assemble"
+  | "node.advanced"
   | "node.actions";
 
 export const AGENT_NODE_ORDER: readonly AgentNodeSectionKey[] = [
   "node.agent",
   "node.context",
   "node.relations",
-  "node.position",
   "node.assemble",
+  "node.advanced",
   "node.actions",
 ];
 

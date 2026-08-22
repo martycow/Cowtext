@@ -167,7 +167,37 @@
      depended on a role token in the first place. */
   --edge-c-slate:     #8CA0B8;
 
-  /* ── Typography ───────────────────────────────────────── */
+  /* ── UI scale (WO15 Block 7, D-7) ─────────────────────────
+        Chrome zoom factor: 1 = 100 %. App.tsx writes the live value onto
+        <html> from `settings.uiScale / 100` (an inline custom property beats
+        this :root declaration), so this line is the pre-settings default and
+        the fallback for any surface rendered before `load()` resolves.
+        Four consumers, all in index.css unless noted — never `.react-flow`
+        and never the Barn host, whose pixel art needs integer zoom
+        (ART_DIRECTION.md):
+          1. `zoom` on the `.ct-zoom` chrome containers;
+          2. `zoom` on dialog scrims (`.z-modal.inset-0`);
+          3. `transform: scale()` on portal roots, matched STRUCTURALLY as
+             `body > *:not(#root)` — that selector is the portal set only
+             because every `createPortal` in the app targets `document.body`.
+             A future non-portal body child would be scaled silently;
+          4. `calc(<N>vh / var(--ui-scale))` on every vh/vw length inside
+             those three, since neither zoom nor scale redefines the viewport.
+        `ui/ResizeHandle.tsx` reads the same number from the settings store
+        to convert a viewport-px drag into scaled panel px. */
+  --ui-scale: 1;
+
+  /* ── Typography ───────────────────────────────────────────
+        `--font-ui` and `--font-mono` are user-settable (Settings →
+        Appearance): App.tsx overrides both on <html> from
+        `UI_FONT_STACKS` / `CODE_FONT_STACKS`, and every consumer — the
+        `body` rule in index.css, Tailwind's `font-sans`/`font-mono` — reads
+        the variable rather than a literal stack, so one write repaints the
+        app. The values below are the defaults (IBM Plex Sans / JetBrains
+        Mono) and stay the fallback until settings load.
+        `--font-pixel` is NOT settable: Silkscreen has exactly three
+        sanctioned homes (LIVE/READING tags, barn HUD, logo) and swapping it
+        would break the brand, not the reading comfort the setting is for. */
   --font-ui:    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono:  'JetBrains Mono', ui-monospace, Consolas, monospace;
   --font-pixel: 'Silkscreen', monospace;   /* barn HUD + LIVE tags only */

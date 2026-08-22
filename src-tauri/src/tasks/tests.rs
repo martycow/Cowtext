@@ -684,6 +684,58 @@ fn table_status_cell_synonym_mapping() {
     assert_eq!(tasks[4].status.as_deref(), Some("new"));
 }
 
+// ---- WO15 D-6: "In review" is a label, not a new bucket ---------------------
+
+/// The UI relabels the third bucket "In review" while its stored id stays
+/// `in-testing`. That only works if every spelling a user (or a hand-edited
+/// TASKS.md) can produce lands on the same bucket.
+#[test]
+fn bucket_for_status_input_accepts_the_review_aliases() {
+    assert_eq!(bucket_for_status_input("In Review"), "in-testing");
+    assert_eq!(bucket_for_status_input("in-review"), "in-testing");
+    assert_eq!(bucket_for_status_input("review"), "in-testing");
+    assert_eq!(bucket_for_status_input("  IN   REVIEW  "), "in-testing");
+    // The pre-existing spellings are untouched by the new arms.
+    assert_eq!(bucket_for_status_input("testing"), "in-testing");
+    assert_eq!(bucket_for_status_input("in testing"), "in-testing");
+    assert_eq!(bucket_for_status_input("in-testing"), "in-testing");
+    assert_eq!(bucket_for_status_input("todo"), "new");
+    assert_eq!(bucket_for_status_input("in progress"), "in-production");
+    assert_eq!(bucket_for_status_input("closed"), "done");
+    // "reviewed" is not "review": no prefix matching, no invented buckets.
+    assert_eq!(bucket_for_status_input("reviewed"), "new");
+    assert_eq!(bucket_for_status_input(""), "new");
+}
+
+/// The alias is an *input* alias only: what lands on disk is the same
+/// bucket id `"in testing"` has always produced (D-6, file-format
+/// compatibility). Two patches, one file text.
+#[test]
+fn task_update_review_alias_writes_the_same_cell_as_in_testing() {
+    let table = "| Name | Status |\n| --- | --- |\n| A | todo |\n";
+    let expected = "| Name | Status |\n| --- | --- |\n| A | in-testing |\n";
+
+    for input in ["in testing", "In Review", "review"] {
+        let dir = temp_project(&format!("update-review-{}", input.replace(' ', "-")));
+        fs::write(dir.join("TASKS.md"), table).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+
+        let patch = TaskPatch {
+            name: Some("A".to_string()),
+            status: Some(input.to_string()),
+            ..Default::default()
+        };
+        let updated = task_update(root, "TASKS.md".to_string(), 3, patch).unwrap();
+        assert_eq!(updated.status.as_deref(), Some("in-testing"), "input {input:?}");
+        assert_eq!(
+            fs::read_to_string(dir.join("TASKS.md")).unwrap(),
+            expected,
+            "input {input:?} changed the file text"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 // ---- WO02 §2.4: priority buckets --------------------------------------------
 
 #[test]

@@ -4,13 +4,22 @@
 // store only (Inspector shows the standalone editor). Deletes are armed
 // inline — first click arms a confirm strip, nothing is destructive in one
 // click.
+//
+// WO15: the agent wizard is no longer mounted here. `App.tsx` owns the one
+// mount and `useUiStore.agentWizard` owns "is it open, and with what
+// prefill" — the canvas menus need to open the same dialog with a position
+// and a context node, and two mounts of a create-dialog is how you get two
+// agents from one Create click. Skills grew a Built-in group (Block 4):
+// what Cowtext ships is visible in a project that has no `.claude/skills/`
+// at all, and stays virtual until a Compile writes it.
 
 import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Plus, Trash2, Workflow } from "lucide-react";
-import { useAgentsStore, metaOrDefault, seedFor } from "../store/agents";
+import { FolderOpen, Plus, RotateCcw, Trash2, Workflow } from "lucide-react";
+import { flushMetaSave, useAgentsStore, metaOrDefault, seedFor } from "../store/agents";
 import { useFocusStore } from "../canvas/types";
 import { sameRelPath, useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
+import { useUiStore } from "../store/ui";
 import { agentContextTokens } from "../store/tokens";
 import { pushToast } from "../store/toasts";
 import { revealPath } from "../fs/api";
@@ -19,22 +28,34 @@ import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
 import type { AgentDoc } from "./types";
-import { NewAgentDialog } from "../tasks/NewAgentDialog";
+import { projectSkills, useBuiltinSkillStates } from "./builtinSkills";
+import { skillsMaterialize } from "./api";
+import { BuiltinSkillReadOnly } from "./SkillEditor";
 import { NewSkillDialog } from "../tasks/NewSkillDialog";
 
 function SectionHeader({
   label,
   count,
+  note,
+  title,
   onCreate,
 }: {
   label: string;
   count: number;
+  /** Appended after the count as ` · <note>`, same quiet treatment. For
+   *  rows that exist in the list but are not files yet (bundled skills) —
+   *  the count stays a count of things on disk. */
+  note?: string;
+  title?: string;
   onCreate: () => void;
 }) {
   return (
     <div className="flex h-[26px] flex-none items-center gap-1.5 border-b border-t border-border-subtle bg-surface-1 px-3">
-      <span className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-wider text-content-muted">
-        {label} ({count})
+      <span
+        title={title}
+        className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-wider text-content-muted"
+      >
+        {label} ({count}){note !== undefined && ` · ${note}`}
       </span>
       <button
         onClick={onCreate}
@@ -47,23 +68,85 @@ function SectionHeader({
   );
 }
 
+/** Group divider inside a section — Built-in / Project (Block 4). Quieter
+ *  than `SectionHeader`: it labels rows, it does not own an action. */
+function GroupLabel({ label }: { label: string }) {
+  return (
+    <li className="flex h-[20px] items-center px-3">
+      <span className="font-mono text-micro uppercase tracking-wider text-content-disabled">
+        {label}
+      </span>
+    </li>
+  );
+}
+
+function RowBadge({ label, title }: { label: string; title?: string }) {
+  return (
+    <span
+      title={title}
+      className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-muted"
+    >
+      {label}
+    </span>
+  );
+}
+
+/** 24×13 pill switch. Blue: including a skill in the compile is the user
+ *  deciding what gets written, not the agent doing something (accent law). */
+function IncludeToggle({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+      className={`relative h-[13px] w-[24px] flex-none rounded-pill border transition-colors duration-fast ${
+        checked ? "border-accent-border bg-accent-surface" : "border-border-strong bg-surface-2"
+      }`}
+    >
+      <span
+        className={`absolute top-[1px] h-[9px] w-[9px] rounded-pill transition-all duration-fast ${
+          checked ? "left-[12px] bg-accent" : "left-[1px] bg-content-muted"
+        }`}
+      />
+    </button>
+  );
+}
+
 function ConfirmStrip({
   label,
+  confirmLabel = "delete",
   onConfirm,
   onCancel,
 }: {
   label: string;
+  /** The verb, lower-case — "delete" or "overwrite". Both are destructive,
+   *  so both wear the danger strip; only the word changes. */
+  confirmLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-danger bg-danger-surface px-3 py-1">
-      <span className="min-w-0 flex-1 truncate text-2xs text-danger-text">{label}</span>
+      <span className="min-w-0 flex-1 text-2xs text-danger-text">{label}</span>
       <button
         onClick={onConfirm}
         className="h-[18px] flex-none rounded-sm border border-danger px-1.5 font-mono text-micro text-danger-text transition-colors duration-fast hover:bg-danger hover:text-content-inverse"
       >
-        delete
+        {confirmLabel}
       </button>
       <button
         onClick={onCancel}
@@ -85,10 +168,10 @@ export function AgentsRailSection({ root }: { root: string }) {
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const setSelection = useGraphStore((s) => s.setSelection);
   const adoptFile = useGraphStore((s) => s.adoptFile);
+  const openAgentWizard = useUiStore((s) => s.openAgentWizard);
   const requestFocus = useFocusStore((s) => s.requestFocus);
   const files = useProjectStore((s) => s.files);
   const assembleStatus = useGraphStore((s) => s.assembleStatus);
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const menu = useContextMenu();
 
@@ -185,11 +268,21 @@ export function AgentsRailSection({ root }: { root: string }) {
 
   return (
     <div className="flex-none">
-      <SectionHeader label="Agents" count={agents.length} onCreate={() => setDialogOpen(true)} />
-      {dialogOpen && <NewAgentDialog onClose={() => setDialogOpen(false)} />}
+      <SectionHeader label="Agents" count={agents.length} onCreate={() => openAgentWizard()} />
       <ul className="py-1">
         {agents.length === 0 && (
-          <li className="px-3 py-1 text-2xs text-content-muted">No agents in .claude/agents/</li>
+          <li className="flex flex-col items-start gap-1 px-3 py-1.5">
+            <span className="text-2xs text-content-muted">No agents in .claude/agents/</span>
+            {/* Stage 4 — an empty state with no way out of it is a dead
+                end; this is the same wizard the canvas menus open. */}
+            <button
+              onClick={() => openAgentWizard()}
+              className="flex h-control-sm flex-none items-center gap-1.5 rounded border border-accent-border bg-accent-surface px-2 text-2xs text-accent-text transition-colors duration-fast hover:bg-accent hover:text-content-inverse"
+            >
+              <Plus size={11} strokeWidth={1.5} />
+              Create agent
+            </button>
+          </li>
         )}
         {agents.map((a) => {
           const node = nodeFor(a.fileName);
@@ -268,13 +361,45 @@ export function SkillsRailSection({ root }: { root: string }) {
   const skills = useAgentsStore((s) => s.skills);
   const agentsSel = useAgentsStore((s) => s.selection);
   const select = useAgentsStore((s) => s.select);
+  const setBuiltinInclude = useAgentsStore((s) => s.setBuiltinInclude);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
   const setSelection = useGraphStore((s) => s.setSelection);
+  const builtins = useBuiltinSkillStates();
+  const project = projectSkills(skills);
+  const virtualCount = builtins.filter((b) => b.state === "virtual").length;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
+  const [resetArmed, setResetArmed] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
   const menu = useContextMenu();
 
-  const openMenu = (e: React.MouseEvent, dirName: string) => {
+  const pickSkill = (dirName: string) => {
+    // Graph selection first — see the note in the agents section's `pick`.
+    setSelection([], []);
+    select({ kind: "skill", key: dirName });
+  };
+
+  /** D-4/D-5 — the ONE write in this file, and it happens after an armed
+   *  confirm strip, never on a click. `skills_materialize` is create-or-
+   *  replace by design: reset IS the overwrite path. */
+  const doReset = (id: string, content: string) => {
+    setResetArmed(null);
+    setResetError(null);
+    // An include toggle flipped in the last 700 ms is still on the sidecar
+    // debounce; flush it so the file on disk agrees with the toggle that is
+    // on screen while this write runs.
+    flushMetaSave();
+    void skillsMaterialize(root, [{ id, content }])
+      // A-21 — `reloadSkills`, never `loadAgents`: the latter is a
+      // project-open reset that drops every unsaved skill draft, the rail
+      // selection and the agent autosave timers. Resetting ONE skill to its
+      // bundled copy must not take the editor's unsaved work with it.
+      .then(() => useAgentsStore.getState().reloadSkills(root))
+      .catch((e: unknown) => setResetError(String(e)));
+  };
+
+  const openMenu = (e: React.MouseEvent, dirName: string, resetContent: string | null) => {
     const items: MenuItem[] = [
       {
         kind: "item",
@@ -290,6 +415,17 @@ export function SkillsRailSection({ root }: { root: string }) {
             }),
           ),
       },
+      ...(resetContent !== null
+        ? [
+            {
+              kind: "item" as const,
+              id: "reset",
+              label: "Reset to built-in…",
+              icon: RotateCcw,
+              onSelect: () => setResetArmed(dirName),
+            },
+          ]
+        : []),
       { kind: "separator", id: "sep" },
       {
         kind: "item",
@@ -303,31 +439,94 @@ export function SkillsRailSection({ root }: { root: string }) {
     menu.openAt(e, items);
   };
 
+  const rowClass = (isSelected: boolean) =>
+    `flex h-row cursor-default items-center gap-2 px-3 ${
+      isSelected
+        ? "bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
+        : "hover:bg-[var(--surface-hover)]"
+    }`;
+
   return (
     <div className="flex-none">
-      <SectionHeader label="Skills" count={skills.length} onCreate={() => setDialogOpen(true)} />
+      <SectionHeader
+        label="Skills"
+        // Files, not rows (audit NIT). A `virtual` built-in has no
+        // directory in `.claude/skills/` yet, so counting it here claimed a
+        // file that a Reveal or a `ls` would not find. `project` already
+        // holds every on-disk skill except the built-ins that are byte-
+        // identical to the bundle, which is what the second term adds; a
+        // `modified` built-in is in `project`, counted once.
+        count={project.length + builtins.filter((b) => b.state === "materialized").length}
+        note={virtualCount > 0 ? `${virtualCount} built-in` : undefined}
+        title={
+          virtualCount > 0
+            ? "Count is the skills on disk in .claude/skills/ — built-in skills are bundled with Cowtext until a Compile writes them"
+            : "Skills on disk in .claude/skills/"
+        }
+        onCreate={() => setDialogOpen(true)}
+      />
       {dialogOpen && <NewSkillDialog onClose={() => setDialogOpen(false)} />}
+      {resetError !== null && (
+        <p className="border-l-[3px] border-l-danger bg-danger-surface px-3 py-1 font-mono text-micro text-danger-text">
+          {resetError}
+        </p>
+      )}
       <ul className="py-1">
-        {skills.length === 0 && (
+        {/* Built-in — what Cowtext ships. Present on day one, in a project
+            whose .claude/skills/ does not exist yet (Block 4). */}
+        <GroupLabel label="Built-in" />
+        {builtins.map((b) => {
+          const isSelected =
+            agentsSel?.kind === "skill" && agentsSel.key === b.id && selectedNodeIds.length === 0;
+          // A `modified` built-in is listed under Project (D-5) — it is the
+          // user's file now.
+          if (b.state === "modified") return null;
+          const virtual = b.state === "virtual";
+          return (
+            <li key={`builtin:${b.id}`}>
+              <div
+                onClick={() => (virtual ? setExpanded((c) => (c === b.id ? null : b.id)) : pickSkill(b.id))}
+                className={rowClass(isSelected)}
+                title={
+                  virtual
+                    ? `${b.description} — bundled with Cowtext; nothing on disk until a Compile writes it`
+                    : `.claude/skills/${b.id}/SKILL.md`
+                }
+              >
+                <span
+                  className={`min-w-0 flex-1 truncate text-xs ${
+                    isSelected ? "text-accent-text" : "text-content-secondary"
+                  }`}
+                >
+                  {b.name}
+                </span>
+                {!virtual && <RowBadge label="materialized" title="On disk and identical to the bundled version" />}
+                <IncludeToggle
+                  checked={b.include}
+                  label="Include in compile"
+                  onChange={(v) => setBuiltinInclude(b.id, v)}
+                />
+              </div>
+              {virtual && expanded === b.id && <BuiltinSkillReadOnly id={b.id} content={b.content} />}
+            </li>
+          );
+        })}
+
+        {/* Project — the .claude/skills/ this repo actually has. */}
+        <GroupLabel label="Project" />
+        {project.length === 0 && (
           <li className="px-3 py-1 text-2xs text-content-muted">No skills in .claude/skills/</li>
         )}
-        {skills.map((sk) => {
+        {project.map((sk) => {
           const isSelected =
             agentsSel?.kind === "skill" && agentsSel.key === sk.dirName && selectedNodeIds.length === 0;
+          const fromBuiltin = builtins.find((b) => b.id === sk.dirName && b.state === "modified") ?? null;
           return (
-            <li key={sk.dirName}>
+            <li key={`project:${sk.dirName}`}>
               <div
-                onClick={() => {
-                  // Graph selection first — see the note in `pick`.
-                  setSelection([], []);
-                  select({ kind: "skill", key: sk.dirName });
-                }}
-                onContextMenu={(e) => openMenu(e, sk.dirName)}
-                className={`flex h-row cursor-default items-center gap-2 px-3 ${
-                  isSelected
-                    ? "bg-accent-surface shadow-[inset_2px_0_0_var(--accent)]"
-                    : "hover:bg-[var(--surface-hover)]"
-                }`}
+                onClick={() => pickSkill(sk.dirName)}
+                onContextMenu={(e) => openMenu(e, sk.dirName, fromBuiltin?.content ?? null)}
+                className={rowClass(isSelected)}
                 title={`.claude/skills/${sk.dirName}/SKILL.md`}
               >
                 <span
@@ -337,12 +536,26 @@ export function SkillsRailSection({ root }: { root: string }) {
                 >
                   {sk.dirName}
                 </span>
+                {fromBuiltin !== null && (
+                  <RowBadge
+                    label="modified from built-in"
+                    title="Edited copy of a built-in — right-click to reset it to the bundled version"
+                  />
+                )}
                 {sk.extraFileCount > 0 && (
                   <span className="flex-none font-mono text-2xs text-content-disabled">
                     +{sk.extraFileCount}
                   </span>
                 )}
               </div>
+              {resetArmed === sk.dirName && fromBuiltin !== null && (
+                <ConfirmStrip
+                  label={`Overwrite .claude/skills/${sk.dirName}/SKILL.md with the bundled version?`}
+                  confirmLabel="overwrite"
+                  onConfirm={() => doReset(sk.dirName, fromBuiltin.content)}
+                  onCancel={() => setResetArmed(null)}
+                />
+              )}
               {armed === sk.dirName && (
                 <ConfirmStrip
                   label={`Delete .claude/skills/${sk.dirName}/ (${sk.extraFileCount} extra file${sk.extraFileCount === 1 ? "" : "s"})?`}

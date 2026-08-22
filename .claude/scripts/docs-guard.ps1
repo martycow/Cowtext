@@ -57,8 +57,26 @@ function Test-MarkdownTarget([string]$rel) {
 
   # Fleet infrastructure. Not documentation; it cannot live in docs/.
   if ($rel -match '(?i)^\.claude/(agents|skills|agent-memory|commands|scripts)/') { return '' }
+
+  # Bundled app resources (WO15 Block 4): built-in skills the app ships and
+  # materialises into a user project's .claude/skills/ on Compile. Product data,
+  # not documentation - it structurally cannot live in docs/.
+  if ($rel -match '(?i)^src/resources/skills/[^/]+/SKILL\.md$') { return '' }
   if ($rel -match '(?i)^\.claude/') {
     return "Unrecognised .md under .claude/. Fleet markdown belongs in .claude/agents/, .claude/skills/<name>/, .claude/agent-memory/<agent>/ or .claude/commands/."
+  }
+
+  # Generated files (WO15 D-9). Both are produced by scripts/truth.mjs from a
+  # source that IS hand-editable, so these denials name the source and the
+  # command - a hand edit here is not misplaced documentation, it is a change
+  # that the next `npm run truth:write` silently reverts. Note the root
+  # allow-list above stays CLAUDE/README only: the script writes AGENTS.md
+  # through Node's fs, which this hook never sees. That is the design.
+  if ($rel -match '(?i)^AGENTS\.md$') {
+    return "AGENTS.md is generated from CLAUDE.md by scripts/truth.mjs. Edit CLAUDE.md, then run 'npm run truth:write'."
+  }
+  if ($rel -match '(?i)^\.agents/skills/') {
+    return ".agents/skills/ mirrors .claude/skills/ and is written by scripts/truth.mjs. Edit the .claude/skills/ copy, then run 'npm run truth:write'."
   }
 
   return "Project .md must live in docs/ (design/, testing/, tasks/, fleet/). Only CLAUDE.md and README.md sit at the repo root; fleet config goes under .claude/. Scratch notes belong in the session scratchpad, outside the repo - not here."

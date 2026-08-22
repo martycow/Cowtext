@@ -5,6 +5,8 @@
 
 import { useCallback, useRef } from "react";
 
+import { useSettingsStore } from "../store/settings";
+
 interface ResizeHandleProps {
   /** Current panel width in px. */
   value: number;
@@ -22,12 +24,17 @@ interface ResizeHandleProps {
 const ARROW_STEP = 16;
 
 export function ResizeHandle({ value, defaultValue, side, onChange, label }: ResizeHandleProps) {
-  const dragRef = useRef<{ x: number; value: number } | null>(null);
+  const dragRef = useRef<{ x: number; value: number; scale: number } | null>(null);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       e.currentTarget.setPointerCapture(e.pointerId);
-      dragRef.current = { x: e.clientX, value };
+      // WO15 fix round (F7). `value` is a width applied INSIDE the `ct-zoom`
+      // wrapper (App.tsx), i.e. in the panel's own scaled coordinate space,
+      // while `clientX` is always real viewport px — at 130 % the edge
+      // outran the cursor by 30 %. The scale is read once per drag rather
+      // than per move, so a single drag uses a single factor.
+      dragRef.current = { x: e.clientX, value, scale: useSettingsStore.getState().uiScale / 100 };
     },
     [value],
   );
@@ -36,9 +43,11 @@ export function ResizeHandle({ value, defaultValue, side, onChange, label }: Res
     (e: React.PointerEvent<HTMLDivElement>) => {
       const start = dragRef.current;
       if (start === null) return;
-      const dx = e.clientX - start.x;
+      const dx = (e.clientX - start.x) / start.scale;
       const delta = side === "left" ? dx : -dx;
-      onChange(start.value + delta);
+      // Whole px only: the division is the one place a fractional width can
+      // enter, and it would otherwise be persisted into settings.json.
+      onChange(Math.round(start.value + delta));
     },
     [onChange, side],
   );

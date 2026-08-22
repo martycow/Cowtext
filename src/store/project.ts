@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { hooksStatus } from "../fs/api";
+import { hooksAddr, hooksStatus } from "../fs/api";
 import { flushSettings, useSettingsStore } from "./settings";
 import { GRAPH_VERSION, migrateGraph, useGraphStore } from "./graph";
 import { useFocusStore } from "../canvas/types";
@@ -142,6 +142,12 @@ function migrationBannerKey(root: string): string {
   return `cowtext:migration-banner-dismissed:${root}`;
 }
 
+/** Shown until `loadHooksAddr` answers — and forever if it never does (an
+ *  older backend without `hooks_addr`). Same value as Rust's `BIND_ADDR`
+ *  (WO15 D-2); this is the ONLY other place the port is written, and it is
+ *  a fallback, not a second source of truth. */
+export const HOOKS_ADDR_FALLBACK = "127.0.0.1:4923";
+
 interface ProjectState {
   root: string | null;
   files: MdFile[];
@@ -151,6 +157,16 @@ interface ProjectState {
   hooksInstalled: boolean | null;
   /** false = .claude/settings.json exists but could not be parsed. */
   hooksReadable: boolean;
+  /** WO15 §4.5 — the hooks receiver's bind address, from `hooks_addr`.
+   *  {@link HOOKS_ADDR_FALLBACK} until `loadHooksAddr` resolves (or if it
+   *  rejects). Project-independent: it is on this store because this is the
+   *  store App.tsx's startup effect already talks to, and it must survive a
+   *  `closeProject` — the address does not change with the project. */
+  hooksAddr: string;
+  /** WO15 §4.5 — reads `hooks_addr` once per process. Idempotent
+   *  (module-level promise guard, the `initEventListener` idiom) and never
+   *  rejects: a failure just leaves the fallback in place. */
+  loadHooksAddr: () => Promise<void>;
   /** WO13 N-F/E-F. Set once per `openProjectAt`/`rescan`-independent probe;
    *  see {@link MigrationSummary}. `undefined` = not probed yet (first
    *  render before the async read lands); `null` = probed, nothing to
@@ -194,6 +210,12 @@ async function scan(root: string): Promise<ProjectScan> {
   return invoke<ProjectScan>("scan_project", { root });
 }
 
+// Idempotent load guard for `loadHooksAddr` — same idiom as
+// `events.ts`'s `wiring` and `settings.ts`'s `loading`. StrictMode
+// double-invokes the startup effect; the address is a process constant, so
+// one invoke is all it can ever need.
+let hooksAddrLoad: Promise<void> | null = null;
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   root: null,
   files: [],
@@ -201,8 +223,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   error: null,
   hooksInstalled: null,
   hooksReadable: true,
+  hooksAddr: HOOKS_ADDR_FALLBACK,
   migration: undefined,
   migrationBannerDismissed: false,
+
+  loadHooksAddr: () => {
+    if (hooksAddrLoad !== null) return hooksAddrLoad;
+    hooksAddrLoad = hooksAddr().then(
+      (addr) => {
+        if (addr !== "") set({ hooksAddr: addr });
+      },
+      () => {
+        // Never rejects (§4.5): the fallback is already in state, and a
+        // wrong-looking address is worse than a slightly stale constant.
+      },
+    );
+    return hooksAddrLoad;
+  },
 
   dismissMigrationBanner: () => {
     const root = get().root;
@@ -361,5 +398,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     useEventsStore.getState().clear();
     useReviewStore.getState().dismissAll();
     useProjectSelectionStore.getState().select(false);
+    // `hooksAddr` is deliberately NOT cleared: it is a property of the
+    // running backend, not of the project that was just closed.
   },
 }));
+
+/** WO15 §4.5 — the hooks receiver's address, for every surface that renders
+ *  it (Settings' "Hooks server" row, the Hooks modal's curl snippet, the
+ *  event log's empty state). A one-line selector so no component has to
+ *  know which store the address lives on. */
+export function useHooksAddr(): string {
+  return useProjectStore((s) => s.hooksAddr);
+}

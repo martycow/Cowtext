@@ -18,12 +18,14 @@ import {
   type Connection,
   type OnConnectStartParams,
 } from "@xyflow/react";
-import { FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
+import { Bot, FolderOpen, Maximize2, Plus, Sparkles, X } from "lucide-react";
 import { EDGE_KINDS, useGraphStore, type NodeRole } from "../store/graph";
 import { useProjectStore } from "../store/project";
+import { useUiStore } from "../store/ui";
 import { revealPath } from "../fs/api";
 import { legalityFor } from "../config/edgeRules";
 import { MemoryNodeCard } from "./MemoryNodeCard";
+import { EmptyCanvasGuide } from "./EmptyCanvasGuide";
 import { LensControl } from "./LensControl";
 import { EdgeMarkerDefs, MemoryEdgeView } from "./MemoryEdge";
 import { assignPortSlots } from "./portSlots";
@@ -240,9 +242,17 @@ function CanvasInner() {
     setWizardPos(() => centerPosition);
   };
 
-  const wizardAtPoint = (clientX: number, clientY: number) => {
+  // The flow-space top-left a card dropped at this screen point would take.
+  // Shared so "New node here…" and "New agent here…" place their cards at
+  // the identical spot — the agent wizard must not land its plate half a
+  // card away from where the node wizard would have put one.
+  const flowPositionAt = (clientX: number, clientY: number) => {
     const pos = screenToFlowPosition({ x: clientX, y: clientY });
-    setWizardPos({ x: Math.round(pos.x - NODE_CARD_W / 2), y: Math.round(pos.y - NODE_CARD_H / 2) });
+    return { x: Math.round(pos.x - NODE_CARD_W / 2), y: Math.round(pos.y - NODE_CARD_H / 2) };
+  };
+
+  const wizardAtPoint = (clientX: number, clientY: number) => {
+    setWizardPos(flowPositionAt(clientX, clientY));
   };
 
   const onPaneContextMenu = (e: React.MouseEvent) => {
@@ -257,6 +267,18 @@ function CanvasInner() {
         label: "New node here…",
         icon: Sparkles,
         onSelect: () => wizardAtPoint(clientX, clientY),
+      },
+      // WO15 Block 5b — agents were creatable only from the rail, which made
+      // the canvas feel like a place agents merely appear. Same placement
+      // maths as the node wizard above (`flowPositionAt`), no context node:
+      // a pane click names no source.
+      {
+        kind: "item",
+        id: "new-agent-wizard",
+        label: "New agent here…",
+        icon: Bot,
+        onSelect: () =>
+          useUiStore.getState().openAgentWizard({ position: flowPositionAt(clientX, clientY) }),
       },
       {
         kind: "item",
@@ -536,6 +558,11 @@ function CanvasInner() {
           {denyCursor.reason}
         </div>
       )}
+      {/* Stage 4: the first-run guide. Keyed off the STORE's node list, not
+          the React Flow projection, so it disappears on the same commit the
+          first node is created rather than one effect later. Overlay, not
+          modal — pane right-click/double-click still work around it. */}
+      {domainNodes.length === 0 && <EmptyCanvasGuide onCreateNode={wizardAtCenter} />}
       <KindPicker />
       {paneMenu.menu !== null && (
         <ContextMenu

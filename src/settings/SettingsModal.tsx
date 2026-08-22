@@ -5,12 +5,17 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { DEFAULT_SESSION_TOKEN_CEILING, useSettingsStore } from "../store/settings";
-import { useProjectStore } from "../store/project";
+import {
+  DEFAULT_SESSION_TOKEN_CEILING,
+  UI_SCALES,
+  useSettingsStore,
+  type CodeFont,
+  type UiFont,
+  type UiScale,
+} from "../store/settings";
+import { useHooksAddr, useProjectStore } from "../store/project";
+import { PROVIDER_SUPPORT_SENTENCE } from "../resources";
 import { formatTokenCount } from "../store/tokens";
-
-// hooks_server.rs bind address — a constant of the app, shown for reference.
-const HOOKS_ADDR = "127.0.0.1:4923";
 
 // ── Local controls (idioms copied, not imported across lanes) ─────────
 
@@ -80,6 +85,89 @@ function HelperLine({ children }: { children: React.ReactNode }) {
   return <p className="mb-1 text-2xs leading-relaxed text-content-muted">{children}</p>;
 }
 
+/** Segmented picker — App.tsx's ViewToggle idiom, local copy at settings
+ *  density: 2px padding frame on surface-2, active segment surface-3. Radio
+ *  semantics rather than a `<select>` because the four scales are worth
+ *  seeing at once, and the active one is the answer to "how big is it now?". */
+function Segmented<T extends string | number>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]"
+    >
+      {options.map((o) => (
+        <button
+          key={String(o.value)}
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={`flex h-control-sm items-center rounded-sm px-2.5 font-mono text-xs transition-colors duration-fast ${
+            value === o.value
+              ? "bg-surface-3 text-content"
+              : "text-content-muted hover:text-content-secondary"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Native select, styled like every other one in the app (Inspector:1788). */
+function Select<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <select
+      value={value}
+      aria-label={label}
+      onChange={(e) => onChange(e.target.value as T)}
+      className="h-control w-[196px] rounded border border-border bg-surface-2 px-2 text-sm text-content transition-colors duration-fast focus:border-accent"
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+const UI_SCALE_OPTIONS: readonly { value: UiScale; label: string }[] = UI_SCALES.map((s) => ({
+  value: s,
+  label: `${s}%`,
+}));
+
+const UI_FONT_OPTIONS: readonly { value: UiFont; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "plex", label: "IBM Plex Sans" },
+];
+
+const CODE_FONT_OPTIONS: readonly { value: CodeFont; label: string }[] = [
+  { value: "jetbrains", label: "JetBrains Mono" },
+  { value: "system-mono", label: "System monospace" },
+];
+
 // ── Modal ─────────────────────────────────────────────────────────────
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -95,6 +183,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const syncFileName = useSettingsStore((s) => s.syncFileName);
   const managerMode = useSettingsStore((s) => s.managerMode);
   const showFps = useSettingsStore((s) => s.showFps);
+  const uiScale = useSettingsStore((s) => s.uiScale);
+  const uiFont = useSettingsStore((s) => s.uiFont);
+  const codeFont = useSettingsStore((s) => s.codeFont);
   const sessionTokenCeiling = useSettingsStore((s) => s.sessionTokenCeiling);
   const persistError = useSettingsStore((s) => s.persistError);
   const setMasterVolume = useSettingsStore((s) => s.setMasterVolume);
@@ -106,9 +197,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setSyncFileName = useSettingsStore((s) => s.setSyncFileName);
   const setManagerMode = useSettingsStore((s) => s.setManagerMode);
   const setShowFps = useSettingsStore((s) => s.setShowFps);
+  const setUiScale = useSettingsStore((s) => s.setUiScale);
+  const setUiFont = useSettingsStore((s) => s.setUiFont);
+  const setCodeFont = useSettingsStore((s) => s.setCodeFont);
   const setSessionTokenCeiling = useSettingsStore((s) => s.setSessionTokenCeiling);
 
   const root = useProjectStore((s) => s.root);
+  // D-2 — the hooks port has exactly one home (`hooks_server.rs`), read at
+  // runtime through `hooks_addr`. This row used to hard-code 127.0.0.1:4923,
+  // which is how a settings screen ends up lying about a port someone moved.
+  const hooksAddr = useHooksAddr();
 
   // Draft for the claude path — committed per keystroke (the store debounce
   // absorbs the churn). Esc/scrim/Done unmount without firing blur, so a
@@ -223,6 +321,47 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               />
             </Row>
 
+          </section>
+
+          {/* Appearance (WO15 Block 7) — how big and in what typeface, plus
+              the two "how loud is the app visually" toggles that were filed
+              under Sound and View because there was nowhere better. Calm
+              mode still implies mute; it lives here because motion, not
+              volume, is what a user is looking for when they go hunting for
+              it. */}
+          <section className="border-b border-border-subtle px-4 py-3">
+            <SectionLabel>Appearance</SectionLabel>
+
+            <Row label="UI scale">
+              <Segmented
+                value={uiScale}
+                options={UI_SCALE_OPTIONS}
+                onChange={setUiScale}
+                label="UI scale"
+              />
+            </Row>
+            <HelperLine>
+              Scales the chrome — rail, Inspector, dock, menus and dialogs. The graph canvas and
+              the barn keep their own zoom: both are pixel art, and half-pixel scaling shimmers.
+            </HelperLine>
+
+            <Row label="UI font">
+              <Select value={uiFont} options={UI_FONT_OPTIONS} onChange={setUiFont} label="UI font" />
+            </Row>
+
+            <Row label="Code font">
+              <Select
+                value={codeFont}
+                options={CODE_FONT_OPTIONS}
+                onChange={setCodeFont}
+                label="Code font"
+              />
+            </Row>
+            <HelperLine>
+              Code font is used for anything the filesystem or the model produced — paths, diffs,
+              versions, the event feed.
+            </HelperLine>
+
             <Row label="Calm mode">
               <Toggle checked={calmMode} onChange={setCalmMode} label="Calm mode" />
             </Row>
@@ -232,11 +371,25 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 Your OS requests reduced motion — animations are already reduced.
               </HelperLine>
             )}
+
+            <Row label="FPS counter">
+              <Toggle checked={showFps} onChange={setShowFps} label="FPS counter" />
+            </Row>
+            <HelperLine>
+              Shows the Barn&rsquo;s frame rate in the scene overlay. The Barn deliberately drops
+              to 12 fps while idle, so a low number there is not a bug.
+            </HelperLine>
           </section>
 
           {/* Agent */}
           <section className="border-b border-border-subtle px-4 py-3">
             <SectionLabel>Agent</SectionLabel>
+
+            {/* Stage 1 — the scope sentence, verbatim, above the controls it
+                qualifies: everything in this section is Claude Code. */}
+            <p className="mb-2 text-pretty text-sm leading-relaxed text-content-secondary">
+              {PROVIDER_SUPPORT_SENTENCE}
+            </p>
 
             <Row
               label={
@@ -320,7 +473,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </HelperLine>
 
             <Row label="Hooks server">
-              <span className="font-mono text-xs text-content-secondary">{HOOKS_ADDR}</span>
+              <span className="font-mono text-xs text-content-secondary">{hooksAddr}</span>
             </Row>
           </section>
 
@@ -334,14 +487,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <HelperLine>
               Hides the Barn view and never loads the Pixi scene — a pure context-graph and
               agents UI.
-            </HelperLine>
-
-            <Row label="FPS counter">
-              <Toggle checked={showFps} onChange={setShowFps} label="FPS counter" />
-            </Row>
-            <HelperLine>
-              Shows the Barn&rsquo;s frame rate in the scene overlay. The Barn deliberately drops
-              to 12 fps while idle, so a low number there is not a bug.
             </HelperLine>
           </section>
 

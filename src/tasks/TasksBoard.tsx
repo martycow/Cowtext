@@ -790,10 +790,33 @@ export function TasksBoard({ root, agentFilter: agentFilterProp }: { root: strin
               />
             ))}
           </div>
+          {/* WO15 Stage 4 / A-15 — the old line ("add a task to create it")
+              described a side effect and pointed at a button in another
+              corner of the screen. One direct CTA instead, plus the reason
+              a task is worth making here at all. No "Create TASKS.md"
+              button beside it: there is no create-empty-file primitive
+              (`tasks.rs` creates the file on first append), so two buttons
+              would be one action wearing two labels. */}
           {tasksFile !== undefined && !tasksFile.exists && (
-            <p className="px-3 py-6 text-center text-sm text-content-muted">
-              No TASKS.md yet — add a task to create it.
-            </p>
+            <div className="flex flex-col items-center gap-2 px-3 py-8 text-center">
+              <p className="text-sm font-semibold text-content">No TASKS.md yet</p>
+              <p className="max-w-[420px] text-sm leading-relaxed text-content-secondary">
+                Each task can pin a context subgraph — Cowtext compiles only those nodes into the
+                session.
+              </p>
+              <p className="max-w-[420px] text-xs leading-relaxed text-content-muted">
+                Saving the first task creates TASKS.md in this project.
+              </p>
+              {!locked && (
+                <button
+                  onClick={() => setNewTaskOpen(true)}
+                  className="mt-1 flex h-control items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active"
+                >
+                  <Plus size={14} strokeWidth={1.5} />
+                  Create task
+                </button>
+              )}
+            </div>
           )}
           {tasksFile !== undefined && tasksFile.exists && taskItems.length === 0 && (
             <p className="px-3 py-6 text-center text-sm text-content-muted">No tasks match.</p>

@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
-import { useProjectStore } from "../store/project";
+import { useHooksAddr, useProjectStore } from "../store/project";
 import { diffLines, type DiffHunk } from "../ui/diff";
 
 /** Mirrors src-tauri hooks::HooksPreview (contract §1.2). */
@@ -71,6 +71,10 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
   const [errText, setErrText] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // WO15 D-2: the port is Rust's constant, read once via `hooks_addr` — a
+  // diff that promises one address while the listener binds another is the
+  // worst possible lie to tell at a trust boundary.
+  const hooksAddr = useHooksAddr();
 
   // Trust boundary: Cancel holds initial focus, so Enter/Space can never
   // install — approving takes a deliberate pointer/tab move.
@@ -176,8 +180,7 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
                 {preview?.relPath ?? ".claude/settings.json"}
               </p>
               <p className="text-xs text-content-muted">
-                Claude Code sessions in this project now report to the barn on
-                127.0.0.1:4923.
+                Claude Code sessions in this project now report to the barn on {hooksAddr}.
               </p>
             </div>
           ) : (
@@ -193,7 +196,7 @@ export function HooksModal({ root, onClose }: { root: string; onClose: () => voi
                     This edits{" "}
                     <span className="break-all font-mono">{preview.relPath}</span> in your
                     project so Claude Code reports file activity to Cowtext on{" "}
-                    <span className="font-mono">127.0.0.1:4923</span>. Nothing is written
+                    <span className="font-mono">{hooksAddr}</span>. Nothing is written
                     until you approve the exact diff below.
                   </div>
                   {preview.unchanged ? (

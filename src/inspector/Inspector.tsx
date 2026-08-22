@@ -2,21 +2,24 @@
 // form) + Markdown (CodeMirror on the node's file; explicit save writes to
 // disk through Rust). The file on disk is the content source of truth.
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   FileCode,
   FileText,
   FolderOpen,
+  HelpCircle,
   Layers,
-  Move,
   Palette,
   Pencil,
+  Settings2,
   Sparkles,
   Spline,
   Tag,
@@ -44,7 +47,7 @@ import {
 import { useProjectStore } from "../store/project";
 import { useProjectSelectionStore } from "../store/projectSelection";
 import { useReviewStore } from "../store/review";
-import { useSettingsStore } from "../store/settings";
+import { selectNodeTypeHelpOpen, useSettingsStore } from "../store/settings";
 import { RoleGlyph, roleVar } from "../canvas/RoleGlyphs";
 import { isStructuralEdgeKind } from "../canvas/edgeKind";
 import { EDGE_COLORS } from "../canvas/edgeColor";
@@ -64,6 +67,12 @@ import {
 import { ProjectPanel } from "./ProjectPanel";
 import { useFocusStore, useHighlightStore, useInspectorTabStore } from "../canvas/types";
 import { ROLE_DESCRIPTIONS, ROLE_GROUPS } from "../canvas/roleMeta";
+// WO15 Block 1.3/1.4 — the node-type taxonomy's own copy (label · hint ·
+// microExample) instead of the raw enum id the panel used to print. Same
+// source `NodeWizard`'s tile grid reads, so the two surfaces cannot drift.
+import { NODE_TYPE_BY_ROLE } from "../config/nodeTypes";
+import { WIZARD_BLOCKED_HINT, WIZARD_ROLE_GROUPS } from "../wizard/roles";
+import { LocalOnlyBadge } from "../ui/LocalOnlyBadge";
 // WO13 E3 — T1's frozen resolver (§8.1/§8.3). Not yet landed at the time
 // this lane wrote against it (T1 is a parallel lane; `src/config/` does not
 // exist in the tree yet) — the import is expected to resolve once T1's pass
@@ -72,11 +81,23 @@ import { ROLE_DESCRIPTIONS, ROLE_GROUPS } from "../canvas/roleMeta";
 import { resolveLoad, type LoadResult } from "../config/resolveLoad";
 import { lintRun } from "../lint/api";
 import { LINT_CODE_LABELS, type LintItem } from "../lint/types";
-import { assembleCancel, assembleNode, refineNode, summarizeNode } from "../assemble/api";
+import {
+  assembleCancel,
+  assembleNode,
+  assemblePreview,
+  refineNode,
+  summarizeNode,
+} from "../assemble/api";
 import { requestAssemble } from "../assemble/gate";
-import type { AssembleMode } from "../assemble/types";
+import type { AssembleMode, AssemblePreview } from "../assemble/types";
 import { revealPath } from "../fs/api";
-import { flushAgentSaveFor, saveAgentRaw, useAgentsStore } from "../store/agents";
+import {
+  flushAgentSaveFor,
+  flushMetaSave,
+  metaOrDefault,
+  saveAgentRaw,
+  useAgentsStore,
+} from "../store/agents";
 import type { AgentDoc } from "../agents/types";
 import { AgentEditor } from "../agents/AgentEditor";
 import { SkillEditor } from "../agents/SkillEditor";
@@ -87,6 +108,7 @@ import {
   STATUS_LABELS,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  TASK_TYPE_OPTIONS,
   statusOf,
   useTasksStore,
   type TaskStatus,
@@ -145,12 +167,28 @@ async function openMarkdownTab(node: MemoryNode): Promise<void> {
 
 // ── Small controls ────────────────────────────────────────────────────
 
+const LABEL_CLS = "font-mono text-2xs uppercase tracking-wider text-content-muted";
+
 function FieldLabel({ children }: { children: string }) {
+  return <label className={`mb-1 block ${LABEL_CLS}`}>{children}</label>;
+}
+
+/** Label line with trailing controls — a help button, a `local only` badge.
+ *  A <span>, not a <label>: the things it sits above (a popover trigger, a
+ *  slider) carry their own accessible names, and a label pointing at nothing
+ *  is worse than no label element at all. */
+function FieldLabelRow({ label, children }: { label: string; children?: ReactNode }) {
   return (
-    <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
+    <div className="mb-1 flex items-center gap-1.5">
+      <span className={LABEL_CLS}>{label}</span>
       {children}
-    </label>
+    </div>
   );
+}
+
+/** The one-line "what this field is for" under a control (WO15 Block 2). */
+function FieldHelp({ children }: { children: ReactNode }) {
+  return <p className="mt-1 text-xs leading-snug text-content-muted">{children}</p>;
 }
 
 /** 34×19 pill toggle. Pinned is an agent-facing guarantee ⇒ amber, not blue. */
@@ -173,10 +211,21 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-// ── Assemble section (Phase 3) ────────────────────────────────────────
+// ── Assemble section (Phase 3; rebuilt by WO15 Block 2) ───────────────
 // Fire-and-forget enqueue: the invoke only rejects at enqueue time (unknown
 // node, already queued, bad root). Everything after that arrives through
 // "assemble://status" events → graph store → this badge + the canvas card.
+//
+// Block 2 turns "Assemble" from a button strip into the section that owns
+// the whole job: the INPUTS Assemble reads (brief, tags, influence) sit
+// directly above the buttons that consume them, and under those is the exact
+// prompt they produce. Before this, Brief lived four fields up in Metadata
+// and the only way to learn what Assemble would send was to press it and
+// read the confirmation gate.
+
+/** WO15 §6 U1.2 / PROVIDER_SUPPORT_MATRIX.md §5 — the runtime is Claude
+ *  Code, said out loud on every button that spawns one. Never paraphrased. */
+const CLAUDE_RUNTIME_TIP = "with headless Claude Code (claude -p)";
 
 const STATUS_BADGE: Record<Exclude<AssembleStatus, "idle">, { label: string; cls: string }> = {
   queued: { label: "queued", cls: "border-border bg-surface-2 text-content-secondary" },
@@ -185,14 +234,166 @@ const STATUS_BADGE: Record<Exclude<AssembleStatus, "idle">, { label: string; cls
   error: { label: "error", cls: "border-danger bg-danger-surface text-danger-text" },
 };
 
+/** Influence (WO15 D-3, §7.5).
+ *
+ *  Two honest states, no third. On an AGENT node it is live and local-only:
+ *  the value lives in `.cowtext/agents.json` beside the agent's nickname and
+ *  priority, never in the agent's own frontmatter, so it carries the badge.
+ *  On a MEMORY node there is nothing to bind to — `MemoryNode` has no
+ *  influence field, `assemble.rs` deliberately does not read one, and adding
+ *  one would be a graph.json schema change WO15's scope guard forbids. The
+ *  control is therefore rendered DISABLED at the default 50 with a tooltip
+ *  naming this node's type, rather than hidden: "the slider is missing" is a
+ *  question the panel gets asked, and a greyed control that says why answers
+ *  it once. The helper copy states the truth flatly — it never points at
+ *  `resolveLoad()` as if influence fed it. */
+const INFLUENCE_MEMORY_HELP =
+  "Influence is an agent setting stored in .cowtext/agents.json. It is not read by Assemble or resolveLoad yet.";
+
+function InfluenceField({ node }: { node: MemoryNode }) {
+  const updateMeta = useAgentsStore((s) => s.updateMeta);
+  // Reactive (not `resolveAgentFileName`'s getState read): the slider has to
+  // repaint when the sidecar loads or another surface edits the same agent.
+  const fileName = useAgentsStore((s) =>
+    isAgentFile(node.filePath)
+      ? (s.agents.find((a) => sameRelPath(`.claude/agents/${a.fileName}`, node.filePath))
+          ?.fileName ?? null)
+      : null,
+  );
+  const stored = useAgentsStore((s) =>
+    fileName === null ? null : metaOrDefault(s.meta, fileName).influence,
+  );
+
+  const live = fileName !== null && stored !== null;
+  const value = stored ?? 50;
+  const typeLabel = NODE_TYPE_BY_ROLE[node.role].label;
+  const disabledTip = `Not used for ${typeLabel}`;
+  const set = (raw: number) => {
+    if (fileName === null || !Number.isFinite(raw)) return;
+    updateMeta(fileName, { influence: Math.min(100, Math.max(0, Math.round(raw))) });
+  };
+
+  return (
+    <div>
+      <FieldLabelRow label="Influence">{live && <LocalOnlyBadge />}</FieldLabelRow>
+      {/* `title` sits on the ROW, and the disabled controls drop out of hit
+          testing, because a native tooltip on a disabled input never shows
+          in Chromium — the browser suppresses the pointer event outright. */}
+      <div
+        className="flex items-center gap-2"
+        title={live ? undefined : disabledTip}
+      >
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={value}
+          disabled={!live}
+          aria-label="Influence"
+          title={live ? undefined : disabledTip}
+          onChange={(e) => set(Number(e.target.value))}
+          className="h-[16px] min-w-0 flex-1 cursor-pointer appearance-none bg-transparent disabled:pointer-events-none disabled:opacity-40 [&::-webkit-slider-runnable-track]:h-[4px] [&::-webkit-slider-runnable-track]:rounded-sm [&::-webkit-slider-runnable-track]:bg-surface-inset [&::-webkit-slider-thumb]:mt-[-4px] [&::-webkit-slider-thumb]:h-[12px] [&::-webkit-slider-thumb]:w-[12px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-sm [&::-webkit-slider-thumb]:bg-accent"
+        />
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={value}
+          disabled={!live}
+          aria-label="Influence percent"
+          title={live ? undefined : disabledTip}
+          onChange={(e) => set(Number.parseInt(e.target.value, 10))}
+          className="h-control w-[64px] flex-none rounded border border-border bg-surface-2 px-2 font-mono text-sm text-content focus:border-accent disabled:pointer-events-none disabled:text-content-disabled"
+        />
+      </div>
+      <FieldHelp>
+        {live
+          ? "Your own weighting for this agent. Cowtext stores it beside the agent; it does not change compiled output."
+          : INFLUENCE_MEMORY_HELP}
+      </FieldHelp>
+    </div>
+  );
+}
+
+/** Assemble component: the inputs Assemble reads (Brief · Tags · Influence),
+ *  the three actions, and a live prompt preview.
+ *
+ *  **Mount it with `key={node.id}`.** Everything below the store reads is
+ *  per-node local state — the Refine instruction, the last preview, the
+ *  action/preview errors — and none of it means anything on a different
+ *  node. Without the key React reuses the instance across a selection
+ *  change and node B opens showing node A's typed instruction and A's
+ *  prompt (tester #8). Same remount discipline as TitleField/FileField. */
 function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
   const status = useGraphStore((s) => s.assembleStatus[node.id] ?? "idle");
   const jobError = useGraphStore((s) => s.assembleErrors[node.id] ?? null);
   const setAssembleStatus = useGraphStore((s) => s.setAssembleStatus);
   const [instruction, setInstruction] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<AssemblePreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  // Sequence guard for the debounced preview below — see the effect.
+  const previewSeq = useRef(0);
 
   const busy = status === "queued" || status === "running";
+
+  // ── Live prompt preview (WO15 Block 2) ──────────────────────────────
+  //
+  // The in-memory graph, NOT `flushSave()` first: this fires 400 ms after
+  // every keystroke in Brief, and a debounced save-to-disk on that cadence
+  // would make typing a stream of file writes (and would race the graph
+  // store's own save debounce). `assemble_preview` is read-only in Rust —
+  // it builds the prompt and returns; the pressed-button path above keeps
+  // its flush, because THAT one is about to spawn a process that reads the
+  // files.
+  const projectName = useGraphStore((s) => s.projectName);
+  const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
+  const compileTargets = useGraphStore((s) => s.compileTargets);
+  // Named apart from `run`'s own `graphJson` on purpose: that one is
+  // post-flush and about to be SENT, this one is in-memory and only ever
+  // described.
+  const previewGraphJson = useMemo(
+    () => serializeGraph({ version: GRAPH_VERSION, projectName, nodes, edges, compileTargets }),
+    [projectName, nodes, edges, compileTargets],
+  );
+
+  useEffect(() => {
+    // Skipped while a job is queued or running: the file is about to be
+    // rewritten under us, and a preview of the prompt that is already in
+    // flight is noise.
+    if (busy) return undefined;
+    // Tester #8 — a preview must never paint into a node it wasn't asked
+    // for. The section is also remounted per node (`key` at both mount
+    // sites), so this is the second lock, not the only one. Two guards,
+    // because they cover different holes: `seq` is taken before the timer
+    // is armed and drops any response a LATER effect run has superseded
+    // (the 400 ms debounce makes that rare, an IPC slower than the next
+    // keystroke makes it possible), while `live` drops responses that
+    // arrive after this instance is gone.
+    const seq = ++previewSeq.current;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      assemblePreview(root, previewGraphJson, node.id, "assemble")
+        .then((p) => {
+          if (!live || seq !== previewSeq.current) return;
+          setPreview(p);
+          setPreviewError(null);
+        })
+        .catch((e: unknown) => {
+          if (!live || seq !== previewSeq.current) return;
+          setPreview(null);
+          setPreviewError(String(e));
+        });
+    }, 400);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [root, previewGraphJson, node.id, busy]);
+
+  const promptHead = preview === null ? [] : preview.prompt.split("\n").slice(0, 12);
 
   // F7: flush/serialize still happen up front (the preview the gate shows
   // must describe the just-saved state), but the actual invoke — and the
@@ -256,89 +457,141 @@ function AssembleSection({ node, root }: { node: MemoryNode; root: string }) {
     "flex h-control items-center gap-1.5 rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3 disabled:text-content-disabled disabled:hover:border-border disabled:hover:bg-surface-2";
 
   return (
-    <div className="border-t border-border-subtle pt-3">
-      <div className="mb-2 flex items-center gap-2">
-        <FieldLabel>Assemble</FieldLabel>
-        <div className="flex-1" />
-        {status !== "idle" && (
-          <span
-            className={`inline-flex h-[17px] items-center gap-1 rounded-sm border px-1 font-mono text-micro ${STATUS_BADGE[status].cls}`}
-          >
-            {status === "running" && (
-              <span className="h-[5px] w-[5px] animate-blink bg-accent" />
-            )}
-            {STATUS_BADGE[status].label}
-          </span>
-        )}
-        {status === "queued" && (
+    <div className="flex flex-col gap-3">
+      {/* The inputs Assemble reads, in the order it reads them. */}
+      <div>
+        <BriefField node={node} />
+        <FieldHelp>Seed sentence Assemble expands</FieldHelp>
+      </div>
+      <div>
+        <TagsField node={node} />
+        <FieldHelp>Used for subgraph selection and compile filtering</FieldHelp>
+      </div>
+      <InfluenceField node={node} />
+
+      {/* Actions — status badge rides the same row rather than taking a
+          heading of its own; the section header already says ASSEMBLE. */}
+      <div>
+        <div className="flex items-center gap-2">
           <button
-            onClick={cancel}
-            title="Remove from queue"
-            className="grid h-control-sm w-control-sm place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+            onClick={() =>
+              run("assemble", null, (graphJson) => assembleNode(root, graphJson, node.id))
+            }
+            disabled={busy}
+            title={
+              node.brief === ""
+                ? `Uses the title and neighbors — a brief makes it better. Expands ${CLAUDE_RUNTIME_TIP}`
+                : `Expand the brief into a full file ${CLAUDE_RUNTIME_TIP}`
+            }
+            className="flex h-control items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
           >
-            <X size={12} strokeWidth={1.5} />
+            <Sparkles size={13} strokeWidth={1.5} />
+            Assemble
           </button>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <button
-          onClick={() => run("assemble", null, (graphJson) => assembleNode(root, graphJson, node.id))}
-          disabled={busy}
-          title={
-            node.brief === ""
-              ? "Uses the title and neighbors — a brief makes it better"
-              : "Expand the brief into a full file via claude -p"
-          }
-          className="flex h-control items-center gap-1.5 rounded bg-accent px-3 text-sm font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover active:bg-accent-active disabled:bg-surface-2 disabled:text-content-disabled"
-        >
-          <Sparkles size={13} strokeWidth={1.5} />
-          Assemble
-        </button>
-        <button
-          onClick={() => run("summarize", null, (graphJson) => summarizeNode(root, graphJson, node.id))}
-          disabled={busy}
-          title="Compress the current file content"
-          className={secondaryBtn}
-        >
-          Summarize
-        </button>
-      </div>
-      <div className="mt-2 flex gap-2">
-        <input
-          value={instruction}
-          onChange={(e) => setInstruction(e.target.value)}
-          disabled={busy}
-          placeholder="Refine: e.g. add a testing section"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && instruction.trim() !== "" && !busy) {
+          <button
+            onClick={() =>
+              run("summarize", null, (graphJson) => summarizeNode(root, graphJson, node.id))
+            }
+            disabled={busy}
+            title={`Compress the current file content ${CLAUDE_RUNTIME_TIP}`}
+            className={secondaryBtn}
+          >
+            Summarize
+          </button>
+          <div className="flex-1" />
+          {status !== "idle" && (
+            <span
+              className={`inline-flex h-[17px] flex-none items-center gap-1 rounded-sm border px-1 font-mono text-micro ${STATUS_BADGE[status].cls}`}
+            >
+              {status === "running" && <span className="h-[5px] w-[5px] animate-blink bg-accent" />}
+              {STATUS_BADGE[status].label}
+            </span>
+          )}
+          {status === "queued" && (
+            <button
+              onClick={cancel}
+              title="Remove from queue"
+              className="grid h-control-sm w-control-sm flex-none place-items-center rounded text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+            >
+              <X size={12} strokeWidth={1.5} />
+            </button>
+          )}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <input
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            disabled={busy}
+            placeholder="Refine: e.g. add a testing section"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && instruction.trim() !== "" && !busy) {
+                run("refine", instruction.trim(), (graphJson) =>
+                  refineNode(root, graphJson, node.id, instruction.trim()),
+                );
+              }
+            }}
+            className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
+          />
+          <button
+            onClick={() =>
               run("refine", instruction.trim(), (graphJson) =>
                 refineNode(root, graphJson, node.id, instruction.trim()),
-              );
+              )
             }
-          }}
-          className="h-control min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-sm text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
-        />
-        <button
-          onClick={() =>
-            run("refine", instruction.trim(), (graphJson) =>
-              refineNode(root, graphJson, node.id, instruction.trim()),
-            )
-          }
-          disabled={busy || instruction.trim() === ""}
-          className={secondaryBtn}
-        >
-          Refine
-        </button>
-      </div>
-      <p className="mt-1.5 text-xs leading-snug text-content-muted">
-        Runs headless <span className="font-mono">claude -p</span> and rewrites{" "}
-        <span className="font-mono">{node.filePath}</span> on disk.
-      </p>
-      {(actionError !== null || jobError !== null) && (
-        <p className="mt-1.5 break-words font-mono text-xs text-danger-text">
-          {actionError ?? jobError}
+            disabled={busy || instruction.trim() === ""}
+            title={`Rewrite the file with your instruction ${CLAUDE_RUNTIME_TIP}`}
+            className={secondaryBtn}
+          >
+            Refine
+          </button>
+        </div>
+        <p className="mt-1.5 text-xs leading-snug text-content-muted">
+          Runs headless <span className="font-mono">claude -p</span> and rewrites{" "}
+          <span className="font-mono">{node.filePath}</span> on disk.
         </p>
-      )}
+        {(actionError !== null || jobError !== null) && (
+          <p className="mt-1.5 break-words font-mono text-xs text-danger-text">
+            {actionError ?? jobError}
+          </p>
+        )}
+      </div>
+
+      {/* Live prompt preview — what the buttons above would send, right now,
+          without sending it. */}
+      <div>
+        <FieldLabelRow label="Prompt preview">
+          <span className="font-mono text-micro text-content-disabled">first 12 lines</span>
+        </FieldLabelRow>
+        {previewError !== null ? (
+          <p className="break-words font-mono text-xs text-danger-text">{previewError}</p>
+        ) : preview === null ? (
+          <p className="text-xs text-content-muted">
+            {busy ? "Paused while this node is assembling." : "Building preview…"}
+          </p>
+        ) : (
+          <>
+            <pre className="max-h-[150px] overflow-auto whitespace-pre-wrap break-words rounded border border-border-subtle bg-surface-inset p-2 font-mono text-2xs leading-snug text-content-secondary">
+              {promptHead.join("\n")}
+            </pre>
+            {preview.neighbors.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                <span className="font-mono text-micro uppercase tracking-wider text-content-disabled">
+                  neighbors
+                </span>
+                {preview.neighbors.map((n) => (
+                  <span
+                    key={n}
+                    title={n}
+                    className="max-w-[150px] truncate rounded-sm border border-border-strong bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-content"
+                  >
+                    {n}
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -495,7 +748,18 @@ function RolePopup({
     const onPointerDown = (e: PointerEvent) => {
       if (popRef.current !== null && !popRef.current.contains(e.target as Node)) onClose();
     };
-    const onScroll = () => onClose();
+    // WO15: the capture-phase listener also hears the popup's OWN scroller
+    // (the list is 13 rows in a 380px box), and `itemRefs[i].focus()` scrolls
+    // it — so arrow-keying past the fold used to close the menu mid-keyboard-
+    // navigation, undoing the roving-tabindex fix D4 landed. Only a scroll
+    // OUTSIDE the popup means "the anchor moved".
+    const onScroll = (e: Event) => {
+      const target = e.target;
+      if (popRef.current !== null && target instanceof Node && popRef.current.contains(target)) {
+        return;
+      }
+      onClose();
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -570,7 +834,10 @@ function RolePopup({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <span className="text-sm capitalize text-content">{r}</span>
+                    {/* The taxonomy's label, never the raw enum id (WO15
+                        Block 1) — "Node type" reads the same word here, on
+                        the trigger, in the wizard's tile and on the card. */}
+                    <span className="text-sm text-content">{NODE_TYPE_BY_ROLE[r].label}</span>
                     {r === role && (
                       <Check size={12} strokeWidth={2} className="flex-none text-accent-text" />
                     )}
@@ -589,10 +856,143 @@ function RolePopup({
   );
 }
 
+/** The `?` popover (WO15 Block 1.4) — the whole taxonomy, read-only.
+ *
+ *  Same portal / viewport-flip / outside-close / Escape / focus-return
+ *  mechanics as `RolePopup` above, and deliberately NOT the same component:
+ *  that one is a 14-entry radio menu that CHANGES the node (it keeps `agent`
+ *  so an adopted agent node can be re-tagged), this one is a 13-entry
+ *  reference card that changes nothing (`WIZARD_ROLE_GROUPS`, D-11) and ends
+ *  with the line saying where the fourteenth lives. Merging them would mean
+ *  a menu whose items sometimes do nothing.
+ *
+ *  Focus goes to the panel itself, not to an item: there is nothing to
+ *  arrow-key between, so a roving tabindex would be a promise this popover
+ *  does not keep. Escape (or a click anywhere else) closes and hands focus
+ *  back to the `?` button. */
+function NodeTypeHelpPopup({
+  anchor,
+  onClose,
+}: {
+  anchor: { x: number; y: number };
+  onClose: () => void;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; ready: boolean }>({
+    left: anchor.x,
+    top: anchor.y,
+    ready: false,
+  });
+
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    let left = anchor.x;
+    let top = anchor.y;
+    if (left + rect.width > window.innerWidth - 4) {
+      left = Math.max(4, window.innerWidth - rect.width - 4);
+    }
+    if (top + rect.height > window.innerHeight - 4) {
+      top = Math.max(4, window.innerHeight - rect.height - 4);
+    }
+    setPos({ left, top, ready: true });
+  }, [anchor.x, anchor.y]);
+
+  useEffect(() => {
+    popRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (popRef.current !== null && !popRef.current.contains(e.target as Node)) onClose();
+    };
+    // Its own scroller must not close it — see RolePopup's note.
+    const onScroll = (e: Event) => {
+      const target = e.target;
+      if (popRef.current !== null && target instanceof Node && popRef.current.contains(target)) {
+        return;
+      }
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={popRef}
+      role="dialog"
+      aria-label="Node type help"
+      tabIndex={-1}
+      style={{
+        position: "fixed",
+        left: pos.left,
+        top: pos.top,
+        visibility: pos.ready ? "visible" : "hidden",
+      }}
+      className="z-dropdown flex max-h-[440px] w-[320px] flex-col overflow-y-auto rounded-lg border border-border bg-surface-3 p-1 shadow-dropdown"
+    >
+      {WIZARD_ROLE_GROUPS.map((group) => (
+        <Fragment key={group.label}>
+          <div className="px-2 pb-1 pt-2 font-mono text-2xs uppercase tracking-wider text-content-muted">
+            {group.label}
+          </div>
+          {group.roles.map((r) => {
+            const meta = NODE_TYPE_BY_ROLE[r];
+            return (
+              <div key={r} className="flex items-start gap-2 px-2 py-1.5">
+                <span className="mt-0.5 flex-none" style={{ color: roleVar(r) }}>
+                  <RoleGlyph role={r} size={12} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-content">{meta.label}</p>
+                  <p className="text-2xs leading-snug text-content-muted">{meta.hint}</p>
+                  <p className="mt-1 break-words rounded-sm bg-surface-inset px-1.5 py-1 font-mono text-2xs leading-snug text-content-secondary">
+                    {meta.microExample}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </Fragment>
+      ))}
+      <p className="border-t border-border-subtle px-2 py-1.5 text-2xs leading-snug text-content-muted">
+        {WIZARD_BLOCKED_HINT}
+      </p>
+    </div>,
+    document.body,
+  );
+}
+
+/** Node type — the picker, the one-line hint and the worked example.
+ *
+ *  WO15 Block 1.3: the trigger printed the raw enum id (`architecture`) and
+ *  the panel's only explanation was a definition-shaped sentence. A type is
+ *  learned from an instance, so the disclosure under it carries the
+ *  taxonomy's `microExample` verbatim in monospace. It starts open for the
+ *  first few launches and remembers the user's choice after that
+ *  (`selectNodeTypeHelpOpen` / `setNodeTypeHelpCollapsed`) — help that never
+ *  goes away is chrome, help that never comes back is a manual. */
 function RoleField({ node }: { node: MemoryNode }) {
   const updateNode = useGraphStore((s) => s.updateNode);
+  const helpOpen = useSettingsStore(selectNodeTypeHelpOpen);
+  const setNodeTypeHelpCollapsed = useSettingsStore((s) => s.setNodeTypeHelpCollapsed);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const helpBtnRef = useRef<HTMLButtonElement>(null);
+  const helpBodyId = useId();
   const [open, setOpen] = useState<{ x: number; y: number } | null>(null);
+  const [helpAnchor, setHelpAnchor] = useState<{ x: number; y: number } | null>(null);
+  const meta = NODE_TYPE_BY_ROLE[node.role];
 
   const openPopup = () => {
     const rect = btnRef.current?.getBoundingClientRect();
@@ -600,9 +1000,27 @@ function RoleField({ node }: { node: MemoryNode }) {
     setOpen({ x: rect.left, y: rect.bottom + 4 });
   };
 
+  const openHelp = () => {
+    const rect = helpBtnRef.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    setHelpAnchor({ x: rect.left, y: rect.bottom + 4 });
+  };
+
   return (
     <div>
-      <FieldLabel>Role</FieldLabel>
+      <FieldLabelRow label="Node type">
+        <button
+          ref={helpBtnRef}
+          type="button"
+          aria-label="Node type help"
+          aria-haspopup="dialog"
+          aria-expanded={helpAnchor !== null}
+          onClick={openHelp}
+          className="grid h-4 w-4 flex-none place-items-center rounded-sm text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content"
+        >
+          <HelpCircle size={12} strokeWidth={1.75} />
+        </button>
+      </FieldLabelRow>
       <button
         ref={btnRef}
         type="button"
@@ -618,11 +1036,30 @@ function RoleField({ node }: { node: MemoryNode }) {
         <span className="flex-none" style={{ color: roleVar(node.role) }}>
           <RoleGlyph role={node.role} size={13} />
         </span>
-        <span className="min-w-0 flex-1 capitalize">{node.role}</span>
+        <span className="min-w-0 flex-1">{meta.label}</span>
       </button>
-      <p className="mt-1 text-xs leading-snug text-content-secondary">
-        {ROLE_DESCRIPTIONS[node.role]}
-      </p>
+      <button
+        type="button"
+        onClick={() => setNodeTypeHelpCollapsed(helpOpen)}
+        aria-expanded={helpOpen}
+        aria-controls={helpBodyId}
+        className="mt-1 flex items-center gap-1 rounded-sm text-xs text-content-muted transition-colors duration-fast hover:text-content"
+      >
+        {helpOpen ? (
+          <ChevronDown size={11} strokeWidth={2} />
+        ) : (
+          <ChevronRight size={11} strokeWidth={2} />
+        )}
+        What this is
+      </button>
+      {helpOpen && (
+        <div id={helpBodyId} className="mt-1">
+          <p className="text-xs leading-snug text-content-secondary">{meta.hint}</p>
+          <p className="mt-1 break-words rounded-sm bg-surface-inset px-1.5 py-1 font-mono text-2xs leading-snug text-content-secondary">
+            {meta.microExample}
+          </p>
+        </div>
+      )}
       {open !== null && (
         <RolePopup
           anchor={open}
@@ -631,6 +1068,15 @@ function RoleField({ node }: { node: MemoryNode }) {
           onClose={() => {
             setOpen(null);
             btnRef.current?.focus();
+          }}
+        />
+      )}
+      {helpAnchor !== null && (
+        <NodeTypeHelpPopup
+          anchor={helpAnchor}
+          onClose={() => {
+            setHelpAnchor(null);
+            helpBtnRef.current?.focus();
           }}
         />
       )}
@@ -809,7 +1255,11 @@ function FileField({
 
   const commit = () => {
     const next = draft.trim().replace(/\\/g, "/");
-    if (next === "" || next === node.filePath) {
+    // Audit F9 (§7.8): `sameRelPath`, never `===`. The draft is already
+    // forward-slashed above, so a node whose stored path uses backslashes
+    // (easy on Windows) failed a bare comparison against its own path and
+    // committed a "rename" to the same file.
+    if (next === "" || sameRelPath(next, node.filePath)) {
       setDraft(node.filePath);
       setError(null);
       return;
@@ -1114,7 +1564,20 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
           Agent file <span className="font-mono text-xs">{node.filePath}</span> is not loaded.
         </p>
         <button
-          onClick={() => void useAgentsStore.getState().loadAgents(root)}
+          onClick={() => {
+            // Tester #10 — `loadAgents` resets `meta` from the file it is
+            // about to re-read, so a sidecar edit still sitting in the
+            // 700 ms debounce (an Influence drag, a nickname) would be
+            // thrown away by this recovery button. Flush first, THEN
+            // rescan. `loadAgents` now flushes internally as well; this
+            // call is the belt to that braces — it costs one idempotent
+            // sidecar write on a button nobody clicks twice, and it keeps
+            // the ordering readable at the call site that needs it.
+            void (async () => {
+              await flushMetaSave();
+              await useAgentsStore.getState().loadAgents(root);
+            })();
+          }}
           className="h-control self-start rounded border border-border bg-surface-2 px-3 text-sm text-content transition-colors duration-fast hover:border-border-strong hover:bg-surface-3"
         >
           Rescan agents
@@ -1143,9 +1606,19 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
         <AgentEditor root={root} doc={doc} disabled={busy} />
       </InspectorSection>
     ),
-    "node.position": (
-      <InspectorSection sectionKey="node.position" title="Position" icon={Move}>
-        <PositionField node={node} />
+    "node.advanced": (
+      <InspectorSection
+        sectionKey="node.advanced"
+        title="Advanced"
+        icon={Settings2}
+        defaultCollapsed
+      >
+        <div>
+          <FieldLabelRow label="Position">
+            <LocalOnlyBadge />
+          </FieldLabelRow>
+          <PositionField node={node} />
+        </div>
       </InspectorSection>
     ),
     "node.context": (
@@ -1181,7 +1654,10 @@ function AgentNodePanel({ node, root }: { node: MemoryNode; root: string }) {
     ),
     "node.assemble": (
       <InspectorSection sectionKey="node.assemble" title="Assemble" icon={Sparkles}>
-        <AssembleSection node={node} root={root} />
+        {/* Keyed by node.id (tester #8): Refine text, the last prompt
+            preview and the inline errors are per-NODE state, and React
+            would otherwise reuse one instance across a selection change. */}
+        <AssembleSection key={`assemble-${node.id}`} node={node} root={root} />
       </InspectorSection>
     ),
     "node.actions": (
@@ -1308,28 +1784,40 @@ function StandaloneAgentsPanel({ root }: { root: string }) {
 
 const STATUS_ORDER = TASK_STATUSES;
 const PRIORITY_OPTIONS = ["none", ...TASK_PRIORITIES] as const;
+// Tester #11 / D-6 — the same vocabulary NewTaskDialog offers, so the two
+// surfaces that write a task type cannot drift. Typed `readonly string[]`
+// (not a literal tuple) because the panel appends whatever word an existing
+// file already carries; the chips are a vocabulary, not a validator.
+const TASK_TYPE_CHOICES: readonly string[] = ["none", ...TASK_TYPE_OPTIONS];
 
 function Segmented<T extends string>({
   value,
   options,
   labels,
+  disabled,
   onChange,
 }: {
   value: T;
   options: readonly T[];
   labels?: Partial<Record<T, string>>;
+  disabled?: boolean;
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]">
+    <div
+      className={`flex flex-wrap items-center gap-0.5 rounded border border-border p-[2px] ${
+        disabled === true ? "bg-surface-inset" : "bg-surface-2"
+      }`}
+    >
       {options.map((opt) => (
         <button
           key={opt}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(opt)}
-          className={`h-control-sm rounded-sm px-2 font-mono text-2xs transition-colors duration-fast ${
+          className={`h-control-sm rounded-sm px-2 font-mono text-2xs transition-colors duration-fast disabled:cursor-default ${
             value === opt ? "bg-surface-3 font-medium text-content" : "text-content-muted hover:text-content-secondary"
-          }`}
+          } disabled:text-content-disabled disabled:hover:text-content-disabled`}
         >
           {labels?.[opt] ?? opt}
         </button>
@@ -1451,6 +1939,19 @@ function TaskPanel({ root }: { root: string }) {
     });
   };
 
+  // Task type chips (tester #11). `taskType` still holds exactly what is on
+  // disk — `""` for unset — and the chip row only decides how to SHOW it:
+  // a known id (case-insensitively) selects its chip, and a word the
+  // vocabulary doesn't have (`spike`, from a file written by hand or by an
+  // older build) is appended as its own selected chip. The panel never
+  // rewrites a task type it can't offer; only a click does, and a click
+  // always writes the lowercase id.
+  const storedType = taskType.trim();
+  const knownType = TASK_TYPE_CHOICES.includes(storedType.toLowerCase());
+  const typeValue = storedType === "" ? "none" : knownType ? storedType.toLowerCase() : storedType;
+  const typeOptions =
+    storedType === "" || knownType ? TASK_TYPE_CHOICES : [...TASK_TYPE_CHOICES, storedType];
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="flex flex-none items-center gap-2 border-b border-border-subtle bg-surface-inset px-3 py-1.5">
@@ -1512,22 +2013,15 @@ function TaskPanel({ root }: { root: string }) {
           <Segmented value={status} options={STATUS_ORDER} labels={STATUS_LABELS} onChange={setStatus} />
         </div>
         <div>
-          <FieldLabel>Task Type</FieldLabel>
-          <input
-            list="task-panel-type-suggestions"
-            value={taskType}
+          <FieldLabel>Task type</FieldLabel>
+          <Segmented
+            value={typeValue}
+            options={typeOptions}
             disabled={item.source !== "table"}
-            onChange={(e) => setTaskType(e.target.value)}
-            placeholder="e.g. bug, feature, chore"
-            className="h-control w-full rounded border border-border bg-surface-2 px-2 text-sm text-content focus:border-accent disabled:text-content-disabled"
+            // `none` is the UI's empty value; what reaches disk is the
+            // lowercase id or `""` — never the literal word "none".
+            onChange={(v) => setTaskType(v === "none" ? "" : v)}
           />
-          <datalist id="task-panel-type-suggestions">
-            <option value="bug" />
-            <option value="feature" />
-            <option value="chore" />
-            <option value="spike" />
-            <option value="docs" />
-          </datalist>
           {item.source !== "table" && (
             <p className="mt-1 text-xs text-content-muted">Checklist tasks don't carry a task type column.</p>
           )}
@@ -1609,7 +2103,15 @@ function PropertiesTab({
   // just because it's typed first.
   const sections: Partial<Record<MemoryNodeSectionKey, ReactNode>> = {
     "node.metadata": (
-      <InspectorSection sectionKey="node.metadata" title="Metadata" icon={Tag} hint={node.role}>
+      <InspectorSection
+        sectionKey="node.metadata"
+        title="Metadata"
+        icon={Tag}
+        // The taxonomy's label, not the raw enum id (WO15 Block 1.3): a shut
+        // section still has to say what the node IS, in the same words the
+        // trigger and the wizard use.
+        hint={NODE_TYPE_BY_ROLE[node.role].label}
+      >
         {node.needsReview === true && (
           <div className="flex items-start gap-2 rounded border border-accent-border bg-accent-surface px-2 py-1.5">
             <Zap size={13} strokeWidth={1.5} className="mt-0.5 flex-none text-accent-text" />
@@ -1633,9 +2135,9 @@ function PropertiesTab({
             — and act — on the newly selected node. Remounting on id change
             discards the old instance and its in-flight closures outright. */}
         <TitleField key={node.id} node={node} />
+        {/* WO15 Block 2: Brief and Tags moved to Assemble, which is the only
+            thing that reads them. Metadata is Title · Node type · Owner. */}
         <RoleField node={node} />
-        <BriefField node={node} />
-        <TagsField node={node} />
         <OwnerField node={node} />
       </InspectorSection>
     ),
@@ -1689,14 +2191,30 @@ function PropertiesTab({
         <FileField key={`file-${node.id}`} node={node} root={root} onRevealError={onRevealError} />
       </InspectorSection>
     ),
-    "node.position": (
-      <InspectorSection sectionKey="node.position" title="Position" icon={Move}>
-        <PositionField node={node} />
+    // WO15 Block 2 — Position is a footnote, not a component: it goes in
+    // Advanced, closed by default (D-18, session-local), with the badge that
+    // says out loud it never reaches a compiled file.
+    "node.advanced": (
+      <InspectorSection
+        sectionKey="node.advanced"
+        title="Advanced"
+        icon={Settings2}
+        defaultCollapsed
+      >
+        <div>
+          <FieldLabelRow label="Position">
+            <LocalOnlyBadge />
+          </FieldLabelRow>
+          <PositionField node={node} />
+        </div>
       </InspectorSection>
     ),
     "node.assemble": (
       <InspectorSection sectionKey="node.assemble" title="Assemble" icon={Sparkles}>
-        <AssembleSection node={node} root={root} />
+        {/* Keyed by node.id (tester #8): Refine text, the last prompt
+            preview and the inline errors are per-NODE state, and React
+            would otherwise reuse one instance across a selection change. */}
+        <AssembleSection key={`assemble-${node.id}`} node={node} root={root} />
       </InspectorSection>
     ),
     "node.actions": (
@@ -2686,7 +3204,22 @@ function InspectorHeader({
   );
 }
 
-export function Inspector({ root, onOpenGit }: { root: string; onOpenGit: () => void }) {
+/** Which view is hosting the Inspector (WO15 §4.13). The panel is the same
+ *  component everywhere; only its empty-state copy differs, so this is a
+ *  prop rather than three mounts. */
+export type InspectorSurface = "canvas" | "tasks" | "barn";
+
+export function Inspector({
+  root,
+  onOpenGit,
+  surface = "canvas",
+}: {
+  root: string;
+  onOpenGit: () => void;
+  /** Set by App.tsx (U4a); read by the fallback copy (U1). Absent behaves
+   *  as `"canvas"`, which is what every existing mount is. */
+  surface?: InspectorSurface;
+}) {
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const selectedNodeIds = useGraphStore((s) => s.selectedNodeIds);
@@ -2806,9 +3339,13 @@ export function Inspector({ root, onOpenGit }: { root: string; onOpenGit: () => 
         <StandaloneAgentsPanel root={root} />
       ) : (
         <div className="flex flex-1 items-center justify-center p-3">
+          {/* WO15 §6 U1.3 — the empty state names what THIS view selects.
+              "Double-click the canvas" is advice you cannot follow from the
+              Tasks board, where there is no canvas to double-click. */}
           <p className="max-w-[240px] text-center text-sm leading-relaxed text-content-muted">
-            Select a node to edit its properties and markdown. Double-click the canvas to
-            create one.
+            {surface === "tasks"
+              ? "Select a task to see its context subgraph and pinned nodes."
+              : "Select a node to edit its properties and markdown. Double-click the canvas to create one."}
           </p>
         </div>
       )}

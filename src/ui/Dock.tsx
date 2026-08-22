@@ -96,7 +96,12 @@ export function Dock({ root, onNavigate }: { root: string; onNavigate: () => voi
   };
 
   return (
-    <div className="flex flex-none flex-col border-t border-border-subtle bg-surface-1">
+    // `ct-zoom` (index.css) — the dock is chrome, so it follows the UI-scale
+    // setting like the rail and the Inspector. Everything inside it reads
+    // `font-mono` for machine text (node/edge counts here, the Activity feed
+    // and Problems rows below), which now resolves through `--font-mono` —
+    // the Code-font setting lands on the dock without a line of JS.
+    <div className="ct-zoom flex flex-none flex-col border-t border-border-subtle bg-surface-1">
       <div className="flex h-control flex-none items-center gap-1 px-3">
         {(["agents", "problems", "activity"] as const).map((t) => (
           <button

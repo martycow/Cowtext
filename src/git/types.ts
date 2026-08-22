@@ -16,4 +16,23 @@ export interface GitStatus {
   gitignoreExists: boolean;
   /** Verbatim file content; null when the file is absent. */
   gitignoreContent: string | null;
+  /** `git config --get user.name`, trimmed; null when unset, empty, or git
+   *  is unavailable. Read fresh on every probe, never cached — the user may
+   *  fix their identity in another window and retry (WO15 §3.1). */
+  identityName: string | null;
+  /** `git config --get user.email`, same rules. */
+  identityEmail: string | null;
+}
+
+/** Result of `git_init` (WO15 §3.2). `git_init(commit=false)` reproduces the
+ *  pre-WO15 behaviour exactly, wrapped in this envelope. */
+export interface GitInitResult {
+  status: GitStatus;
+  /** This call created the initial commit. */
+  committed: boolean;
+  /** `git rev-list --count HEAD` after the call; 0 when unborn or not a repo. */
+  commitCount: number;
+  /** `root` was already a repo toplevel: nothing was initialised, written or
+   *  committed, whatever `commit` said (D-15). */
+  skippedExistingRepo: boolean;
 }

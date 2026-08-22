@@ -18,6 +18,11 @@ export interface AiTool {
   /** null when absent, or present but slow to answer `--version`. */
   version: string | null;
   path: string | null;
+  /** WO15 §3.5 — wall time for this row's probe (PATH resolve +
+   *  `--version`), in ms. `0` on a row that was never probed. The per-tool
+   *  `--version` call is time-boxed at 3 s, so the whole scan is bounded and
+   *  the title screen never waits on it. */
+  elapsedMs: number;
 }
 
 /** Scan PATH for every tool Cowtext can compile for. Always resolves with one

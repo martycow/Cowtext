@@ -35,6 +35,15 @@ export function hooksStatus(root: string): Promise<HooksStatus> {
   return invoke<HooksStatus>("hooks_status", { root });
 }
 
+/** The hooks receiver's bind address ("127.0.0.1:4923"), from the one Rust
+ *  const (WO15 D-2, §3.3). Lives here — beside `hooksStatus` — because this
+ *  file owns the hooks invokes; `store/project.ts` consumes it and every UI
+ *  surface reads the store, so the port is never spelled out in a component
+ *  again. */
+export function hooksAddr(): Promise<string> {
+  return invoke<string>("hooks_addr");
+}
+
 /** One entry in a batch passed to `fs_apply_batch` (WO13_CONTRACT.md §12.1).
  *  `content: null` deletes the path. Mirrors src-tauri `fsbatch::BatchEntry`
  *  1:1 — `content` is always present on the wire (never omitted), so this

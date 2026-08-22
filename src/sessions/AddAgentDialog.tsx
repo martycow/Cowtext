@@ -17,10 +17,12 @@
 // tasklinks provenance (previously reached only from TaskContextModal's
 // Launch button), and free agent choice including "(none)".
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { metaOrDefault, useAgentsStore } from "../store/agents";
+import { useSettingsStore } from "../store/settings";
+import { LocalOnlyBadge } from "../ui/LocalOnlyBadge";
 import { MAX_SESSIONS, useSessionsStore } from "../store/sessions";
 import { useTasksStore } from "../store/tasks";
 import { useTaskLinksStore } from "../store/tasklinks";
@@ -61,26 +63,37 @@ function formatCeiling(v: number | null): string {
   return v >= 1000 ? `${Math.round(v / 1000)}k` : String(v);
 }
 
+/** WO15 §6 U4b.3 — which agent the dialog opens on: the rail's current
+ *  selection first (you were just looking at it), else the last agent this
+ *  machine actually ran, else "(none)". The remembered file is checked
+ *  against the live roster on purpose: an agent that has since been deleted
+ *  or renamed must not come back as a phantom selection that then fails at
+ *  spawn time. */
+function initialAgentFile(): string | null {
+  const s = useAgentsStore.getState();
+  if (s.selection !== null && s.selection.kind === "agent") return s.selection.key;
+  const last = useSettingsStore.getState().lastRunAgentFile;
+  if (last === "") return null;
+  return s.agents.some((a) => a.fileName === last) ? last : null;
+}
+
 export function RunSessionDialog({ root, onClose }: { root: string; onClose: () => void }) {
   const agents = useAgentsStore((s) => s.agents);
   const agentMeta = useAgentsStore((s) => s.meta);
   const sessions = useSessionsStore((s) => s.sessions);
 
-  // ── Agent: prefilled from the current selection, otherwise "(none)" ────
-  const [agentFileName, setAgentFileName] = useState<string | null>(() => {
-    const sel = useAgentsStore.getState().selection;
-    return sel !== null && sel.kind === "agent" ? sel.key : null;
-  });
+  // ── Agent: rail selection → last run → "(none)" (see initialAgentFile) ─
+  const [agentFileName, setAgentFileName] = useState<string | null>(initialAgentFile);
   const meta = metaOrDefault(agentMeta, agentFileName ?? "");
 
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
 
   // ── Folder: agent's own default, else the project root ─────────────────
+  // Same `initialAgentFile()` the agent field opened on, so the prefilled
+  // folder always belongs to the prefilled agent.
   const [cwd, setCwd] = useState<string | null>(() => {
-    const sel = useAgentsStore.getState().selection;
-    const initialFile = sel !== null && sel.kind === "agent" ? sel.key : null;
-    const initialMeta = metaOrDefault(useAgentsStore.getState().meta, initialFile ?? "");
+    const initialMeta = metaOrDefault(useAgentsStore.getState().meta, initialAgentFile() ?? "");
     return initialMeta.defaultCwd !== "" ? initialMeta.defaultCwd : root;
   });
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
@@ -190,7 +203,11 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
     setTaskName(null);
   };
 
-  const checkFolder = (path: string) => {
+  // useCallback with an empty dep list is honest here: every closed-over
+  // value is a setState function (stable by React's contract) or a module
+  // import. That stability is what lets the mount effect below list a real
+  // dependency instead of suppressing the rule.
+  const checkFolder = useCallback((path: string) => {
     setCwd(path);
     setWorktreeInfo(null);
     setWorktreeError(null);
@@ -206,16 +223,19 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
         setWorktreeError(String(e));
         setWorktreeBusy(false);
       });
-  };
-
-  // Mount-only: validates whatever folder was prefilled above (agent default
-  // or project root) so a prefilled Run is actually clickable, not just
-  // displayed. `checkFolder` itself already re-runs on every manual Browse,
-  // so this deliberately does not re-fire on every `cwd` change.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (cwd !== null) checkFolder(cwd);
   }, []);
+
+  // The folder the dialog opened on, frozen at first render. `checkFolder`
+  // re-runs on every manual Browse, so re-validating on each `cwd` change
+  // would be a redundant round-trip — but reading `cwd` here would make the
+  // effect claim a dependency it must not react to. The ref states the
+  // intent ("the prefill, not the current value") in code, which is why the
+  // eslint-disable this replaced is gone rather than moved.
+  const initialCwdRef = useRef(cwd);
+  useEffect(() => {
+    const initial = initialCwdRef.current;
+    if (initial !== null) checkFolder(initial);
+  }, [checkFolder]);
 
   const pickFolder = () => {
     void open({ directory: true, title: "Working folder" }).then((picked) => {
@@ -256,16 +276,47 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
   const nameValid = trimmedName.length >= 1 && trimmedName.length <= 40;
   const atCap = sessions.filter((s) => s.alive).length >= MAX_SESSIONS;
 
+  // ── Token ceiling ──────────────────────────────────────────────────────
+  // Four sources, most specific first: what you typed for THIS run, the
+  // task link's own cap, the agent's default, the app-wide default. The
+  // ceiling used to be a read-only readout of the middle two, so a one-off
+  // "give this run more room" meant editing the agent — the input is the
+  // override, and the line under it always names which source actually won.
+  // Empty = inherit, `0` = unbounded (the same wire convention
+  // `Session.tokenCeiling` already uses), `n` = n.
+  const [ceilingText, setCeilingText] = useState("");
+  const globalCeiling = useSettingsStore((s) => s.sessionTokenCeiling);
+  const trimmedCeiling = ceilingText.trim();
+  const parsedCeiling = trimmedCeiling === "" ? null : Number(trimmedCeiling);
+  const ceilingValid =
+    parsedCeiling === null || (Number.isFinite(parsedCeiling) && parsedCeiling >= 0);
+  const runCeiling = ceilingValid && parsedCeiling !== null ? Math.round(parsedCeiling) : null;
+
   const linkCeiling = link?.tokenCeiling ?? null;
-  const effectiveCeiling: number | null =
-    agentFileName !== null && meta.defaultTokenCeiling !== null
-      ? meta.defaultTokenCeiling
+  const agentCeiling = agentFileName !== null ? meta.defaultTokenCeiling : null;
+
+  // What actually goes on the wire. `null` deliberately hands the last step
+  // to Rust (`sessions.rs::resolve_ceiling`), which applies the same global
+  // default this dialog displays — one resolver, not two that can drift.
+  const wireCeiling: number | null =
+    runCeiling !== null
+      ? runCeiling
       : taskId !== null && linkCeiling !== null
         ? linkCeiling
-        : null;
+        : agentCeiling;
+  const ceilingSource =
+    runCeiling !== null
+      ? "this run"
+      : taskId !== null && linkCeiling !== null
+        ? "task link"
+        : agentCeiling !== null
+          ? "agent default"
+          : "global default";
+  const effectiveCeiling = wireCeiling ?? globalCeiling;
 
   const canAdd =
     nameValid &&
+    ceilingValid &&
     cwd !== null &&
     worktreeInfo !== null &&
     worktreeInfo.isRepo &&
@@ -276,6 +327,12 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
 
   const forTask = taskId !== null && taskCtx !== null;
 
+  // Remembered only after the session really starts — a failed spawn must
+  // not teach the dialog to reopen on the agent that just failed.
+  const rememberAgent = () => {
+    useSettingsStore.getState().setLastRunAgentFile(agentFileName ?? "");
+  };
+
   const doRun = () => {
     if (!canAdd || cwd === null) return;
     setRunning(true);
@@ -283,13 +340,14 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
     if (forTask && taskId !== null && taskCtx !== null) {
       void useSessionsStore
         .getState()
-        .spawnForTask(root, agentFileName, trimmedName, cwd, taskId, taskCtx.body, effectiveCeiling)
+        .spawnForTask(root, agentFileName, trimmedName, cwd, taskId, taskCtx.body, wireCeiling)
         .then((result) => {
           setRunning(false);
           if ("error" in result) {
             setRunError(result.error);
             return;
           }
+          rememberAgent();
           void useTaskLinksStore.getState().recordSession(root, taskId, result.id);
           onClose();
         });
@@ -297,13 +355,14 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
     }
     void useSessionsStore
       .getState()
-      .spawn(root, agentFileName, trimmedName, cwd, effectiveCeiling)
+      .spawn(root, agentFileName, trimmedName, cwd, wireCeiling)
       .then((err) => {
         setRunning(false);
         if (err !== null) {
           setRunError(err);
           return;
         }
+        rememberAgent();
         onClose();
       });
   };
@@ -467,10 +526,33 @@ export function RunSessionDialog({ root, onClose }: { root: string; onClose: () 
           </div>
 
           <div>
-            <label className="mb-1 block font-mono text-2xs uppercase tracking-wider text-content-muted">
-              Token ceiling
-            </label>
-            <span className="font-mono text-xs text-content-secondary">{formatCeiling(effectiveCeiling)}</span>
+            <div className="mb-1 flex items-center gap-1.5">
+              <label
+                htmlFor="run-token-ceiling"
+                className="font-mono text-2xs uppercase tracking-wider text-content-muted"
+              >
+                Token ceiling
+              </label>
+              {/* §7.5: a session parameter writes no file, so it says so. */}
+              <LocalOnlyBadge hint="Applies to this session only" />
+            </div>
+            <input
+              id="run-token-ceiling"
+              type="number"
+              min={0}
+              value={ceilingText}
+              onChange={(e) => setCeilingText(e.target.value)}
+              placeholder="inherit"
+              className={inputCls}
+            />
+            <p className="mt-1 font-mono text-2xs text-content-muted">
+              {`Effective: ${formatCeiling(effectiveCeiling)} (from ${ceilingSource})`}
+            </p>
+            {!ceilingValid && (
+              <p className="mt-1 text-xs text-danger-text">
+                Whole number, 0 or more. Empty inherits; 0 is unbounded.
+              </p>
+            )}
           </div>
 
           {taskId !== null && (

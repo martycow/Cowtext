@@ -1,20 +1,21 @@
 // Activity tab body (WO14 declutter) — one of Dock's three tab contents,
 // showing the live BarnEvent feed (Phase 4). Every event is shown,
 // including unknown paths (faint accent tint per DESIGN_SPEC); node mapping
-// is cosmetic here, never a filter. Also hosts the hooks-install entry
-// point (trust-boundary modal). Visibility is Dock's concern now — this
-// component always renders its full toolbar + list.
+// is cosmetic here, never a filter. Also carries the hooks-install entry
+// point — the badge only; the trust-boundary modal itself is mounted once by
+// App.tsx and opened through `useUiStore` (WO15 §4.3). Visibility is Dock's
+// concern now — this component always renders its full toolbar + list.
 
 import { useEffect, useRef, useState } from "react";
 import { Copy, FolderOpen, Plug, Trash2, X } from "lucide-react";
 import { useEventsStore, resolveNodeId, type BarnEvent, type LogEvent } from "../store/events";
 import { useGraphStore } from "../store/graph";
 import { useProjectStore } from "../store/project";
+import { useUiStore } from "../store/ui";
 import { revealPath } from "../fs/api";
 import { ContextMenu } from "../ui/ContextMenu";
 import { useContextMenu } from "../ui/useContextMenu";
 import type { MenuItem } from "../ui/menuTypes";
-import { HooksModal } from "./HooksModal";
 
 /** Kind tag colours per DESIGN_SPEC: read = amber (agent acts), write/edit =
  *  success, everything else neutral. */
@@ -67,6 +68,18 @@ function EventRow({
 
   const canReveal = event.filePath !== undefined && resolvesInsideRoot(event.filePath, root);
 
+  // WO15 §4.4/D-14 — a locally generated row (a toolchain scan summary, …).
+  // It is Cowtext talking, not a hook: the tag names the producer instead of
+  // the tool-use kind, the text is the note itself, and it stays on the
+  // neutral ramp — amber is reserved for what the AGENT did.
+  const note = event.note;
+  const tagText =
+    note !== undefined
+      ? (event.toolName ?? "cowtext")
+      : event.kind === "subagent_stop"
+        ? "substop"
+        : event.kind;
+
   const openMenu = (e: React.MouseEvent) => {
     if (event.filePath === undefined) return;
     const filePath = event.filePath;
@@ -105,9 +118,10 @@ function EventRow({
       }`}
     >
       <span
-        className={`inline-flex h-4 w-[58px] flex-none items-center justify-center rounded-sm font-mono text-[9px] uppercase tracking-wider ${tagClasses(event.kind)}`}
+        title={tagText}
+        className={`inline-flex h-4 w-[58px] flex-none items-center justify-center overflow-hidden rounded-sm px-0.5 font-mono text-[9px] uppercase tracking-wider ${tagClasses(event.kind)}`}
       >
-        {event.kind === "subagent_stop" ? "substop" : event.kind}
+        <span className="truncate">{tagText}</span>
       </span>
       {event.demo === true && (
         <span className="inline-flex h-4 flex-none items-center rounded-sm border border-amber-border px-1 font-mono text-[9px] uppercase tracking-wider text-amber-text">
@@ -121,13 +135,22 @@ function EventRow({
           title={node.title}
         />
       )}
-      <span
-        className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary [direction:rtl] [text-align:left]"
-        title={event.filePath ?? event.toolName ?? ""}
-      >
-        {event.filePath ??
-          (event.kind === "other" ? (event.toolName ?? "unknown tool") : "—")}
-      </span>
+      {note !== undefined ? (
+        // A sentence, not a path: normal reading direction (the rtl trick
+        // below exists to truncate a long path from its HEAD) and the UI
+        // font, because Cowtext wrote this line, not the filesystem.
+        <span className="min-w-0 flex-1 truncate text-xs text-content-secondary" title={note}>
+          {note}
+        </span>
+      ) : (
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-xs text-content-secondary [direction:rtl] [text-align:left]"
+          title={event.filePath ?? event.toolName ?? ""}
+        >
+          {event.filePath ??
+            (event.kind === "other" ? (event.toolName ?? "unknown tool") : "—")}
+        </span>
+      )}
       {unknownPath && (
         <span className="flex-none font-mono text-2xs text-accent-text">not on graph</span>
       )}
@@ -152,7 +175,10 @@ export function EventLog({ root }: { root: string }) {
   const clear = useEventsStore((s) => s.clear);
   const hooksInstalled = useProjectStore((s) => s.hooksInstalled);
   const hooksReadable = useProjectStore((s) => s.hooksReadable);
-  const [hooksOpen, setHooksOpen] = useState(false);
+  // WO15 §4.3 — the modal has two openers in two different trees (this
+  // badge and the Barn's legend) and exactly one mount, in App.tsx. A
+  // component-local `hooksOpen` could only ever open the copy it owned.
+  const openHooks = () => useUiStore.getState().setHooksModalOpen(true);
   // Contract §7.10 acceptance: "a reveal failure surfaces as an inline
   // error, never a silent no-op."
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -192,7 +218,7 @@ export function EventLog({ root }: { root: string }) {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setHooksOpen(true);
+              openHooks();
             }}
             title="Preview and install Claude Code hooks into this project's .claude/settings.json"
             className="flex h-control-sm flex-none items-center gap-1 rounded border border-border bg-surface-2 px-1.5 font-mono text-micro text-content-secondary transition-colors duration-fast hover:border-accent-border hover:text-accent-text"
@@ -204,7 +230,7 @@ export function EventLog({ root }: { root: string }) {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setHooksOpen(true);
+              openHooks();
             }}
             title="settings.json could not be parsed — open to see details"
             className="flex h-control-sm flex-none items-center gap-1 rounded border border-amber-border bg-amber-surface px-1.5 font-mono text-micro text-amber-text transition-colors duration-fast hover:bg-amber-surface"
@@ -248,7 +274,6 @@ export function EventLog({ root }: { root: string }) {
           ))}
         </ul>
       )}
-      {hooksOpen && <HooksModal root={root} onClose={() => setHooksOpen(false)} />}
     </div>
   );
 }

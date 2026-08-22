@@ -15,19 +15,20 @@ fn parsed(content: &str) -> Value {
 
 /// All four events present, each with exactly one Cowtext command entry.
 fn assert_fully_installed(v: &Value) {
+    let marker = hook_marker();
     for (event, matcher) in HOOK_EVENTS {
         let arr = v["hooks"][event].as_array().unwrap_or_else(|| {
             panic!("hooks.{event} missing or not an array");
         });
         let ours: Vec<&Value> = arr
             .iter()
-            .filter(|e| e.to_string().contains(HOOK_MARKER))
+            .filter(|e| e.to_string().contains(&marker))
             .collect();
         assert_eq!(ours.len(), 1, "expected exactly one Cowtext entry in {event}");
         let entry = ours[0];
         assert_eq!(
             entry["hooks"][0]["command"].as_str().unwrap(),
-            HOOK_COMMAND
+            hook_command()
         );
         assert_eq!(entry["hooks"][0]["type"].as_str().unwrap(), "command");
         match matcher {
@@ -37,10 +38,33 @@ fn assert_fully_installed(v: &Value) {
     }
 }
 
+/// WO15 D-2: the port the installed hook posts to is rendered from
+/// `hooks_server::BIND_ADDR`, so the literal below is the only place in this
+/// module that knows a number at all. If someone changes the const, this
+/// test is the tripwire — not a silently mismatched settings.json.
+#[test]
+fn hook_command_and_marker_render_the_canonical_port() {
+    assert!(
+        hook_command().contains(":4923/event"),
+        "hook command lost the canonical port: {}",
+        hook_command()
+    );
+    assert!(hook_command().starts_with("curl -s -m 1 -X POST --data-binary @- http://"));
+    assert!(hook_command().ends_with("/event || true"));
+    assert_eq!(hook_marker(), "127.0.0.1:4923/event");
+    // The marker is what identifies our own entry: it must be a substring of
+    // the command we write, or install-detection can never match a fresh write.
+    assert!(hook_command().contains(&hook_marker()));
+}
+
 #[test]
 fn merge_into_absent_file_installs_all_four_events() {
     let out = merge_hooks(None).unwrap();
     assert!(out.ends_with('\n'));
+    assert!(
+        out.contains(&hook_marker()),
+        "freshly merged settings.json must carry the marker"
+    );
     assert_fully_installed(&parsed(&out));
 }
 
@@ -167,9 +191,10 @@ fn status_fully_installed() {
 fn status_partially_installed() {
     let dir = temp_project("status-partial");
     let root = dir.to_string_lossy().into_owned();
+    let command = hook_command();
     let content = format!(
         r#"{{ "hooks": {{ "PostToolUse": [{{ "matcher": "{POST_TOOL_USE_MATCHER}",
-            "hooks": [{{ "type": "command", "command": "{HOOK_COMMAND}" }}] }}] }} }}"#
+            "hooks": [{{ "type": "command", "command": "{command}" }}] }}] }} }}"#
     );
     std::fs::create_dir_all(dir.join(".claude")).unwrap();
     std::fs::write(dir.join(".claude/settings.json"), content).unwrap();

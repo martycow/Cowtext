@@ -1,0 +1,55 @@
+{
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "icon": "anthropic",
+      "cli": "claude",
+      "models": [
+        { "id": "claude-fable-5", "label": "Claude Fable 5", "tier": "flagship" },
+        { "id": "claude-opus-4-8", "label": "Claude Opus 4.8", "tier": "flagship" },
+        { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "tier": "balanced" },
+        { "id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "tier": "fast" }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "icon": "openai",
+      "cli": "codex",
+      "models": [
+        { "id": "gpt-5.2", "label": "GPT-5.2", "tier": "flagship" },
+        { "id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max", "tier": "flagship" },
+        { "id": "gpt-5.1", "label": "GPT-5.1", "tier": "balanced" },
+        { "id": "gpt-5-codex", "label": "GPT-5 Codex", "tier": "balanced" },
+        { "id": "gpt-5-mini", "label": "GPT-5 mini", "tier": "fast" }
+      ]
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "icon": "gemini",
+      "cli": "gemini",
+      "models": [
+        { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro (preview)", "tier": "flagship" },
+        { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "tier": "flagship" },
+        { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "tier": "balanced" },
+        { "id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash-Lite", "tier": "fast" }
+      ]
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "icon": "cursor",
+      "cli": "cursor",
+      "models": []
+    },
+    {
+      "id": "github",
+      "name": "GitHub Copilot",
+      "icon": "copilot",
+      "cli": "gh copilot",
+      "models": []
+    }
+  ]
+}

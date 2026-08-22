@@ -26,6 +26,38 @@ function FieldLabel({ children }: { children: string }) {
   );
 }
 
+/** Block 4 — the read-only half of this editor: a built-in that is still
+ *  VIRTUAL has no file, no draft and nothing to save, so it gets the text
+ *  and nothing else.
+ *
+ *  Deviation, flagged: this renders from the Skills rail rather than the
+ *  Inspector. `Inspector.tsx:1279-1280` resolves a skill selection with
+ *  `skills.find(...)` and returns `null` when there is no on-disk doc — a
+ *  virtual built-in can never reach `SkillEditor` through it, and
+ *  `Inspector.tsx` belongs to another lane this round. The view lives here,
+ *  where the contract asks for it; only its mount point moved. */
+export function BuiltinSkillReadOnly({ id, content }: { id: string; content: string }) {
+  return (
+    <div className="border-y border-border-subtle bg-surface-inset px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-micro text-content-muted">
+          .claude/skills/{id}/SKILL.md
+        </span>
+        <span className="flex-none rounded-sm border border-border px-1 font-mono text-micro text-content-muted">
+          not on disk
+        </span>
+      </div>
+      <pre className="mt-1 max-h-[180px] overflow-auto whitespace-pre-wrap font-mono text-micro leading-relaxed text-content-secondary">
+        {content}
+      </pre>
+      <p className="mt-1 text-2xs leading-snug text-content-muted">
+        Bundled with Cowtext and read-only here. Include it in compile and approve the diff to
+        write it — after that it is an ordinary project file you can edit.
+      </p>
+    </div>
+  );
+}
+
 export function SkillEditor({
   doc,
   disabled,

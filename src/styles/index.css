@@ -44,6 +44,162 @@
   }
 }
 
+/* ── UI SCALE (WO15 Block 7, D-7 + A-16) ──────────────────────────────
+   One setting, `settings.uiScale`, published by App.tsx as `--ui-scale` on
+   <html>. The app is 100 % px by construction (tokens.css, tailwind.config.js
+   are px scales, and WO09's connector geometry is frozen in px), so a root
+   font-size would move nothing — CSS `zoom` is the only mechanism that
+   scales a px layout without touching a single component.
+
+   WHAT SCALES: the chrome — title screen, top bar, banners, left rail,
+   Inspector, Dock, Tasks/Agents views, every modal and every portal root.
+   WHAT NEVER SCALES: `.react-flow` and the Barn host. Both are pixel-art
+   surfaces on an integer zoom ladder (ART_DIRECTION.md: "integer zoom levels
+   only — fractional scaling shimmers pixel art"), and React Flow owns its own
+   viewport transform. They are excluded by CONSTRUCTION, not by an override:
+   no zoomed container is an ancestor of either, so there is nothing to undo
+   and no 1.3 × (1/1.3) rounding error to blur the canvas with.
+
+   Deliberately outside @layer, like the React Flow block below: `.ct-zoom`
+   is a hand-written class, and the portal/scrim selectors must win over the
+   Tailwind utilities they sit beside. ─────────────────────────────────── */
+
+/* Chrome containers. `zoom` multiplies down the tree, so exactly ONE of
+   these may be an ancestor of any given element. */
+.ct-zoom {
+  zoom: var(--ui-scale);
+}
+
+/* Modal + dialog scrims (`fixed inset-0 z-modal`, the shared shape of every
+   dialog in the app). They are mounted all over the tree — App.tsx, the rail,
+   TasksBoard, GraphCanvas — so they are matched by shape rather than listed
+   one by one, and `:not(.ct-zoom *)` skips the ones already inside a scaled
+   container: those inherit the scale and a second `zoom` would square it
+   (1.3 × 1.3 = 1.69). `inset: 0` on a fixed box resolves against the viewport
+   in the element's own scaled coordinate space, so a scrim still covers
+   exactly the window at any scale. */
+.z-modal.inset-0:not(.ct-zoom *) {
+  zoom: var(--ui-scale);
+}
+
+/* A centred flex item that overflows its container is clipped at BOTH ends,
+   so header and footer become unreachable. `safe` alignment falls back to
+   flex-start exactly in that case and the scrim scrolls. Both are no-ops
+   while the panel fits — which, after the block below, it now does at every
+   scale; they stay as the guard for a panel whose own min-heights outgrow
+   its cap on a short window. */
+.z-modal.inset-0 {
+  align-items: safe center;
+  overflow-y: auto;
+}
+
+/* ── VIEWPORT UNITS INSIDE A SCALED BOX (WO15 fix round, F6) ───────────
+   Neither `zoom` nor `transform: scale()` redefines the viewport: `100vh`
+   stays 100 % of the WINDOW measured in the scaled element's own coordinate
+   space, and that layout is then multiplied by the scale. A dialog capped at
+   `max-h-[80vh]` therefore occupies 80 vh × 1.3 = 104 vh of real window at
+   130 %, and its footer — Done, Write, Create — sits below the fold.
+
+   The law: a viewport-unit length written inside a scaled container means a
+   fraction of the WINDOW, so it must be divided by the scale it is about to
+   be multiplied by. One rule per distinct value the app uses, keyed on
+   Tailwind's arbitrary-value class. Those utilities are single-class
+   (specificity 0-1-0) and every selector here is 0-3-0, so the override wins
+   wherever it applies, whatever the emission order.
+
+   The `:is()` prefix IS the scale-root set declared above — chrome
+   containers, dialog scrims, portal roots — and the two must stay in
+   lockstep: a new scale root belongs in both places or in neither. A vh/vw
+   length on an unscaled surface (`.react-flow`, the Barn host) is
+   deliberately left alone. At 100 % every rule below computes to exactly the
+   value it replaces, so nothing moves.
+
+   Covered today: Settings, Compile, Review, Hooks, Handoff (+ node
+   proposal), Import review, Presets, Assemble confirm, AI toolchain, Task
+   context, Add agent, Agent question, Project wizard, Git wizard, New task,
+   New skill and the error boundary — plus the wells and resizable textareas
+   inside them and inside the Inspector, Project panel, Agent editor and
+   TwoPaneModal preview. ──────────────────────────────────────────────── */
+
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[20vh\] {
+  max-height: calc(20vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[24vh\] {
+  max-height: calc(24vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[30vh\] {
+  max-height: calc(30vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[36vh\] {
+  max-height: calc(36vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[40vh\] {
+  max-height: calc(40vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[42vh\] {
+  max-height: calc(42vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[50vh\] {
+  max-height: calc(50vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[80vh\] {
+  max-height: calc(80vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-h-\[85vh\] {
+  max-height: calc(85vh / var(--ui-scale));
+}
+
+/* Min-heights get the same treatment, and for a sharper reason: they are the
+   one thing a capped panel cannot shrink past. Left unscaled, a 46 vh body
+   plus px chrome can outgrow the (now correct) 80 vh cap on a short window
+   and push the footer out through `overflow-hidden` — the exact failure the
+   caps above just fixed, arriving from the other side. */
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .min-h-\[30vh\] {
+  min-height: calc(30vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .min-h-\[40vh\] {
+  min-height: calc(40vh / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .min-h-\[46vh\] {
+  min-height: calc(46vh / var(--ui-scale));
+}
+
+/* Same defect on the horizontal axis: the wide modals are `w-[1040px]`
+   with a vw ceiling, which at 130 % is a 1352 px box under a 122 vw cap —
+   the cap stops clamping exactly when it is needed, and the scrim only
+   scrolls vertically. */
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-w-\[92vw\] {
+  max-width: calc(92vw / var(--ui-scale));
+}
+:is(.ct-zoom, .z-modal.inset-0, body > *:not(#root)) .max-w-\[94vw\] {
+  max-width: calc(94vw / var(--ui-scale));
+}
+
+/* Portal roots. Every `createPortal` in the app targets `document.body`, so
+   "a direct child of <body> that is not the React root" IS the portal set:
+   context menus (U4b's `[data-portal="menu"]` root is one of these — the
+   selector is deliberately structural so a portal needs no opt-in marker),
+   the ToolPicker popup, the Inspector's node-type popover, tag/depends
+   pickers, the edge-drag catcher.
+
+   These use `transform`, NOT `zoom`, and that is the whole trick of A-16.
+   Each one is `position: fixed` at a left/top its component computed from
+   its trigger's `getBoundingClientRect()` — i.e. already in client
+   coordinates, which include the trigger's own zoom. `zoom` here would
+   multiply those computed offsets a second time and slide the menu off its
+   trigger (a 130 % menu anchored at x=800 would land at x=1040). A scale
+   about the anchor corner leaves the top-left where the component put it and
+   grows the box down-right, and because `getBoundingClientRect()` reports
+   transformed boxes, each popup's own measure-then-flip pass (ContextMenu's
+   useLayoutEffect and its twins) still keeps it on screen at any scale.
+
+   ToastHost renders inline, not through a portal, so App.tsx scales it
+   directly. `vite-error-overlay` is dev-only chrome and stays 1:1. */
+body > *:not(#root):not(vite-error-overlay) {
+  transform: scale(var(--ui-scale));
+  transform-origin: 0 0;
+}
+
 /* ── React Flow chrome — tokens over library defaults. Deliberately outside
       @layer: Tailwind tree-shakes layered rules whose classes never appear
       in markup, and these classes are rendered by the library. ─────────── */

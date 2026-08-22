@@ -5,6 +5,18 @@ fn norm(body: serde_json::Value) -> BarnEvent {
     normalize(body.to_string().as_bytes(), 42).expect("expected an event")
 }
 
+/// WO15 D-2: 4923 is canon and lives in exactly one place. Pinning the
+/// rendered string here is what makes `hooks.rs`'s command/marker and the
+/// `hooks_addr` UI string provably the same address as the listener's.
+#[test]
+fn bind_addr_string_is_the_canonical_loopback_address() {
+    assert_eq!(bind_addr_string(), "127.0.0.1:4923");
+    assert_eq!(BIND_ADDR.0, "127.0.0.1");
+    assert_eq!(BIND_ADDR.1, 4923);
+    // The command hands the UI that exact string — no second formatting rule.
+    assert_eq!(hooks_addr(), bind_addr_string());
+}
+
 #[test]
 fn lifecycle_events_map_by_hook_event_name() {
     let e = norm(json!({ "hook_event_name": "UserPromptSubmit", "session_id": "s1" }));

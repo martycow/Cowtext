@@ -37,6 +37,14 @@ export function LensControl() {
 
   return (
     <div className="flex items-center gap-2">
+      {/* WO15 §6 U4b.3 — the segments alone ("None · Activity · Weight ·
+          Live") never said what they applied to. Non-interactive label, and
+          `aria-hidden` because the radiogroup below already carries the same
+          meaning in its own `aria-label`: a screen reader that heard both
+          would hear "Overlay" twice, once as a stray text node. */}
+      <span className="font-pixel text-[8px] uppercase text-content-muted" aria-hidden>
+        Overlay:
+      </span>
       <div
         role="radiogroup"
         aria-label="Canvas lens"

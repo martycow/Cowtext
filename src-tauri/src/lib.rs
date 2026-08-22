@@ -137,7 +137,9 @@ pub fn run() {
             project_meta::project_meta_write,
             project_meta::project_init,
             fsbatch::fs_apply_batch,
-            toolchain::detect_ai_tools
+            toolchain::detect_ai_tools,
+            hooks_server::hooks_addr,
+            agents::skills_materialize
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -40,3 +40,14 @@ the only signal that matters. Re-run the scoped check periodically since
 other lanes land concurrently and errors legitimately disappear out from
 under you. Flag the still-unlanded dependency plainly in the final report
 rather than silently declaring victory.
+
+**Lint, same rule (added WO15 U4b).** `npx eslint <your 11 files>` (exit 0,
+no output) is the only lint claim you can honestly make mid-round; the
+repo-wide `npm run lint` summary drifts between two invocations in the same
+minute because other lanes are saving files as you read it. Corollary: a
+contract acceptance line phrased as an absolute count ("lint reports ≤ 14
+warnings") is **not testable by your lane** — WO15 U4b removed both of its
+assigned warnings and the repo total stayed at 16 because two other lanes
+had each added one meanwhile. Report the substantive fact (my two are gone,
+zero problems in my files) plus the raw total with attribution, and say
+plainly that the count criterion belongs to the tester after integration.
