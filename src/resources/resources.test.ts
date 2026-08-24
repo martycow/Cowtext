@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_PRESETS,
   BUILTIN_SKILLS,
+  CUSTOM_PRESET_PREFIX,
+  PRESET_GROUPS,
   DEFAULT_AGENT_MODEL,
   DEFAULT_PROVIDER,
   FIXED_STACK_PRINCIPLE_ID,
@@ -17,6 +19,8 @@ import {
   PROVIDER_SUPPORT_SENTENCE,
   STACK_CATEGORIES,
   defaultModelFor,
+  groupPresets,
+  isCustomPresetId,
   parseSkillMd,
   providerById,
   stackItemById,
@@ -92,15 +96,90 @@ describe("the provider-support sentence", () => {
 });
 
 describe("agent presets", () => {
-  it("ships exactly the six presets, in order", () => {
+  it("ships exactly the eleven presets, in order", () => {
+    // WO16: `planner` became `project-manager` (renamed AND rewritten — it
+    // now owns task-format discipline and delegation, not just planning),
+    // and five role presets joined it. Nothing persists a preset id — the
+    // New Agent dialog copies a preset's FIELDS and forgets which one it
+    // came from — so the rename needed no migration.
     expect(AGENT_PRESETS.map((p) => p.id)).toEqual([
+      "producer",
+      "project-manager",
+      "tech-lead",
+      "lead-programmer",
+      "ui-programmer",
+      "tool-programmer",
       "reviewer",
       "test-writer",
       "docs-writer",
       "refactorer",
-      "planner",
       "debugger",
     ]);
+  });
+
+  it("files every preset under a group the picker actually renders", () => {
+    const groups = new Set(PRESET_GROUPS.map((g) => g.id));
+    for (const preset of AGENT_PRESETS) expect(groups.has(preset.group)).toBe(true);
+  });
+
+  it("keeps the three groups in their rendered order", () => {
+    expect(PRESET_GROUPS.map((g) => g.id)).toEqual(["direction", "engineering", "task"]);
+  });
+
+  it("gives every delegating role the tools to actually delegate", () => {
+    // The Producer, Project manager and Tech lead presets all say they hand
+    // work down. Without the subagent tools that sentence is decoration —
+    // an agent that cannot spawn another cannot delegate to one.
+    for (const id of ["producer", "project-manager", "tech-lead"]) {
+      const preset = AGENT_PRESETS.find((p) => p.id === id);
+      expect(preset, id).toBeDefined();
+      expect(preset?.tools, id).toContain("Agent");
+      expect(preset?.tools, id).toContain("Task");
+    }
+  });
+
+  it("keeps the roles out of the writing seat only where they claim to be", () => {
+    // Producer and Tech lead both say they never write application code;
+    // the Tech lead does write contracts and design docs, so only the
+    // Producer is barred from Edit/Write outright.
+    const producer = AGENT_PRESETS.find((p) => p.id === "producer");
+    expect(producer?.tools).not.toContain("Edit");
+    expect(producer?.tools).not.toContain("Write");
+    expect(producer?.tools).not.toContain("Bash");
+  });
+
+  it("groups built-ins and puts the user's own last inside each group", () => {
+    const mine = {
+      id: `${CUSTOM_PRESET_PREFIX}my-reviewer`,
+      name: "My reviewer",
+      group: "task" as const,
+      description: "d",
+      whenToUse: "Use when I say so and not before.",
+      tools: [],
+      mode: "inherit" as const,
+      priority: DEFAULT_PRIORITY,
+    };
+    const rows = groupPresets([mine]);
+    const tasks = rows.find((r) => r.group === "task");
+    expect(tasks?.presets.at(-1)?.id).toBe(mine.id);
+    // A built-in never moves because the user saved one of their own.
+    expect(tasks?.presets[0]?.id).toBe("reviewer");
+    // And a group with no custom entries is byte-identical to the built-ins.
+    const direction = rows.find((r) => r.group === "direction");
+    expect(direction?.presets.map((p) => p.id)).toEqual(
+      AGENT_PRESETS.filter((p) => p.group === "direction").map((p) => p.id),
+    );
+  });
+
+  it("drops a group entirely when nothing files under it", () => {
+    // `groupPresets` filters empties, so a future group added to the table
+    // ahead of its presets does not render as a bare heading.
+    for (const row of groupPresets([])) expect(row.presets.length).toBeGreaterThan(0);
+  });
+
+  it("never lets a custom id collide with a built-in one", () => {
+    for (const preset of AGENT_PRESETS) expect(isCustomPresetId(preset.id)).toBe(false);
+    expect(isCustomPresetId(`${CUSTOM_PRESET_PREFIX}reviewer`)).toBe(true);
   });
 
   it("every whenToUse is a real sentence that starts with 'Use when' and is not the name", () => {

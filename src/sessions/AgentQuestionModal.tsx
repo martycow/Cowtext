@@ -7,19 +7,25 @@
 // newline, and Esc/Dismiss clears the pending question WITHOUT sending.
 // Same modal chrome (scrim, `--r-xl`, `z-modal`) as AddAgentDialog/HooksModal
 // — no new UI primitive.
+//
+// WO16 Stage A — demoted to an INTERRUPT for agents you are not looking at.
+// `AgentPanel` now shows the question inline above its composer, so when the
+// asking session is the selected one a scrim modal on top of that is noise;
+// this component skips it and lets the panel be the surface.
 
 import { useEffect, useRef, useState, type JSX } from "react";
 import { X } from "lucide-react";
 import { useSessionsStore } from "../store/sessions";
-import { agentSessionSend } from "./api";
 
 export function AgentQuestionModal(): JSX.Element | null {
   const sessions = useSessionsStore((s) => s.sessions);
+  const selectedId = useSessionsStore((s) => s.selectedId);
   const clearPendingQuestion = useSessionsStore((s) => s.clearPendingQuestion);
 
   // First session with a pending question wins; the rest just contribute to
-  // the "+N more" count (contract: "do not build a queue UI").
-  const pending = sessions.filter((s) => s.pendingQuestion !== null);
+  // the "+N more" count (contract: "do not build a queue UI"). The selected
+  // session is excluded entirely — its panel already asks, inline.
+  const pending = sessions.filter((s) => s.pendingQuestion !== null && s.id !== selectedId);
   const active = pending[0] ?? null;
   const extraCount = Math.max(0, pending.length - 1);
   const activeId = active?.id ?? null;
@@ -65,17 +71,20 @@ export function AgentQuestionModal(): JSX.Element | null {
     if (trimmed === "" || sending) return;
     setSending(true);
     setSendError(null);
-    // Deliberately the raw invoke wrapper, not the store's `send()` action:
-    // the reply is just the next turn's prompt on the same
-    // `--resume <claudeSessionId>` conversation, and `send()`'s busy/queue
-    // machinery has nothing to add here (contract).
-    void agentSessionSend(active.id, trimmed)
-      .then(() => {
-        clearPendingQuestion(active.id);
-      })
-      .catch((e: unknown) => {
-        setSending(false);
-        setSendError(String(e));
+    // WO16 Stage A — through the store's `answerQuestion`, NOT the raw invoke.
+    // The original comment argued `send()`'s busy/queue machinery "has nothing
+    // to add here"; it does. Rust emits the question from the stdout loop
+    // while the asking turn is still closing, so the raw invoke lost the race
+    // and rendered "agent is busy" as the answer's fate. `answerQuestion`
+    // clears the question and lets `send` queue the reply until idle.
+    void useSessionsStore
+      .getState()
+      .answerQuestion(active.id, trimmed)
+      .then((err) => {
+        if (err !== null) {
+          setSending(false);
+          setSendError(err);
+        }
       });
   };
 

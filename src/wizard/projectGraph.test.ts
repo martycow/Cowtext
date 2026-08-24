@@ -114,6 +114,62 @@ describe("buildProjectGraph", () => {
     expect(stack?.content).toBe("# Stack\n\n## Languages\n- Rust\n");
   });
 
+  // ── WO16 Block C — the user's own stack rows ────────────────────────
+  //
+  // Before this, a tick on a custom row was silently dropped as "unknown":
+  // the picker offered it, the Will-create list counted it, and the written
+  // `stack.md` did not contain it.
+
+  it("writes a custom item into the category it named, after the bundled ones", () => {
+    const plan = buildProjectGraph(
+      input({
+        stackItemIds: ["typescript", "custom:in-house-cli"],
+        customStackItems: [
+          { id: "custom:in-house-cli", label: "In-house CLI", categoryId: "languages" },
+        ],
+      }),
+    );
+    const stack = plan.stubs.find((s) => sameRelPath(s.relPath, "context/stack.md"));
+    expect(stack?.content).toBe("# Stack\n\n## Languages\n- TypeScript\n- In-house CLI\n");
+  });
+
+  it("collects custom items with no known category under a trailing Custom section", () => {
+    const plan = buildProjectGraph(
+      input({
+        stackItemIds: ["rust", "custom:orbit"],
+        customStackItems: [{ id: "custom:orbit", label: "Orbit", categoryId: "custom" }],
+      }),
+    );
+    const stack = plan.stubs.find((s) => sameRelPath(s.relPath, "context/stack.md"));
+    expect(stack?.content).toBe("# Stack\n\n## Languages\n- Rust\n\n## Custom\n- Orbit\n");
+  });
+
+  it("still ignores a custom id that is ticked but no longer in the table", () => {
+    // The wizard filters its own seed, but a stale id can also arrive from a
+    // preset or an import — dropping it beats failing the whole creation.
+    const plan = buildProjectGraph(
+      input({ stackItemIds: ["custom:deleted"], customStackItems: [] }),
+    );
+    expect(plan.stubs.some((s) => sameRelPath(s.relPath, "context/stack.md"))).toBe(false);
+  });
+
+  it("puts a custom item under Custom when its category is unticked but present", () => {
+    // Ordering is table order, not click order — two runs must match byte
+    // for byte, which is what makes the preview and the write the same
+    // computation.
+    const plan = buildProjectGraph(
+      input({
+        stackItemIds: ["custom:b", "custom:a"],
+        customStackItems: [
+          { id: "custom:a", label: "Alpha", categoryId: "unknown" },
+          { id: "custom:b", label: "Beta", categoryId: "unknown" },
+        ],
+      }),
+    );
+    const stack = plan.stubs.find((s) => sameRelPath(s.relPath, "context/stack.md"));
+    expect(stack?.content).toBe("# Stack\n\n## Custom\n- Alpha\n- Beta\n");
+  });
+
   it("gives every node a unique id, readOrder 1…n, a grid position and rootLoad", () => {
     const plan = buildProjectGraph(
       input({

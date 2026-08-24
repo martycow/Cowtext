@@ -89,9 +89,30 @@ export const PROVIDER_COMPILE_TARGET: Record<ProviderId, CompileTarget> = {
 
 // ── Agent presets (Block 3c) ───────────────────────────────────────────
 
+/** Which family a preset belongs to. The distinction is real, not
+ *  decorative: a `task` preset is written so Claude Code's own dispatcher
+ *  can MATCH it from a request ("a diff needs reviewing"), while
+ *  `direction` and `engineering` presets are job titles a user picks
+ *  deliberately. Mixing the two in one flat row made the picker read as
+ *  eleven interchangeable things, which they are not. */
+export type PresetGroup = "direction" | "engineering" | "task";
+
+/** Render order, and the picker's group headings. */
+export const PRESET_GROUPS: readonly { id: PresetGroup; label: string; hint: string }[] = [
+  {
+    id: "direction",
+    label: "Direction",
+    hint: "Decide what gets built and how it is structured; delegate the rest",
+  },
+  { id: "engineering", label: "Engineering", hint: "Write the code and the tooling around it" },
+  { id: "task", label: "Tasks", hint: "One job, matched from the request" },
+];
+
 export interface AgentPreset {
   id: string;
   name: string;
+  /** Which family — see {@link PresetGroup}. */
+  group: PresetGroup;
   /** The system-prompt body — what the agent DOES. */
   description: string;
   /** One sentence starting `Use when`; becomes the agent's `description:`
@@ -111,6 +132,32 @@ interface PresetsFile {
 
 export const AGENT_PRESETS: readonly AgentPreset[] = (presetsJson as unknown as PresetsFile)
   .presets;
+
+/** Prefix that marks a preset as the user's own rather than one Cowtext
+ *  ships. Two namespaces, one list: a custom preset can never collide with
+ *  a built-in id, and a built-in can never be silently shadowed. */
+export const CUSTOM_PRESET_PREFIX = "custom:";
+
+export function isCustomPresetId(id: string): boolean {
+  return id.startsWith(CUSTOM_PRESET_PREFIX);
+}
+
+/** Group the built-ins and any user-defined presets into the rows the
+ *  picker draws. Custom presets always sort last inside their group, so a
+ *  built-in never moves when the user saves one of their own. */
+export function groupPresets(
+  custom: readonly AgentPreset[] = [],
+): { group: PresetGroup; label: string; hint: string; presets: AgentPreset[] }[] {
+  return PRESET_GROUPS.map(({ id, label, hint }) => ({
+    group: id,
+    label,
+    hint,
+    presets: [
+      ...AGENT_PRESETS.filter((p) => p.group === id),
+      ...custom.filter((p) => p.group === id),
+    ],
+  })).filter((row) => row.presets.length > 0);
+}
 
 // ── Stack picker (Block 6) ─────────────────────────────────────────────
 

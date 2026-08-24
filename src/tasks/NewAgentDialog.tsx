@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ImagePlus, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Bookmark, ImagePlus, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { DEFAULT_PRIORITY, useAgentsStore, type Selection } from "../store/agents";
 import {
   AGENT_LOCAL_HINT,
@@ -44,11 +44,16 @@ import { useGraphStore } from "../store/graph";
 import { NODE_TYPE_BY_ROLE } from "../config/nodeTypes";
 import { useUiStore } from "../store/ui";
 import {
-  AGENT_PRESETS,
+  CUSTOM_PRESET_PREFIX,
   DEFAULT_AGENT_MODEL,
   DEFAULT_PROVIDER,
+  PRESET_GROUPS,
+  groupPresets,
+  isCustomPresetId,
   type AgentPreset,
+  type PresetGroup,
 } from "../resources";
+import { useSettingsStore } from "../store/settings";
 import type { FmFields, ProviderId } from "../agents/types";
 
 const ICON_BTN =
@@ -155,6 +160,8 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const skills = useAgentsStore((s) => s.skills);
   const agents = useAgentsStore((s) => s.agents);
   const setBuiltinInclude = useAgentsStore((s) => s.setBuiltinInclude);
+  const customPresets = useSettingsStore((s) => s.customAgentPresets);
+  const saveCustomPreset = useSettingsStore((s) => s.saveCustomPreset);
   const builtins = useBuiltinSkillStates();
 
   // Block 5b — the canvas menus open this wizard with a prefill; the rail's
@@ -179,6 +186,12 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const [model, setModel] = useState<string | null>(DEFAULT_AGENT_MODEL);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [presetId, setPresetId] = useState<string | null>(null);
+  // Block B — the "Save as preset" strip is closed until asked for: it is a
+  // second, optional outcome of this dialog, and a form that shows both
+  // outcomes at once reads as though it cannot tell which one you want.
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetGroup, setPresetGroup] = useState<PresetGroup>("task");
   // Bumped by every preset click: `ToolsField` derives its inherit/restrict
   // radio from `tools` ONCE (useState initialiser), so a preset that fills
   // tools behind its back would leave the radio showing the old mode. A
@@ -296,6 +309,56 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
+  /** WO16 Block B — save what is on the form right now as a reusable
+   *  preset. Deliberately a separate act from Create: a preset is a
+   *  template for agents you have not made yet, so it must be savable
+   *  without also minting an agent, and creating an agent must not quietly
+   *  leave a preset behind.
+   *
+   *  Saving over the SAME id when a custom preset is selected and its name
+   *  is unchanged is what makes the Settings pane's "re-save from the New
+   *  Agent dialog" promise true — otherwise correcting a preset's tools
+   *  would strand a near-duplicate beside the original. */
+  const presetSlug = presetName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const overwriting =
+    presetId !== null && isCustomPresetId(presetId) && presetId === `${CUSTOM_PRESET_PREFIX}${presetSlug}`;
+  const presetClash =
+    !overwriting && customPresets.some((p) => p.id === `${CUSTOM_PRESET_PREFIX}${presetSlug}`);
+  const canSavePreset = presetSlug !== "" && duties.trim() !== "" && !presetClash;
+
+  const saveAsPreset = () => {
+    if (!canSavePreset) return;
+    const id = `${CUSTOM_PRESET_PREFIX}${presetSlug}`;
+    const saved: AgentPreset = {
+      id,
+      name: presetName.trim(),
+      group: presetGroup,
+      description: duties,
+      whenToUse,
+      // Same rule the picker relies on and `applyPreset` reads back:
+      // an empty tool list IS `inherit`, never a restrict-to-nothing.
+      tools: tools.length === 0 ? [] : tools,
+      mode: tools.length === 0 ? "inherit" : "restrict",
+      priority,
+      // D-13 again: `model` is only meaningful for Anthropic, so a preset
+      // saved under another provider pins nothing and takes the wizard
+      // default when it is applied.
+      ...(provider === "anthropic" && model !== null ? { model } : {}),
+    };
+    saveCustomPreset(saved);
+    setPresetId(id);
+    setSavingPreset(false);
+    pushToast({
+      severity: "success",
+      title: overwriting ? `Preset “${saved.name}” updated` : `Preset “${saved.name}” saved`,
+      detail: "Available in this dialog and editable in Settings › Agent presets.",
+    });
+  };
+
   /** Block 3c — a preset fills the fields and then gets out of the way:
    *  every one of them stays editable, and nothing is written anywhere
    *  until Create. `Custom` clears back to the blank sheet. */
@@ -317,6 +380,9 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     setWhenToUse(preset.whenToUse);
     setTools(preset.mode === "inherit" ? [] : preset.tools);
     setPriority(preset.priority);
+    // So that re-saving a custom preset lands back in the same group rather
+    // than defaulting to "task" and quietly moving it in the picker.
+    setPresetGroup(preset.group);
     if (preset.model !== undefined) {
       setModel(preset.model);
       setProvider(providerForModel(preset.model) ?? DEFAULT_PROVIDER);
@@ -566,10 +632,38 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
-      {/* Preset — Block 3c */}
+      {/* Preset — Block 3c, grouped in WO16 Block B.
+          The two families are not interchangeable and the flat row said they
+          were: a `task` preset is written so Claude Code's own dispatcher can
+          MATCH it from a request, while Direction and Engineering presets are
+          job titles a user picks deliberately. Headings say which is which
+          before the click, not after. */}
       <div>
-        <FieldLabel>Preset</FieldLabel>
-        <div role="radiogroup" aria-label="Preset" className="flex flex-wrap items-center gap-1.5">
+        <div className="flex items-center gap-2">
+          <FieldLabel>Preset</FieldLabel>
+          <div className="min-w-0 flex-1" />
+          {!savingPreset && (
+            <button
+              type="button"
+              disabled={busy || duties.trim() === ""}
+              title={
+                duties.trim() === ""
+                  ? "Fill in the duties first — that is what a preset carries"
+                  : "Save these fields as a reusable preset"
+              }
+              onClick={() => {
+                setPresetName(name);
+                setSavingPreset(true);
+              }}
+              className="flex h-control-sm flex-none items-center gap-1 rounded px-1.5 text-2xs text-content-muted transition-colors duration-fast hover:bg-[var(--surface-hover)] hover:text-content disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+            >
+              <Bookmark size={11} strokeWidth={1.5} />
+              Save as preset
+            </button>
+          )}
+        </div>
+
+        <div role="radiogroup" aria-label="Preset" className="space-y-1.5">
           <PresetChip
             label="Custom"
             on={presetId === null}
@@ -577,20 +671,90 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
             title="Start from an empty sheet"
             onClick={() => applyPreset(null)}
           />
-          {AGENT_PRESETS.map((p) => (
-            <PresetChip
-              key={p.id}
-              label={p.name}
-              on={presetId === p.id}
-              disabled={busy}
-              title={p.whenToUse}
-              onClick={() => applyPreset(p)}
-            />
+          {groupPresets(customPresets).map((row) => (
+            <div key={row.group}>
+              <div className="mb-0.5 text-2xs uppercase tracking-wide text-content-muted">
+                {row.label}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {row.presets.map((p) => (
+                  <PresetChip
+                    key={p.id}
+                    label={p.name}
+                    on={presetId === p.id}
+                    disabled={busy}
+                    title={p.whenToUse}
+                    mine={isCustomPresetId(p.id)}
+                    onClick={() => applyPreset(p)}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
-        <p className="pt-1 text-2xs leading-snug text-content-muted">
-          Fills the fields below — every one of them stays editable.
-        </p>
+
+        {savingPreset ? (
+          <div className="mt-1.5 rounded border border-accent-border bg-accent-surface p-2">
+            <div className="flex items-center gap-1.5">
+              <input
+                value={presetName}
+                autoFocus
+                placeholder="Preset name…"
+                aria-label="Preset name"
+                onChange={(e) => setPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    saveAsPreset();
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setSavingPreset(false);
+                  }
+                }}
+                className="h-control-sm min-w-0 flex-1 rounded border border-border bg-surface-2 px-2 text-xs text-content transition-colors duration-fast placeholder:text-content-muted focus:border-accent"
+              />
+              <select
+                value={presetGroup}
+                aria-label="Preset group"
+                onChange={(e) => setPresetGroup(e.target.value as PresetGroup)}
+                className="h-control-sm w-[112px] flex-none rounded border border-border bg-surface-2 px-1.5 text-xs text-content transition-colors duration-fast focus:border-accent"
+              >
+                {PRESET_GROUPS.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={saveAsPreset}
+                disabled={!canSavePreset}
+                className="flex h-control-sm flex-none items-center rounded border border-accent-border bg-surface-2 px-2 text-xs text-accent-text transition-colors duration-fast disabled:cursor-not-allowed disabled:border-border disabled:text-content-disabled"
+              >
+                {overwriting ? "Update" : "Save"}
+              </button>
+              <button
+                onClick={() => setSavingPreset(false)}
+                className={ICON_BTN}
+                title="Cancel"
+                aria-label="Cancel saving preset"
+              >
+                <X size={13} strokeWidth={1.5} />
+              </button>
+            </div>
+            <p className="pt-1 text-2xs leading-snug text-accent-text">
+              {presetClash
+                ? "You already have a preset by that name — rename it, or pick that one first to update it."
+                : overwriting
+                  ? "Updates the preset you started from. Agents already created from it are untouched."
+                  : "Saves the duties, when-to-use, tools, priority and model on this form."}
+            </p>
+          </div>
+        ) : (
+          <p className="pt-1 text-2xs leading-snug text-content-muted">
+            Fills the fields below — every one of them stays editable.
+          </p>
+        )}
       </div>
 
       {/* Identity — Block A4 */}
@@ -827,12 +991,17 @@ function PresetChip({
   on,
   disabled,
   title,
+  mine,
   onClick,
 }: {
   label: string;
   on: boolean;
   disabled: boolean;
   title: string;
+  /** One of the user's own presets — marked, because "did I write this or
+   *  did Cowtext ship it?" is the question that decides whether editing it
+   *  in Settings is even possible. */
+  mine?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -850,6 +1019,14 @@ function PresetChip({
       }`}
     >
       {label}
+      {mine === true && (
+        <span
+          aria-hidden
+          className="ml-1 text-micro uppercase tracking-wide text-content-muted"
+        >
+          yours
+        </span>
+      )}
     </button>
   );
 }

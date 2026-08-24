@@ -241,7 +241,7 @@ fn avatars_dir(root: &Path) -> PathBuf {
 /// Identify an image by its magic bytes, never by extension — the whole
 /// point of this check is that a `.txt` renamed to `.png` must still fail.
 /// Returns the extension `agent_avatar_set` writes the file under.
-fn detect_image_ext(bytes: &[u8]) -> Result<&'static str, String> {
+pub(crate) fn detect_image_ext(bytes: &[u8]) -> Result<&'static str, String> {
     if bytes.len() >= 4 && bytes[0..4] == [0x89, 0x50, 0x4E, 0x47] {
         return Ok("png");
     }
@@ -257,7 +257,7 @@ fn detect_image_ext(bytes: &[u8]) -> Result<&'static str, String> {
     Err("unsupported image format — PNG, JPEG, WebP or GIF".to_string())
 }
 
-fn mime_for_ext(ext: &str) -> &'static str {
+pub(crate) fn mime_for_ext(ext: &str) -> &'static str {
     match ext {
         "png" => "image/png",
         "jpg" => "image/jpeg",
@@ -273,7 +273,7 @@ const BASE64_TABLE: &[u8; 64] =
 /// Hand-rolled standard base64 (with padding) — no crate. Avatars are the
 /// only binary payload this crate ever puts on the wire, so a data URL is
 /// the whole surface this needs to cover.
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
@@ -301,7 +301,7 @@ fn base64_encode(data: &[u8]) -> String {
 /// Not registered with [`crate::watcher::note_self_write`] — avatar files
 /// live under `.cowtext/avatars/`, which `is_scannable_md` never matches, so
 /// the watcher can never emit an `fs://change` for one regardless.
-fn write_atomic_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("No parent directory: {}", path.display()))?;

@@ -64,13 +64,23 @@ function RosterCard({
         budgetStopped ? "stopped: token ceiling reached" : session.status
       }${session.currentTool !== null ? `: ${session.currentTool}` : ""}${
         budgeted && bpct !== null ? ` · ${bpct}% of budget` : session.usage.turns > 0 ? ` · ${pct}% of ctx` : ""
-      }`}
+      }${session.pendingQuestion !== null ? " · waiting on you" : ""}`}
       className={`relative flex h-[30px] w-[172px] flex-none cursor-default items-center gap-1.5 overflow-hidden rounded border px-1.5 transition-colors duration-fast ${
         selected ? "border-accent-border bg-accent-surface" : "border-border bg-surface-2 hover:border-border-strong"
       } ${!session.alive ? "opacity-60" : ""} ${budgetStopped ? "border-l-[3px] border-l-danger" : ""}`}
     >
       <AgentAvatar seed={session.name} size={11} />
       <span className="min-w-0 flex-1 truncate text-xs text-content">{session.name}</span>
+      {/* WO16 Stage A — a background agent waiting on an answer was invisible
+          here; the panel is the only place the question showed. Blue = you. */}
+      {session.pendingQuestion !== null && (
+        <span
+          aria-label="waiting on you"
+          className="grid h-4 w-4 flex-none place-items-center rounded-sm border border-accent-border bg-accent-surface font-pixel text-[8px] leading-none text-accent-text"
+        >
+          ?
+        </span>
+      )}
       {session.alive ? (
         <>
           {session.status === "working" && session.currentTool !== null && (

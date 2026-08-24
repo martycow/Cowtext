@@ -3,7 +3,7 @@
 // the store (no Save button). Hooks port and context path are display-only —
 // they are not persisted settings (contract §4).
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
   DEFAULT_SESSION_TOKEN_CEILING,
@@ -16,142 +16,9 @@ import {
 import { useHooksAddr, useProjectStore } from "../store/project";
 import { PROVIDER_SUPPORT_SENTENCE } from "../resources";
 import { formatTokenCount } from "../store/tokens";
-
-// ── Local controls (idioms copied, not imported across lanes) ─────────
-
-function SectionLabel({ children }: { children: string }) {
-  return (
-    <div className="mb-1 text-2xs uppercase tracking-wide text-content-muted">{children}</div>
-  );
-}
-
-/** 34×19 pill toggle (Inspector idiom, local copy). Settings are
- *  user-initiated ⇒ accent, not amber ("Blue is you"). */
-function Toggle({
-  checked,
-  onChange,
-  label,
-  disabled,
-  title,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  disabled?: boolean;
-  title?: string;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      title={title}
-      onClick={() => onChange(!checked)}
-      className={`relative h-[19px] w-[34px] flex-none rounded-pill border transition-colors duration-fast disabled:cursor-not-allowed disabled:opacity-40 ${
-        checked ? "border-accent-border bg-accent-surface" : "border-border-strong bg-surface-2"
-      }`}
-    >
-      <span
-        className={`absolute top-[2px] h-[13px] w-[13px] rounded-pill transition-all duration-fast ${
-          checked ? "left-[16px] bg-accent" : "left-[2px] bg-content-muted"
-        }`}
-      />
-    </button>
-  );
-}
-
-/** 28px row: label left, control right. */
-function Row({
-  label,
-  dimmed,
-  children,
-}: {
-  label: ReactNode;
-  dimmed?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex h-row items-center justify-between gap-3">
-      <span className={`text-sm ${dimmed ? "text-content-disabled" : "text-content"}`}>
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-function HelperLine({ children }: { children: React.ReactNode }) {
-  return <p className="mb-1 text-2xs leading-relaxed text-content-muted">{children}</p>;
-}
-
-/** Segmented picker — App.tsx's ViewToggle idiom, local copy at settings
- *  density: 2px padding frame on surface-2, active segment surface-3. Radio
- *  semantics rather than a `<select>` because the four scales are worth
- *  seeing at once, and the active one is the answer to "how big is it now?". */
-function Segmented<T extends string | number>({
-  value,
-  options,
-  onChange,
-  label,
-}: {
-  value: T;
-  options: readonly { value: T; label: string }[];
-  onChange: (v: T) => void;
-  label: string;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className="flex flex-none items-center gap-0.5 rounded border border-border bg-surface-2 p-[2px]"
-    >
-      {options.map((o) => (
-        <button
-          key={String(o.value)}
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={`flex h-control-sm items-center rounded-sm px-2.5 font-mono text-xs transition-colors duration-fast ${
-            value === o.value
-              ? "bg-surface-3 text-content"
-              : "text-content-muted hover:text-content-secondary"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Native select, styled like every other one in the app (Inspector:1788). */
-function Select<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-}: {
-  value: T;
-  options: readonly { value: T; label: string }[];
-  onChange: (v: T) => void;
-  label: string;
-}) {
-  return (
-    <select
-      value={value}
-      aria-label={label}
-      onChange={(e) => onChange(e.target.value as T)}
-      className="h-control w-[196px] rounded border border-border bg-surface-2 px-2 text-sm text-content transition-colors duration-fast focus:border-accent"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
+import { HelperLine, Row, SectionLabel, Segmented, Select, Toggle } from "./controls";
+import { PresetSettings } from "./PresetSettings";
+import { StackSettings } from "./StackSettings";
 
 const UI_SCALE_OPTIONS: readonly { value: UiScale; label: string }[] = UI_SCALES.map((s) => ({
   value: s,
@@ -168,10 +35,40 @@ const CODE_FONT_OPTIONS: readonly { value: CodeFont; label: string }[] = [
   { value: "system-mono", label: "System monospace" },
 ];
 
+// ── Panes (WO16 Block C) ──────────────────────────────────────────────
+//
+// Settings was one scrolling column of five sections through WO15. Six was
+// the point where it stopped working: the two longest sections (Agent, and
+// now Tech stack) each fill more than a screen, so anything below them was
+// only reachable by scrolling past settings the user was not looking for.
+// A rail costs one click and makes the whole surface legible at a glance —
+// which is also the honest answer to "how many settings are there?".
+//
+// Order is by how often a setting is touched, not alphabetically: sound and
+// appearance are set once and forgotten, so they sit at the top where the
+// eye lands, and the two tables that get maintained sit together below the
+// things that configure them.
+
+type PaneId = "sound" | "appearance" | "agent" | "presets" | "stack" | "view" | "context";
+
+const PANES: readonly { id: PaneId; label: string }[] = [
+  { id: "sound", label: "Sound" },
+  { id: "appearance", label: "Appearance" },
+  { id: "agent", label: "Agent" },
+  { id: "presets", label: "Agent presets" },
+  { id: "stack", label: "Tech stack" },
+  { id: "view", label: "View" },
+  { id: "context", label: "Context" },
+];
+
 // ── Modal ─────────────────────────────────────────────────────────────
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Not persisted: which pane you were last on is a fact about the last
+  // thing you did, not a preference, and reopening Settings on "Tech stack"
+  // because you once added an item there would be a small daily surprise.
+  const [pane, setPane] = useState<PaneId>("sound");
 
   const masterVolume = useSettingsStore((s) => s.masterVolume);
   const barnSounds = useSettingsStore((s) => s.barnSounds);
@@ -253,7 +150,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-label="Settings"
         tabIndex={-1}
-        className="flex max-h-[80vh] w-[560px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
+        className="flex h-[80vh] w-[760px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-surface-1 shadow-modal outline-none"
       >
         {/* Header — 44px */}
         <div className="flex h-topbar flex-none items-center gap-3 border-b border-border-subtle px-4">
@@ -268,15 +165,35 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Body — nav rail + exactly one pane */}
+        <div className="flex min-h-0 flex-1">
+          <nav
+            aria-label="Settings sections"
+            className="flex w-[168px] flex-none flex-col gap-0.5 overflow-y-auto border-r border-border-subtle p-2"
+          >
+            {PANES.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPane(p.id)}
+                aria-current={pane === p.id ? "page" : undefined}
+                className={`flex h-control flex-none items-center rounded px-2 text-left text-sm transition-colors duration-fast ${
+                  pane === p.id
+                    ? "bg-accent-surface text-accent-text"
+                    : "text-content-secondary hover:bg-[var(--surface-hover)] hover:text-content"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </nav>
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {persistError !== null && (
             <div className="border-b border-border-subtle border-l-[3px] border-l-danger bg-danger-surface px-3 py-2 font-mono text-xs leading-relaxed text-danger-text">
               Settings could not be saved: {persistError}
             </div>
           )}
-          {/* Sound */}
-          <section className="border-b border-border-subtle px-4 py-3">
+          {pane === "sound" && (
+          <section className="px-4 py-3">
             <SectionLabel>Sound</SectionLabel>
 
             <Row label="Master volume" dimmed={soundOff}>
@@ -322,6 +239,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </Row>
 
           </section>
+          )}
 
           {/* Appearance (WO15 Block 7) — how big and in what typeface, plus
               the two "how loud is the app visually" toggles that were filed
@@ -329,7 +247,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               mode still implies mute; it lives here because motion, not
               volume, is what a user is looking for when they go hunting for
               it. */}
-          <section className="border-b border-border-subtle px-4 py-3">
+          {pane === "appearance" && (
+          <section className="px-4 py-3">
             <SectionLabel>Appearance</SectionLabel>
 
             <Row label="UI scale">
@@ -380,9 +299,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               to 12 fps while idle, so a low number there is not a bug.
             </HelperLine>
           </section>
+          )}
 
-          {/* Agent */}
-          <section className="border-b border-border-subtle px-4 py-3">
+          {pane === "agent" && (
+          <section className="px-4 py-3">
             <SectionLabel>Agent</SectionLabel>
 
             {/* Stage 1 — the scope sentence, verbatim, above the controls it
@@ -476,9 +396,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <span className="font-mono text-xs text-content-secondary">{hooksAddr}</span>
             </Row>
           </section>
+          )}
 
-          {/* View */}
-          <section className="border-b border-border-subtle px-4 py-3">
+          {pane === "presets" && <PresetSettings />}
+
+          {pane === "stack" && <StackSettings />}
+
+          {pane === "view" && (
+          <section className="px-4 py-3">
             <SectionLabel>View</SectionLabel>
 
             <Row label="Manager mode">
@@ -489,8 +414,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               agents UI.
             </HelperLine>
           </section>
+          )}
 
-          {/* Context */}
+          {pane === "context" && (
           <section className="px-4 py-3">
             <SectionLabel>Context</SectionLabel>
 
@@ -520,6 +446,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               )}
             </Row>
           </section>
+          )}
+          </div>
         </div>
 
         {/* Footer — 50px; nothing to confirm, so no primary button */}

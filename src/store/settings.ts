@@ -7,6 +7,10 @@ import { pushToast } from "./toasts";
 // would close an import cycle. The runtime list of valid targets stays in
 // graph.ts (`COMPILE_TARGETS`), which filters this field where it is applied.
 import type { CompileTarget } from "./graph";
+// Type-only for the same reason: `resources/index.ts` is a data module with
+// no store imports of its own, but keeping this erased means the settings
+// store stays loadable by a test that never touches the bundled tables.
+import type { AgentPreset, PresetGroup } from "../resources";
 
 /** One entry in the recent-projects list (startup screen). */
 export interface RecentProject {
@@ -78,6 +82,49 @@ export const CODE_FONT_STACKS: Record<CodeFont, string> = {
 /** Node-type help stays open for the first N launches (Block 1.3). */
 export const NODE_TYPE_HELP_OPEN_LAUNCHES = 3;
 
+// ── Tech stack defaults (WO16 Block C) ─────────────────────────────────
+//
+// Two separate things, deliberately not merged into one list:
+//
+//   `defaultStackItemIds` is which items the New Project wizard STARTS
+//   ticked — exactly the `defaultCompileTargets` precedent, and consulted
+//   only while the wizard is open. It may name bundled ids, custom ids, or
+//   ids that no longer exist; the wizard filters at the point of use, so a
+//   stack item deleted after being made a default is dropped there rather
+//   than silently rewritten out of settings.json.
+//
+//   `customStackItems` is the user EXTENDING the bundled table. These are
+//   real rows in the picker, not preferences about it, so deleting one has
+//   to be a deliberate act in Settings.
+
+/** Prefix marking a stack item as the user's own. Same two-namespace rule
+ *  as {@link AgentPreset} ids: a custom item can never collide with a
+ *  bundled one, and `stacks.json` stays the closed table it is. */
+export const CUSTOM_STACK_PREFIX = "custom:";
+
+/** Category custom items fall into when they name no bundled category (or
+ *  name one that has since gone away). Rendered as its own trailing group. */
+export const CUSTOM_STACK_CATEGORY_ID = "custom";
+
+/** Longest a stack label may be — a picker row, not a description. */
+export const MAX_STACK_LABEL = 40;
+
+export interface CustomStackItem {
+  /** `custom:<slug>`, unique across the whole picker. */
+  id: string;
+  label: string;
+  /** A `STACK_CATEGORIES` id, or {@link CUSTOM_STACK_CATEGORY_ID}. Not
+   *  validated against the bundled table here — categories are data that
+   *  can move between releases, and an item whose category vanished should
+   *  reappear under "Custom", not disappear. */
+  categoryId: string;
+  /** Basename of the file in `app_config_dir/stack-icons/`, or `null` for
+   *  the default glyph. Never a path and never image bytes: the icon store
+   *  is Rust-owned (`stack_icon_*`), and the hard rule against base64 blobs
+   *  in source applies just as much to a JSON the app writes. */
+  iconFile: string | null;
+}
+
 export interface AppSettings {
   version: 1;
   masterVolume: number; // 0..1
@@ -139,6 +186,16 @@ export interface AppSettings {
    *  used as its default the next time nothing else selects one. `""` = no
    *  memory yet. Not a path — the same key `useAgentsStore.meta` uses. */
   lastRunAgentFile: string;
+  /** WO16 Block B: the user's own agent presets, shown in the New Agent
+   *  dialog's picker alongside the ones Cowtext ships. Every id carries
+   *  {@link CUSTOM_PRESET_PREFIX}, so this list can never shadow a
+   *  built-in. Additive, tolerant-merge field. */
+  customAgentPresets: AgentPreset[];
+  /** WO16 Block C: stack items a BRAND-NEW project starts ticked. See the
+   *  block comment above — the wizard filters these at the point of use. */
+  defaultStackItemIds: string[];
+  /** WO16 Block C: rows the user added to the stack picker. */
+  customStackItems: CustomStackItem[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -167,6 +224,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   launchCount: 0,
   nodeTypeHelpCollapsed: null,
   lastRunAgentFile: "",
+  customAgentPresets: [],
+  defaultStackItemIds: [],
+  customStackItems: [],
 };
 
 export interface SettingsState extends AppSettings {
@@ -203,6 +263,16 @@ export interface SettingsState extends AppSettings {
   setCodeFont: (v: CodeFont) => void;
   setNodeTypeHelpCollapsed: (v: boolean | null) => void;
   setLastRunAgentFile: (fileName: string) => void;
+  /** Add or replace one custom preset, matched on `id`. */
+  saveCustomPreset: (preset: AgentPreset) => void;
+  removeCustomPreset: (id: string) => void;
+  setDefaultStackItemIds: (ids: string[]) => void;
+  /** Add or replace one custom stack item, matched on `id`. */
+  saveCustomStackItem: (item: CustomStackItem) => void;
+  /** Remove the item AND any default that pointed at it — a default naming
+   *  a row that no longer exists is dead weight the wizard would filter out
+   *  on every open. */
+  removeCustomStackItem: (id: string) => void;
 }
 
 /** Reduced motion is on when calm mode OR the OS asks for it. */
@@ -250,6 +320,90 @@ function mergeRecentProjects(raw: unknown): RecentProject[] {
     seen.add(key);
     out.push({ root: e.root, name: e.name, lastOpenedMs: e.lastOpenedMs });
     if (out.length >= MAX_RECENT_PROJECTS) break;
+  }
+  return out;
+}
+
+/** The three preset groups, spelled out rather than imported, for the same
+ *  reason `uiFont` is compared against string literals two screens down:
+ *  this module validates settings.json without loading the bundled tables.
+ *  `resources.test.ts` pins the two lists against each other. */
+const PRESET_GROUP_IDS: readonly PresetGroup[] = ["direction", "engineering", "task"];
+
+/** Validate one custom agent preset out of settings.json. Anything that
+ *  would put the New Agent dialog in a state no control can leave — a
+ *  missing id, an id that pretends to be a built-in, an unknown group — is
+ *  rejected outright; a merely odd value (a huge priority, a tool name this
+ *  build does not know) is clamped or passed through, because the dialog
+ *  already validates tools at the point of use and a preset is only ever a
+ *  starting point the user can edit. */
+function mergeCustomPresets(raw: unknown): AgentPreset[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: AgentPreset[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id !== "string" || !e.id.startsWith("custom:")) continue;
+    if (seen.has(e.id)) continue;
+    if (typeof e.name !== "string" || e.name.trim() === "") continue;
+    if (typeof e.description !== "string") continue;
+    if (typeof e.whenToUse !== "string") continue;
+    if (e.mode !== "inherit" && e.mode !== "restrict") continue;
+    const group = PRESET_GROUP_IDS.find((g) => g === e.group);
+    if (group === undefined) continue;
+    const tools = Array.isArray(e.tools)
+      ? e.tools.filter((t): t is string => typeof t === "string")
+      : [];
+    // The one invariant the picker itself relies on: `inherit` means "no
+    // list at all". A file claiming both is read as the mode it names.
+    const preset: AgentPreset = {
+      id: e.id,
+      name: e.name.trim(),
+      group,
+      description: e.description,
+      whenToUse: e.whenToUse,
+      tools: e.mode === "inherit" ? [] : tools,
+      mode: e.mode,
+      priority:
+        typeof e.priority === "number" && Number.isFinite(e.priority)
+          ? Math.round(e.priority)
+          : 1,
+    };
+    if (typeof e.model === "string" && e.model !== "") preset.model = e.model;
+    seen.add(preset.id);
+    out.push(preset);
+  }
+  return out;
+}
+
+/** Validate the user's stack rows. `label` is trimmed and capped; an entry
+ *  without a usable id or label is dropped. */
+function mergeCustomStackItems(raw: unknown): CustomStackItem[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: CustomStackItem[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id !== "string" || !e.id.startsWith(CUSTOM_STACK_PREFIX)) continue;
+    if (seen.has(e.id)) continue;
+    if (typeof e.label !== "string" || e.label.trim() === "") continue;
+    seen.add(e.id);
+    out.push({
+      id: e.id,
+      label: e.label.trim().slice(0, MAX_STACK_LABEL),
+      categoryId:
+        typeof e.categoryId === "string" && e.categoryId !== ""
+          ? e.categoryId
+          : CUSTOM_STACK_CATEGORY_ID,
+      // A path here would be a settings.json naming a file anywhere on
+      // disk; only a bare basename is ever accepted, and Rust re-checks.
+      iconFile:
+        typeof e.iconFile === "string" && e.iconFile !== "" && !/[\\/]/.test(e.iconFile)
+          ? e.iconFile
+          : null,
+    });
   }
   return out;
 }
@@ -325,6 +479,17 @@ export function mergeSettings(raw: unknown): AppSettings {
     out.nodeTypeHelpCollapsed = r.nodeTypeHelpCollapsed;
   }
   if (typeof r.lastRunAgentFile === "string") out.lastRunAgentFile = r.lastRunAgentFile;
+  // WO16 — the three additive fields. Each element is validated
+  // individually and a bad one is DROPPED rather than defaulting the whole
+  // list: one malformed preset in a hand-edited settings.json should cost
+  // that preset, not every preset the user ever saved.
+  out.customAgentPresets = mergeCustomPresets(r.customAgentPresets);
+  if (Array.isArray(r.defaultStackItemIds)) {
+    out.defaultStackItemIds = r.defaultStackItemIds.filter(
+      (id): id is string => typeof id === "string" && id !== "",
+    );
+  }
+  out.customStackItems = mergeCustomStackItems(r.customStackItems);
   return out;
 }
 
@@ -419,6 +584,9 @@ function persistNow(): void {
     launchCount: s.launchCount,
     nodeTypeHelpCollapsed: s.nodeTypeHelpCollapsed,
     lastRunAgentFile: s.lastRunAgentFile,
+    customAgentPresets: s.customAgentPresets,
+    defaultStackItemIds: s.defaultStackItemIds,
+    customStackItems: s.customStackItems,
   };
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   invoke("write_app_settings", { content }).then(
@@ -610,6 +778,46 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
   setLastRunAgentFile: (fileName) => {
     set({ lastRunAgentFile: fileName });
+    schedulePersist();
+  },
+
+  // ── WO16 Block B/C ───────────────────────────────────────────────────
+  // Both saves are upsert-by-id and preserve position: editing a preset or
+  // a stack row must not make it jump to the end of a list the user has
+  // been reading top-to-bottom.
+  saveCustomPreset: (preset) => {
+    set((s) => {
+      const at = s.customAgentPresets.findIndex((p) => p.id === preset.id);
+      if (at === -1) return { customAgentPresets: [...s.customAgentPresets, preset] };
+      const next = [...s.customAgentPresets];
+      next[at] = preset;
+      return { customAgentPresets: next };
+    });
+    schedulePersist();
+  },
+  removeCustomPreset: (id) => {
+    set((s) => ({ customAgentPresets: s.customAgentPresets.filter((p) => p.id !== id) }));
+    schedulePersist();
+  },
+  setDefaultStackItemIds: (ids) => {
+    set({ defaultStackItemIds: [...new Set(ids)] });
+    schedulePersist();
+  },
+  saveCustomStackItem: (item) => {
+    set((s) => {
+      const at = s.customStackItems.findIndex((i) => i.id === item.id);
+      if (at === -1) return { customStackItems: [...s.customStackItems, item] };
+      const next = [...s.customStackItems];
+      next[at] = item;
+      return { customStackItems: next };
+    });
+    schedulePersist();
+  },
+  removeCustomStackItem: (id) => {
+    set((s) => ({
+      customStackItems: s.customStackItems.filter((i) => i.id !== id),
+      defaultStackItemIds: s.defaultStackItemIds.filter((d) => d !== id),
+    }));
     schedulePersist();
   },
 }));

@@ -23,6 +23,18 @@ export interface ProjectGraphInput {
   /** `useSettingsStore.getState().defaultCompileTargets` — the ticks the
    *  user made on the title screen, carried into the new project's graph. */
   compileTargets: readonly CompileTarget[];
+  /** WO16 Block C — the rows the user added to the stack picker themselves
+   *  (`useSettingsStore.getState().customStackItems`), so a tick on one of
+   *  them reaches `context/stack.md` instead of being filtered out as
+   *  unknown.
+   *
+   *  Passed in as PLAIN DATA rather than imported: this module is pure by
+   *  contract — no store, no `invoke`, no disk — and reaching into
+   *  `store/settings` for a type would drag zustand and the Tauri IPC layer
+   *  into a function whose whole value is that it is a deterministic
+   *  string-in/string-out computation. Optional, so every existing caller
+   *  and test keeps its exact current behaviour. */
+  customStackItems?: readonly { id: string; label: string; categoryId: string }[];
 }
 
 export interface ProjectGraphPlan {
@@ -48,14 +60,34 @@ function positionFor(i: number): { x: number; y: number } {
 
 /** `# Stack` + one `##` section per non-empty category, in
  *  `STACK_CATEGORIES` order (NOT the order the user clicked chips in —
- *  determinism), + the fixed-stack line when asked. */
-function stackBody(selected: readonly string[], fixedStackRule: boolean): string {
+ *  determinism), + the fixed-stack line when asked.
+ *
+ *  Custom items join the category they named, after that category's bundled
+ *  items; any naming no known category collect under a trailing `## Custom`.
+ *  Both halves stay in table order rather than click order, for the same
+ *  determinism reason — two runs of the wizard with the same ticks must
+ *  produce byte-identical markdown. */
+function stackBody(
+  selected: readonly string[],
+  fixedStackRule: boolean,
+  custom: readonly { id: string; label: string; categoryId: string }[],
+): string {
   const picked = new Set(selected);
   const sections: string[] = ["# Stack"];
   for (const category of STACK_CATEGORIES) {
-    const items = category.items.filter((item) => picked.has(item.id));
+    const items = [
+      ...category.items.filter((item) => picked.has(item.id)).map((item) => item.label),
+      ...custom
+        .filter((c) => c.categoryId === category.id && picked.has(c.id))
+        .map((c) => c.label),
+    ];
     if (items.length === 0) continue;
-    sections.push([`## ${category.label}`, ...items.map((item) => `- ${item.label}`)].join("\n"));
+    sections.push([`## ${category.label}`, ...items.map((label) => `- ${label}`)].join("\n"));
+  }
+  const knownCategories = new Set(STACK_CATEGORIES.map((c) => c.id));
+  const orphans = custom.filter((c) => !knownCategories.has(c.categoryId) && picked.has(c.id));
+  if (orphans.length > 0) {
+    sections.push(["## Custom", ...orphans.map((c) => `- ${c.label}`)].join("\n"));
   }
   if (fixedStackRule) sections.push(FIXED_STACK_LINE);
   return `${sections.join("\n\n")}\n`;
@@ -68,8 +100,11 @@ export function buildProjectGraph(input: ProjectGraphInput): ProjectGraphPlan {
   // only producer today, but a preset or a future import could hand us an id
   // this build no longer ships, and dropping it beats failing the whole
   // project creation over one stale string.
-  const knownStackIds = input.stackItemIds.filter((id) =>
-    STACK_CATEGORIES.some((c) => c.items.some((item) => item.id === id)),
+  const customStack = input.customStackItems ?? [];
+  const knownStackIds = input.stackItemIds.filter(
+    (id) =>
+      STACK_CATEGORIES.some((c) => c.items.some((item) => item.id === id)) ||
+      customStack.some((c) => c.id === id),
   );
 
   const wanted = new Set(input.principleIds);
@@ -113,7 +148,7 @@ export function buildProjectGraph(input: ProjectGraphInput): ProjectGraphPlan {
         rootLoad: "always",
         tags: ["stack"],
       },
-      stackBody(knownStackIds, input.fixedStackRule),
+      stackBody(knownStackIds, input.fixedStackRule, customStack),
     );
   }
 

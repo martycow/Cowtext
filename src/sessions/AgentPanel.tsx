@@ -31,6 +31,8 @@ const TRANSCRIPT_CLS: Record<string, string> = {
   status: "text-content-muted",
   exit: "text-content-muted",
   text: "text-content-secondary",
+  // Blue is you (DESIGN_SPEC): the only line in the stream the user wrote.
+  user: "text-accent-text",
 };
 
 export function AgentPanel() {
@@ -39,6 +41,7 @@ export function AgentPanel() {
   const reducedMotion = useSettingsStore(selectReducedMotion);
 
   const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [killArmed, setKillArmed] = useState(false);
   const [killBusy, setKillBusy] = useState(false);
   const [killError, setKillError] = useState<string | null>(null);
@@ -77,15 +80,28 @@ export function AgentPanel() {
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [session?.transcript.length]);
 
+  // WO16 Stage A — a question arriving for the agent on screen puts the
+  // cursor where the answer goes. `ts` (not the text) is the dependency:
+  // a second question with the same wording must still re-focus.
+  const questionTs = session?.pendingQuestion?.ts ?? null;
+  useEffect(() => {
+    if (questionTs !== null) composerRef.current?.focus();
+  }, [questionTs]);
+
   if (session === undefined) return null;
 
   const budgetStopped = session.stopReason === "budget";
+  const question = session.pendingQuestion;
 
   const onSend = () => {
     const text = draft.trim();
     if (text === "") return;
     setDraft("");
-    void useSessionsStore.getState().send(session.id, text);
+    // Answering routes through `answerQuestion` so the question is cleared by
+    // the same action that sends the reply (store/sessions.ts).
+    const store = useSessionsStore.getState();
+    if (question !== null) void store.answerQuestion(session.id, text);
+    else void store.send(session.id, text);
   };
 
   const doRestart = () => {
@@ -160,7 +176,11 @@ export function AgentPanel() {
       <div className="flex-none border-b border-border-subtle px-3 py-1.5">
         <p
           className="font-mono text-2xs text-content-muted"
-          title={`reported by claude, not an estimate · ↑${session.usage.inputTokens} ↓${session.usage.outputTokens} · ${session.usage.turns} turn${session.usage.turns === 1 ? "" : "s"}`}
+          title={`reported by claude, not an estimate · ↑${session.usage.inputTokens} ↓${session.usage.outputTokens} · ${session.usage.turns} turn${session.usage.turns === 1 ? "" : "s"}${
+            session.usage.cacheReadTokens > 0
+              ? ` · ${session.usage.cacheReadTokens} cached prompt tokens re-read (not charged to the budget — each context token counts once, when it is first sent)`
+              : ""
+          }`}
         >
           {session.usage.turns === 0
             ? "no usage yet"
@@ -190,7 +210,20 @@ export function AgentPanel() {
       </ul>
 
       <div className="flex-none border-t border-border-subtle p-2">
+        {question !== null && (
+          <div className="mb-2 rounded border border-accent-border bg-accent-surface px-2 py-1.5">
+            <p className="font-pixel text-[8px] uppercase text-accent-text">asking you</p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-xs text-content">{question.text}</p>
+            <button
+              onClick={() => useSessionsStore.getState().clearPendingQuestion(session.id)}
+              className="mt-1 text-2xs text-content-muted underline-offset-2 transition-colors duration-fast hover:text-content hover:underline"
+            >
+              Dismiss without answering
+            </button>
+          </div>
+        )}
         <textarea
+          ref={composerRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -200,7 +233,13 @@ export function AgentPanel() {
             }
           }}
           disabled={!session.alive}
-          placeholder={session.alive ? "Send a prompt… (Enter to send, Shift+Enter for a newline)" : "session has exited"}
+          placeholder={
+            !session.alive
+              ? "session has exited"
+              : question !== null
+                ? "Answer… (Enter to send, Shift+Enter for a newline)"
+                : "Send a prompt… (Enter to send, Shift+Enter for a newline)"
+          }
           rows={2}
           className="min-h-[44px] w-full resize-y rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-content placeholder:text-content-disabled focus:border-accent disabled:text-content-disabled"
         />
@@ -210,7 +249,7 @@ export function AgentPanel() {
             disabled={!session.alive || draft.trim() === ""}
             className="h-control-sm flex-none rounded bg-accent px-2.5 text-xs font-semibold text-content-inverse transition-colors duration-fast hover:bg-accent-hover disabled:bg-surface-2 disabled:text-content-disabled"
           >
-            Send
+            {question !== null ? "Answer" : "Send"}
           </button>
           {session.queue.length > 0 && (
             <span className="font-mono text-2xs text-content-muted">queued: {session.queue.length}</span>

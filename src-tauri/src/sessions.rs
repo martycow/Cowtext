@@ -97,8 +97,21 @@ pub enum AgentEventKind {
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// input + output + cache_creation + cache_read, as reported by the CLI.
+    /// `input + output + cache_creation` — every context token counted
+    /// EXACTLY ONCE, on the turn that first sent it. `cache_read` is
+    /// deliberately excluded (WO16): it is the same prompt re-presented from
+    /// cache on every later turn, so including it made the running total
+    /// (and therefore the token ceiling) a function of context size × turn
+    /// count. A live session boot turn alone reported ≈48k that way, and a
+    /// 60k ceiling stopped the session before its first real instruction;
+    /// the 200k default died after ~5 turns of an unchanged conversation.
+    /// The tokens themselves are still reported — see `cache_read_tokens`.
     pub total_tokens: u64,
+    /// `cache_read_input_tokens` as reported by the CLI: prompt tokens served
+    /// from cache this turn. Reported for transparency (the panel shows it)
+    /// but NOT part of `total_tokens`, so it never charges the ceiling twice
+    /// for the same context. Billed by the API at a fraction of input price.
+    pub cache_read_tokens: u64,
     /// RESERVED — always `None` in Block F (contract §12 D7): the CLI does
     /// not report a window size and Cowtext will not invent one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -500,11 +513,33 @@ struct MappedLine {
     events: Vec<AgentEvent>,
     claude_session_id: Option<String>,
     turn_ended: bool,
+    /// The last text this line emitted as a `Text` event, for the caller to
+    /// feed back as the next line's `prev_text` (WO16). `None` when the line
+    /// emitted no text. See [`map_line`]'s `prev_text` for what it is for.
+    last_text: Option<String>,
     /// Usage observed on this line, for budget accounting ONLY. Populated from
     /// BOTH the assistant-message usage block and the terminal `result` line.
     /// Never turned into an `agent://event` — the emitted stream is unchanged
     /// (see `map_line_assistant_usage_never_emits_a_usage_event`).
     observed_usage: Option<Usage>,
+}
+
+/// Thread [`map_line`]'s `prev_text` across a turn (WO16). The comparand is
+/// the last text emitted SO FAR IN THIS TURN, not the previous line's: a line
+/// that emits no text of its own (`rate_limit_event`,
+/// `system/thinking_tokens`, a tool_use-only assistant message) must carry the
+/// existing value through rather than wipe it. Getting that wrong is not
+/// theoretical — it shipped for one live run, where only the turns that
+/// happened to have no such line in between deduped correctly. Reset at the
+/// turn boundary so a later turn never compares against an older turn's text.
+fn carry_text(prev: Option<String>, mapped: &MappedLine) -> Option<String> {
+    if mapped.turn_ended {
+        None
+    } else if mapped.last_text.is_some() {
+        mapped.last_text.clone()
+    } else {
+        prev
+    }
 }
 
 fn text_event(id: &str, text: String, ts: u64) -> AgentEvent {
@@ -571,6 +606,7 @@ fn budget_event(id: &str, line_usage: Option<&Usage>, spent: u64, ceiling: u64, 
         input_tokens: line_usage.map(|u| u.input_tokens).unwrap_or(0),
         output_tokens: line_usage.map(|u| u.output_tokens).unwrap_or(0),
         total_tokens: spent,
+        cache_read_tokens: line_usage.map(|u| u.cache_read_tokens).unwrap_or(0),
         context_window: None,
         cost_usd: line_usage.and_then(|u| u.cost_usd),
     };
@@ -586,28 +622,53 @@ fn budget_event(id: &str, line_usage: Option<&Usage>, spent: u64, ceiling: u64, 
 }
 
 /// `inputTokens = input_tokens`, `outputTokens = output_tokens`,
-/// `totalTokens = input + output + cache_creation + cache_read` (each
-/// missing field reads as 0). `None` when the total is zero (contract
-/// §5.1's "only if U has a non-zero total") — unchanged by N5; `cost_usd` is
-/// threaded through separately (it lives on the `result` line itself, not
-/// inside the nested `usage` object) and is simply carried along when a
-/// `Usage` is emitted at all.
+/// `totalTokens = input + output + cache_creation` (each missing field reads
+/// as 0). `None` when the total is zero (contract §5.1's "only if U has a
+/// non-zero total") — unchanged by N5; `cost_usd` is threaded through
+/// separately (it lives on the `result` line itself, not inside the nested
+/// `usage` object) and is simply carried along when a `Usage` is emitted at
+/// all.
+///
+/// WO16 — `cache_read_input_tokens` is NO LONGER summed into the total; it
+/// is carried alongside it instead. See [`Usage::total_tokens`] for why:
+/// re-reading the same cached prompt every turn is not new spend, and
+/// charging it per turn is what made token ceilings unusable.
 fn map_usage(usage: &serde_json::Value, cost_usd: Option<f64>) -> Option<Usage> {
     let get = |k: &str| usage.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
     let input = get("input_tokens");
     let output = get("output_tokens");
-    let total = input + output + get("cache_creation_input_tokens") + get("cache_read_input_tokens");
+    let total = input + output + get("cache_creation_input_tokens");
     if total == 0 {
         return None;
     }
-    Some(Usage { input_tokens: input, output_tokens: output, total_tokens: total, context_window: None, cost_usd })
+    Some(Usage {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: total,
+        cache_read_tokens: get("cache_read_input_tokens"),
+        context_window: None,
+        cost_usd,
+    })
 }
 
 /// Every stdout line -> zero or more `AgentEvent`s (contract §5.1, byte-exact
 /// table). Field lookups are all tolerant (`.get(..).and_then(..)`); a
 /// missing field never panics and never drops the rest of the line. A line
 /// that is not JSON at all becomes `kind:"text"` verbatim.
-fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
+///
+/// `prev_text` is the last text emitted SO FAR IN THIS TURN — the caller
+/// threads it through, carrying it across lines that emit no text of their
+/// own (see `run_turn`). It exists for exactly one job (WO16): the
+/// CLI streams the final answer as an `assistant` text block AND repeats it
+/// verbatim in the terminal `result` line's `result` field, so every turn's
+/// answer was appearing twice in the transcript. When the `result` text is
+/// byte-identical to the text already emitted, the duplicate `Text` event is
+/// suppressed. It is compared, never assumed: a `result` that genuinely
+/// differs (or a turn that streamed no assistant text at all) is still
+/// emitted, so the transcript can never lose the answer. The `COWTEXT_ASK`
+/// scan runs on the `result` text either way — a deduped line must still be
+/// able to ask a question.
+fn map_line(id: &str, line: &str, ts: u64, prev_text: Option<&str>) -> MappedLine {
     let trimmed = line.trim_end_matches(['\r', '\n']);
     let value: serde_json::Value = match serde_json::from_str(trimmed) {
         Ok(v) => v,
@@ -617,6 +678,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                 claude_session_id: None,
                 turn_ended: false,
                 observed_usage: None,
+                last_text: Some(trimmed.to_string()),
             };
         }
     };
@@ -625,6 +687,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
     let mut claude_session_id = None;
     let mut turn_ended = false;
     let mut observed_usage = None;
+    let mut last_text: Option<String> = None;
 
     let type_ = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match type_ {
@@ -648,6 +711,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
                                 let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
                                 if !text.is_empty() {
                                     events.push(text_event(id, text.to_string(), ts));
+                                    last_text = Some(text.to_string());
                                 }
                             }
                             "tool_use" => {
@@ -700,10 +764,19 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
             if subtype == "success" && !is_error {
                 let result_text = value.get("result").and_then(|v| v.as_str()).unwrap_or("");
                 if !result_text.is_empty() {
-                    events.push(text_event(id, result_text.to_string(), ts));
+                    // WO16: the CLI repeats the final assistant text verbatim
+                    // here, so emitting it unconditionally showed every answer
+                    // twice. Compared, never assumed — a `result` that differs
+                    // from what streamed (or a turn that streamed no assistant
+                    // text) is still emitted.
+                    if prev_text != Some(result_text) {
+                        events.push(text_event(id, result_text.to_string(), ts));
+                    }
+                    last_text = Some(result_text.to_string());
                     // F2: an ADDITIONAL event alongside the Text event above
                     // — the transcript stays complete, this never suppresses
-                    // or rewrites it.
+                    // or rewrites it. Deliberately OUTSIDE the dedupe: a
+                    // suppressed duplicate must still be able to ask.
                     if let Some(question) = find_cowtext_ask(result_text) {
                         events.push(question_event(id, question, ts));
                     }
@@ -738,7 +811,7 @@ fn map_line(id: &str, line: &str, ts: u64) -> MappedLine {
         _ => {}
     }
 
-    MappedLine { events, claude_session_id, turn_ended, observed_usage }
+    MappedLine { events, claude_session_id, turn_ended, observed_usage, last_text }
 }
 
 // ── Binary resolution + CLI probe ──────────────────────────────────────
@@ -1107,12 +1180,20 @@ async fn run_turn(
     });
 
     let mut saw_result = false;
+    // WO16 — the previous line's text, so the terminal `result` line can drop
+    // its verbatim repeat of the answer that already streamed. Reset at each
+    // turn boundary: a later turn's first line must never be compared against
+    // the previous turn's last text (harmless today, one process = one turn,
+    // but the persistent-session channel would otherwise inherit a stale
+    // comparand).
+    let mut prev_text: Option<String> = None;
     if let Some(stdout) = child.stdout.take() {
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let ts = now_millis();
-            let mapped = map_line(&id, &line, ts);
+            let mapped = map_line(&id, &line, ts, prev_text.as_deref());
+            prev_text = carry_text(prev_text, &mapped);
             if mapped.turn_ended {
                 saw_result = true;
             }

@@ -69,6 +69,26 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 
 **Numbers live in the generated block below, never in this prose.** If you need a count, read the block; if the block is stale, run `npm run truth:write`. `npm run truth` fails the gate when a count reappears here.
 
+**WO16 — agent presets, tech-stack settings, 2026-08-22.** Three blocks against
+`docs/INPUT_PROMPT.md`. **Presets:** the table grows 6 → 11 and gains a `group`
+field; `planner` is renamed AND rewritten as `project-manager` (task-format
+discipline and delegation, not just planning), joined by Producer, Tech lead,
+Lead/UI/Tool programmer. Nothing persists a preset id, so the rename needed no
+migration. The three delegating roles actually carry the `subagents` capability —
+a preset that says it delegates and cannot is decoration. **User presets:** saved
+in `settings.json` under a `custom:` id namespace that can never shadow a
+built-in; created from the New Agent dialog ("Save as preset"), managed in
+Settings › Agent presets. **Settings + stack:** the modal becomes a nav rail with
+seven panes (the five it had, plus Agent presets and Tech stack); Tech stack sets
+which items a new project starts ticked *and* lets the user add rows of their own,
+with an optional 32×32 icon. Icons are stored in `app_config_dir/stack-icons/` and
+returned as data URLs — deliberately, because that meant **no** asset-protocol
+scope, no CSP widening and no change to `capabilities/default.json`. Three new
+invoke commands (`stack_icon_import`, `stack_icon_read`, `stack_icon_delete`); the
+graph schema is unchanged; no new dependencies. The three **For Research** items
+(image node, external-source node, product-version node) were scoped and costed,
+not built — filed in BACKLOG.md §WO16 research items.
+
 **V2 REPLAN IN EFFECT (2026-08-19)** — four-layer plan (L1 graph / L2 orchestrator / L3 workflows / L4 observability+barn) in ROADMAP.md, strategy per `Cowtext_Strategy_2026.pdf`. All seven phases (0–6) accepted. Landed since: WO01, WO02 (`103ac80`), WO03, WO06, WO09, WO10, WO11, WO12, WO13, the title-screen redesign, **WO15**. Remaining work orders: WO04 (L1 completion) → WO05 (proof layer + barn) → WO07 (L3 workflows).
 
 **WO15 — release truth + UI round 2, gates green 2026-08-22.** Nine lanes against `docs/design/WO15_CONTRACT.md`, plus a tech-lead audit, a fix round and a live run. Three themes. **Honesty:** one provider-support sentence on every surface, backed by `docs/design/PROVIDER_SUPPORT_MATRIX.md`; `.codex/*` and `.mcp.json` are marked development-only and nothing was deleted. **Generation:** `scripts/truth.mjs` now generates `AGENTS.md`, the `.agents/skills` mirrors and the truth block below, and `npm run truth` gates drift in both directions between docs and code — docs-guard denies hand edits to the generated targets. **First run:** the title screen scans the AI toolchain on open, Canvas / Tasks / Agents empty states carry a real next action, the Inspector no longer hangs around in the Tasks surface, and the six-step New Project wizard leaves a folder on `branch main` with its first commit. UI round 2: "Node type" replaces "Role" everywhere with a `?` popover of micro-examples, the Inspector's Assemble section shows Influence without scrolling, agents get a provider→model picker with presets, skills get the built-in tier (virtual / materialized / modified), Settings gains an Appearance section with UI scale, and the Barn gets a legend plus an integer wide-screen fit. Two new invoke commands (`hooks_addr`, `skills_materialize`); the graph schema is unchanged; no new dependencies. Audit: 0 CRITICAL · 2 MAJOR · 8 MINOR · 10 NIT — both MAJORs were contradictions inside the contract itself (its decision table said one thing, its wire spec another), fixed and recorded as amendments A-20…A-24.
@@ -78,7 +98,7 @@ Per-project data lives inside the *user's* project folder, git-friendly: `.cowte
 **Pending, in order.** (1) **Acceptance walks — Marty.** The release walk is `docs/testing/GOLDEN_PATH_MANUAL.md` (risk-based, one sitting, folder-watch rule on every writing step); the older per-work-order manuals (WO13, WO12, WO11, WO10, WO09, WO03, WO02, WO01) are still open. Gate definition: ROADMAP.md §Release gate — nothing else defines the cut. (2) **P1 checkpoint — Marty.** P1 (accessibility, frontend interaction tests, state-sync audit, invoke reachability, docs compression) must not start without confirmation; the blocks are filed in BACKLOG.md tagged `p1`, and a new testing library needs permission before install. (3) **Marty's open decisions** from WO15: port 4923 as canon; whether to delete `.codex/hooks.json` and `.codex/agents/*.toml` (kept, marked unsupported); review of the non-Anthropic model ids in `src/resources/models.json`; UI scale deliberately excluding canvas node cards; task status labels-only on disk; built-in-skill placement after materialisation; `git_init` leaving the folder untouched when git has no identity. WO15 is **uncommitted** — the worktree is dirty on purpose.
 
 <!-- truth:begin -->
-Live counts (generated 2026-08-22 by `scripts/truth.mjs` — do not edit by hand; run `npm run truth:write`): invoke **78** · Rust tests **819** (lib 785 · cli 18 · mcp 16) · Vitest **297** tests / **17** files · graph schema **v5** · compile targets claude, agents, cursor, copilot, gemini · release gate: `docs/tasks/ROADMAP.md` §Release gate + `docs/testing/GOLDEN_PATH_MANUAL.md`.
+Live counts (generated 2026-08-23 by `scripts/truth.mjs` — do not edit by hand; run `npm run truth:write`): invoke **81** · Rust tests **833** (lib 799 · cli 18 · mcp 16) · Vitest **339** tests / **18** files · graph schema **v5** · compile targets claude, agents, cursor, copilot, gemini · release gate: `docs/tasks/ROADMAP.md` §Release gate + `docs/testing/GOLDEN_PATH_MANUAL.md`.
 <!-- truth:end -->
 
 Update this line at the end of every session.

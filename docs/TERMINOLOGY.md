@@ -8,7 +8,7 @@
 
 | Module | Owns |
 |---|---|
-| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (78); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` (unchanged) |
+| `src-tauri/src/lib.rs` (+ `main.rs` shim) | `tauri::Builder` chain, plugin registration, `generate_handler!` command list (81); `main.rs` is `cowtext_lib::run()` + `windows_subsystem = "windows"` (unchanged) |
 | `src-tauri/src/bin/cowtext_cli.rs` | CLI binary: `compile --check` (exit 0 clean / 1 drift / 2 usage), `lint`, `--json` |
 | `src-tauri/src/project.rs` | `.md` scan, graph read/write (schema **v5**), `write_atomic`, `resolve_within_root`, `checked_root` |
 | `src-tauri/src/project_meta.rs` | `.cowtext/project.json` v1 sidecar, `context/project.md` renderer, `project_init` scaffolder |
@@ -35,7 +35,7 @@
 | `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
 | `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
 
-## Invoke commands (78)
+## Invoke commands (81)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
@@ -51,7 +51,7 @@ Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 | import / lint | `import_scan`, `import_apply`, `lint_run` |
 | assemble | `assemble_node`, `assemble_preview`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel` |
 | hooks | `hooks_preview`, `hooks_write`, `hooks_status`, `hooks_addr` |
-| settings | `read_app_settings`, `write_app_settings` |
+| settings | `read_app_settings`, `write_app_settings`, `stack_icon_import`, `stack_icon_read`, `stack_icon_delete` |
 | preset | `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply` |
 | handoff | `handoff_generate`, `handoff_write`, `handoff_node_propose` |
 | tasks | `tasks_scan`, `task_toggle`, `task_append`, `task_move`, `task_update`, `task_id_ensure`, `task_depends_add`, `task_depends_remove` |

@@ -26,7 +26,14 @@ export type AgentEventKind = "status" | "tool" | "text" | "usage" | "exit" | "er
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  /** `input + output + cache_creation` — each context token counted once, on
+   *  the turn that first sent it. Excludes `cacheReadTokens` (WO16): a cached
+   *  prompt re-presented every turn is not new spend, and charging it per
+   *  turn made the token ceiling a function of context size × turn count. */
   totalTokens: number;
+  /** Prompt tokens served from cache this turn, as reported by the CLI.
+   *  Reported, never summed into `totalTokens` — see above. */
+  cacheReadTokens: number;
   contextWindow?: number;
   /** `total_cost_usd` from the CLI's terminal `result` line (N5) — the
    *  conversation's running total as reported by claude, not a per-turn
@@ -51,7 +58,11 @@ export const TRANSCRIPT_CAP = 500; // ring buffer, newest last
 export const MAX_SESSIONS = 4; // mirrors the Rust cap and CalfHerd's CAP
 
 export interface TranscriptLine {
-  kind: "text" | "tool" | "status" | "error" | "exit";
+  /** `"user"` (WO16 Stage A) is the only kind NOT fed by an `agent://event`:
+   *  it is echoed locally by `send`/`answerQuestion` so the panel reads as a
+   *  conversation rather than a monologue. The agent's own stream never
+   *  produces it, so it can never duplicate a real line. */
+  kind: "text" | "tool" | "status" | "error" | "exit" | "user";
   text: string;
   ts: number;
 }
@@ -60,6 +71,11 @@ export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Cumulative prompt tokens served from cache (WO16). Summed like the
+   *  others but deliberately kept OUT of `totalTokens`, so the budget never
+   *  charges twice for the same context; shown in the panel tooltip so the
+   *  number is visible rather than silently dropped. */
+  cacheReadTokens: number;
   turns: number;
   /** Cumulative session cost (N5). `total_cost_usd` is already a running
    *  total as reported by the CLI (not a per-turn delta), so this field
@@ -114,10 +130,15 @@ export interface Session {
    *  "a restart is a new budget" (contract §5.5). */
   stopReason: "budget" | null;
   /** F2 — set by a `"question"` event (the `COWTEXT_ASK:` marker convention,
-   *  sessions.rs `find_cowtext_ask`). Cleared once the answer turn starts
-   *  (`status` flips to `"working"`) or on kill/restart — never cleared by
-   *  merely reading it, so `AgentQuestionModal`'s Dismiss must clear it
-   *  explicitly. */
+   *  sessions.rs `find_cowtext_ask`). Cleared ONLY by `answerQuestion`,
+   *  `clearPendingQuestion` (Esc/Dismiss), exit or restart.
+   *
+   *  WO16 Stage A: it used to also clear whenever `status` flipped to
+   *  `"working"`, on the theory that the answer turn had started. But any
+   *  turn flips that status — draining an unrelated queued prompt included —
+   *  so a question could vanish unanswered while the user was still typing.
+   *  Provenance, not timing, decides now: the store clears the question when
+   *  the store itself answers it. */
   pendingQuestion: { text: string; ts: number } | null;
 }
 
@@ -154,13 +175,25 @@ export interface SessionsState {
     taskContext: string,
     tokenCeiling: number | null,
   ): Promise<{ id: string } | { error: string }>;
-  send(id: string, prompt: string): Promise<string | null>;
+  /** `echoed` is internal (WO16 Stage A): the queue drain re-enters `send`
+   *  with a prompt already echoed into the transcript when it was queued, and
+   *  passes `true` so it is not echoed twice. Every caller outside this store
+   *  omits it. */
+  send(id: string, prompt: string, echoed?: boolean): Promise<string | null>;
   kill(id: string): Promise<string | null>;
   restart(id: string): Promise<string | null>;
   dismiss(id: string): void; // removes an exited session; no-op while alive
   /** F2 — clears `pendingQuestion` WITHOUT sending an answer (Esc/Dismiss on
    *  `AgentQuestionModal`). No-op if that session has no pending question. */
   clearPendingQuestion(id: string): void;
+  /** WO16 Stage A — answer a pending question: clears it, then delegates to
+   *  `send`. Going through `send` is the point: it queues when the session is
+   *  not idle, and the asking turn is still closing at the moment the question
+   *  surfaces (Rust emits it from the stdout loop, before `end_turn` clears
+   *  `busy`), so answering instantly used to fail with "agent is busy". The
+   *  queue drains on the next `status:"idle"` event. Returns `send`'s error,
+   *  or `null`. */
+  answerQuestion(id: string, text: string): Promise<string | null>;
   selectSession(id: string | null): void;
   applyEvent(e: AgentEvent): void; // THE single entry point for agent://event
   hydrate(): Promise<void>; // agent_session_list -> adopt live sessions after a reload
@@ -184,7 +217,7 @@ function sessionFromInfo(info: SessionInfo): Session {
     currentTool: null,
     alive: info.alive,
     transcript: [],
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0, costUsd: null },
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, turns: 0, costUsd: null },
     queue: [],
     lastError: null,
     startedMs: Date.now(),
@@ -254,15 +287,28 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     }
   },
 
-  send: async (id, prompt) => {
+  send: async (id, prompt, echoed = false) => {
     const trimmed = prompt.trim();
     if (trimmed === "") return null;
     const s = get();
     const session = s.sessions.find((x) => x.id === id);
     if (session === undefined) return null;
+    // WO16 Stage A: echo what the user said into the transcript, in the order
+    // they said it, whether it goes out now or waits in the queue. This is the
+    // only locally-authored transcript line; the agent's stream never emits
+    // `kind: "user"`, so it cannot duplicate a real one.
+    //
+    // `echoed` guards the ONE path that re-enters `send` with a prompt the
+    // user already saw echoed: the queue drain below. Without it a queued
+    // message is echoed twice — once on queue, once on drain.
+    const echo: TranscriptLine = { kind: "user", text: trimmed, ts: Date.now() };
+    const withEcho = (x: Session) =>
+      echoed ? x.transcript : pushTranscript(x.transcript, echo);
     if (session.status !== "idle" || session.queue.length > 0) {
       set((st) => ({
-        sessions: st.sessions.map((x) => (x.id === id ? { ...x, queue: [...x.queue, trimmed] } : x)),
+        sessions: st.sessions.map((x) =>
+          x.id === id ? { ...x, queue: [...x.queue, trimmed], transcript: withEcho(x) } : x,
+        ),
       }));
       return null;
     }
@@ -270,7 +316,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // status on before the invoke promise settles — it must always win over
     // this optimistic mark, never be overwritten by a rollback.
     set((st) => ({
-      sessions: st.sessions.map((x) => (x.id === id ? { ...x, status: "working" } : x)),
+      sessions: st.sessions.map((x) =>
+        x.id === id ? { ...x, status: "working", transcript: withEcho(x) } : x,
+      ),
     }));
     try {
       await agentSessionSend(id, trimmed);
@@ -356,6 +404,17 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     });
   },
 
+  answerQuestion: async (id, text) => {
+    const trimmed = text.trim();
+    if (trimmed === "") return null;
+    // Clear first: the answer is on its way, and `send` may queue it for
+    // seconds. Leaving the question up meanwhile invites a double answer.
+    set((st) => ({
+      sessions: st.sessions.map((x) => (x.id === id ? { ...x, pendingQuestion: null } : x)),
+    }));
+    return get().send(id, trimmed);
+  },
+
   clearPendingQuestion: (id) => {
     set((st) => ({
       sessions: st.sessions.map((x) => (x.id === id ? { ...x, pendingQuestion: null } : x)),
@@ -377,9 +436,11 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
             ...session,
             status,
             currentTool: status === "idle" ? null : session.currentTool,
-            // F2 — the answer turn has started; the previous question is
-            // resolved (answered or superseded by a new prompt/turn).
-            pendingQuestion: status === "working" ? null : session.pendingQuestion,
+            // WO16 Stage A — `pendingQuestion` is deliberately NOT cleared
+            // here. Any turn sets `status:"working"`, including an unrelated
+            // queued prompt draining, which used to eat the question while
+            // the user was still composing an answer. `answerQuestion` and
+            // `clearPendingQuestion` own the clearing now (plus exit/restart).
           };
           break;
         }
@@ -415,6 +476,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
               inputTokens: session.usage.inputTokens + u.inputTokens,
               outputTokens: session.usage.outputTokens + u.outputTokens,
               totalTokens: session.usage.totalTokens + u.totalTokens,
+              cacheReadTokens: session.usage.cacheReadTokens + u.cacheReadTokens,
               turns: session.usage.turns + 1,
               // Take-latest, not sum: costUsd is already a running total
               // (see UsageTotals doc comment). A turn with no cost leaves
@@ -458,6 +520,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
                     inputTokens: session.usage.inputTokens + u.inputTokens,
                     outputTokens: session.usage.outputTokens + u.outputTokens,
                     totalTokens: session.usage.totalTokens + u.totalTokens,
+                    cacheReadTokens: session.usage.cacheReadTokens + u.cacheReadTokens,
                     turns: session.usage.turns + 1,
                     costUsd: u.costUsd ?? session.usage.costUsd,
                   },
@@ -512,7 +575,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         set((st) => ({
           sessions: st.sessions.map((x) => (x.id === e.id ? { ...x, queue: x.queue.slice(1) } : x)),
         }));
-        void get().send(e.id, head);
+        // `echoed: true` — this prompt was already echoed into the transcript
+        // when it was queued (WO16 Stage A).
+        void get().send(e.id, head, true);
       }
     }
   },

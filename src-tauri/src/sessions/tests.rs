@@ -435,7 +435,7 @@ fn build_boot_prompt_does_not_truncate_a_task_context_under_the_cap() {
 #[test]
 fn map_line_system_init_sets_working_and_captures_session_id() {
     let line = r#"{"type":"system","subtype":"init","session_id":"sess-123"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert_eq!(mapped.events, vec![status_event("as0", SessionStatus::Working, 1000)]);
     assert_eq!(mapped.claude_session_id, Some("sess-123".to_string()));
     assert!(!mapped.turn_ended);
@@ -444,7 +444,7 @@ fn map_line_system_init_sets_working_and_captures_session_id() {
 #[test]
 fn map_line_system_other_subtype_ignored() {
     let line = r#"{"type":"system","subtype":"something_else"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty());
     assert_eq!(mapped.claude_session_id, None);
     assert!(!mapped.turn_ended);
@@ -453,7 +453,7 @@ fn map_line_system_other_subtype_ignored() {
 #[test]
 fn map_line_assistant_text_block_trims_and_skips_empty() {
     let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"  hello  "},{"type":"text","text":"   "}]}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert_eq!(mapped.events, vec![text_event("as0", "hello".to_string(), 1000)]);
     assert!(!mapped.turn_ended);
 }
@@ -461,7 +461,7 @@ fn map_line_assistant_text_block_trims_and_skips_empty() {
 #[test]
 fn map_line_assistant_tool_use() {
     let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit"}]}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert_eq!(mapped.events.len(), 1);
     let ev = &mapped.events[0];
     assert_eq!(ev.kind, AgentEventKind::Tool);
@@ -480,7 +480,7 @@ fn map_line_assistant_usage_never_emits_a_usage_event() {
     // mapped now — this must hold even when the assistant-message usage is
     // non-zero, so a future regression can't quietly reintroduce it.
     let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2}}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty(), "{:?}", mapped.events);
 }
 
@@ -494,8 +494,8 @@ fn map_line_one_turn_with_both_assistant_and_result_usage_emits_exactly_one_usag
     let assistant_line = r#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":4,"cache_creation_input_tokens":21186,"cache_read_input_tokens":20672}}}"#;
     let result_line = r#"{"type":"result","subtype":"success","result":"ready","usage":{"input_tokens":2,"output_tokens":18,"cache_creation_input_tokens":21186,"cache_read_input_tokens":20672}}"#;
 
-    let assistant_mapped = map_line("as0", assistant_line, 1000);
-    let result_mapped = map_line("as0", result_line, 1001);
+    let assistant_mapped = map_line("as0", assistant_line, 1000, None);
+    let result_mapped = map_line("as0", result_line, 1001, None);
 
     let usage_events: Vec<&AgentEvent> = assistant_mapped
         .events
@@ -507,11 +507,164 @@ fn map_line_one_turn_with_both_assistant_and_result_usage_emits_exactly_one_usag
     assert_eq!(usage_events[0].usage.as_ref().unwrap().output_tokens, 18);
 }
 
+// ── WO16 bug 1: cache_read must not be charged to the budget ────────────
+
+#[test]
+fn map_usage_excludes_cache_read_from_the_total_but_still_reports_it() {
+    // A mid-conversation turn: the whole prompt comes back from cache, and
+    // only a handful of tokens are actually new. Before WO16 this line
+    // charged 100,721 against the ceiling; the cached 100,000 had already
+    // been charged on the turn that created them.
+    let line = r#"{"type":"result","subtype":"success","result":"ok","usage":{"input_tokens":7,"output_tokens":14,"cache_creation_input_tokens":700,"cache_read_input_tokens":100000}}"#;
+    let mapped = map_line("as0", line, 1000, None);
+    let u = mapped.observed_usage.expect("usage");
+    assert_eq!(u.total_tokens, 7 + 14 + 700, "cache_read must not be summed in");
+    assert_eq!(u.cache_read_tokens, 100_000, "…but it must still be reported");
+    assert_eq!(u.input_tokens, 7);
+    assert_eq!(u.output_tokens, 14);
+}
+
+#[test]
+fn map_usage_charges_each_context_token_once_across_a_conversation() {
+    // Turn 1 writes a 48k prompt into cache; turns 2 and 3 re-read it and add
+    // little. The ceiling should see ≈48k, not ≈144k — the regression that
+    // made a 60k ceiling stop a session on its own boot turn.
+    let turn1 = r#"{"type":"result","subtype":"success","result":"a","usage":{"input_tokens":10,"output_tokens":40,"cache_creation_input_tokens":48000,"cache_read_input_tokens":0}}"#;
+    let turn2 = r#"{"type":"result","subtype":"success","result":"b","usage":{"input_tokens":5,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":48000}}"#;
+    let turn3 = r#"{"type":"result","subtype":"success","result":"c","usage":{"input_tokens":5,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":48050}}"#;
+    let charged: u64 = [turn1, turn2, turn3]
+        .iter()
+        .map(|l| map_line("as0", l, 1000, None).observed_usage.unwrap().total_tokens)
+        .sum();
+    assert_eq!(charged, 48_050 + 35 + 35);
+    assert!(charged < 60_000, "a 60k ceiling must survive three turns, got {charged}");
+}
+
+#[test]
+fn map_usage_with_only_cache_read_reports_no_spend() {
+    // Nothing new was sent or generated: no usage event, nothing charged.
+    let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":9000}}}"#;
+    let mapped = map_line("as0", line, 1000, None);
+    assert!(mapped.observed_usage.is_none());
+    assert!(mapped.events.is_empty());
+}
+
 #[test]
 fn map_line_assistant_usage_all_zero_emits_nothing() {
     let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty());
+}
+
+// ── WO16 bug 2: the result line repeats the streamed answer ─────────────
+
+#[test]
+fn map_line_result_text_identical_to_the_streamed_text_is_not_emitted_twice() {
+    // What a real turn looks like: the answer streams as an assistant text
+    // block, then the terminal result line repeats it verbatim. Before WO16
+    // both were emitted and every answer appeared twice in the transcript.
+    let assistant = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Nested is fine."}]}}"#;
+    let result = r#"{"type":"result","subtype":"success","result":"Nested is fine.","usage":{"input_tokens":1,"output_tokens":4}}"#;
+
+    let a = map_line("as0", assistant, 1000, None);
+    assert_eq!(a.last_text.as_deref(), Some("Nested is fine."));
+    let texts_a: Vec<&str> =
+        a.events.iter().filter(|e| e.kind == AgentEventKind::Text).map(|e| e.text.as_deref().unwrap()).collect();
+    assert_eq!(texts_a, vec!["Nested is fine."]);
+
+    let r = map_line("as0", result, 1001, a.last_text.as_deref());
+    let texts_r: Vec<&str> =
+        r.events.iter().filter(|e| e.kind == AgentEventKind::Text).map(|e| e.text.as_deref().unwrap()).collect();
+    assert!(texts_r.is_empty(), "the duplicate must be suppressed, got {texts_r:?}");
+    // Everything else the result line owes is unaffected.
+    assert!(r.turn_ended);
+    assert!(r.events.iter().any(|e| e.kind == AgentEventKind::Usage));
+    assert!(r.events.iter().any(|e| e.kind == AgentEventKind::Status));
+}
+
+#[test]
+fn map_line_result_text_that_differs_is_still_emitted() {
+    // Never assume the repeat: a result that says something else, or a turn
+    // that streamed no assistant text at all, must still reach the transcript.
+    let result = r#"{"type":"result","subtype":"success","result":"Actually, nested.","usage":{"input_tokens":1,"output_tokens":4}}"#;
+    let differs = map_line("as0", result, 1000, Some("Nested is fine."));
+    assert!(differs
+        .events
+        .iter()
+        .any(|e| e.kind == AgentEventKind::Text && e.text.as_deref() == Some("Actually, nested.")));
+
+    let no_prior = map_line("as0", result, 1000, None);
+    assert!(no_prior
+        .events
+        .iter()
+        .any(|e| e.kind == AgentEventKind::Text && e.text.as_deref() == Some("Actually, nested.")));
+}
+
+#[test]
+fn carry_text_survives_lines_that_emit_no_text_of_their_own() {
+    // The regression this exists for, replayed as the CLI actually emits it:
+    // the answer streams, THEN a rate-limit line and a thinking-tokens line
+    // arrive, THEN the result repeats the answer. Carrying only the previous
+    // *line's* text lost the comparand on those two and the duplicate came
+    // back — which is exactly what a live session showed.
+    let stream = [
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"T1"}]}}"#,
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#,
+        r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":50}"#,
+        r#"{"type":"result","subtype":"success","result":"T1","usage":{"input_tokens":1,"output_tokens":2}}"#,
+    ];
+
+    let mut prev: Option<String> = None;
+    let mut emitted: Vec<String> = Vec::new();
+    for line in stream {
+        let mapped = map_line("as0", line, 1000, prev.as_deref());
+        for e in mapped.events.iter().filter(|e| e.kind == AgentEventKind::Text) {
+            emitted.push(e.text.clone().unwrap());
+        }
+        prev = carry_text(prev, &mapped);
+    }
+
+    assert_eq!(emitted, vec!["T1".to_string()], "the answer must appear exactly once");
+    assert!(prev.is_none(), "the turn boundary resets the comparand");
+}
+
+#[test]
+fn carry_text_resets_at_the_turn_boundary() {
+    // Two turns in one stream (what the persistent-session channel will look
+    // like): turn 2's first line must not be compared against turn 1's text.
+    let a1 = map_line("as0", r#"{"type":"assistant","message":{"content":[{"type":"text","text":"same"}]}}"#, 1, None);
+    let prev = carry_text(None, &a1);
+    assert_eq!(prev.as_deref(), Some("same"));
+    let r1 = map_line("as0", r#"{"type":"result","subtype":"success","result":"same","usage":{"input_tokens":1,"output_tokens":1}}"#, 2, prev.as_deref());
+    assert!(!r1.events.iter().any(|e| e.kind == AgentEventKind::Text), "turn 1 dedupes");
+    let prev = carry_text(prev, &r1);
+    assert!(prev.is_none());
+
+    // Turn 2 says the same thing again — a new turn, so it must be emitted.
+    let a2 = map_line("as0", r#"{"type":"assistant","message":{"content":[{"type":"text","text":"same"}]}}"#, 3, prev.as_deref());
+    assert!(a2.events.iter().any(|e| e.kind == AgentEventKind::Text && e.text.as_deref() == Some("same")));
+}
+
+#[test]
+fn map_line_deduped_result_still_asks_its_question() {
+    // The dedupe must never swallow a COWTEXT_ASK: the question event is
+    // emitted from the result text whether or not its Text twin survives.
+    let text = "Here is my read.\nCOWTEXT_ASK: flat or nested?";
+    let result = format!(
+        r#"{{"type":"result","subtype":"success","result":{},"usage":{{"input_tokens":1,"output_tokens":4}}}}"#,
+        serde_json::to_string(text).unwrap()
+    );
+    let mapped = map_line("as0", &result, 1000, Some(text));
+    assert!(
+        !mapped.events.iter().any(|e| e.kind == AgentEventKind::Text),
+        "duplicate text suppressed"
+    );
+    let q = mapped
+        .events
+        .iter()
+        .find(|e| e.kind == AgentEventKind::Question)
+        .expect("question survives the dedupe");
+    assert_eq!(q.text.as_deref(), Some("flat or nested?"));
 }
 
 // ── observed_usage: budget accounting only (WO06 §5.2) ──────────────────
@@ -522,23 +675,27 @@ fn map_line_assistant_usage_populates_observed_usage_without_emitting_an_event()
     // (§5.2): the assistant streaming line already carries usage today, it
     // is only the *emitted* event that stays suppressed.
     let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2}}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty(), "the emitted stream must stay unchanged");
     let usage = mapped.observed_usage.expect("observed_usage must be populated for budget accounting");
-    assert_eq!(usage.total_tokens, 18);
+    // WO16: was 18 (input+output+cache_creation+cache_read). `cache_read` is
+    // no longer charged — those tokens were charged on the turn that created
+    // them — so the total is 16 and the 2 re-read tokens are reported apart.
+    assert_eq!(usage.total_tokens, 16);
+    assert_eq!(usage.cache_read_tokens, 2);
 }
 
 #[test]
 fn map_line_assistant_zero_usage_observed_usage_is_none() {
     let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.observed_usage.is_none());
 }
 
 #[test]
 fn map_line_result_success_observed_usage_matches_the_emitted_usage_event() {
     let line = r#"{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":3,"output_tokens":4}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let emitted = mapped.events.iter().find(|e| e.kind == AgentEventKind::Usage).expect("usage event");
     assert_eq!(mapped.observed_usage.as_ref().map(|u| u.total_tokens), emitted.usage.as_ref().map(|u| u.total_tokens));
     assert_eq!(mapped.observed_usage.as_ref().map(|u| u.total_tokens), Some(7));
@@ -553,7 +710,7 @@ fn map_line_lines_with_no_usage_have_no_observed_usage() {
         r#"{"type":"stream_event","event":{"type":"content_block_delta"}}"#,
         "not json at all",
     ] {
-        let mapped = map_line("as0", line, 1000);
+        let mapped = map_line("as0", line, 1000, None);
         assert!(mapped.observed_usage.is_none(), "{line}");
     }
 }
@@ -561,7 +718,7 @@ fn map_line_lines_with_no_usage_have_no_observed_usage() {
 #[test]
 fn map_line_user_tool_result_ignored() {
     let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty());
     assert!(!mapped.turn_ended);
 }
@@ -569,7 +726,7 @@ fn map_line_user_tool_result_ignored() {
 #[test]
 fn map_line_result_success_emits_text_usage_idle_and_ends_turn() {
     let line = r#"{"type":"result","subtype":"success","result":"All done","usage":{"input_tokens":3,"output_tokens":4}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.turn_ended);
     assert_eq!(mapped.events.len(), 3);
     assert_eq!(mapped.events[0], text_event("as0", "All done".to_string(), 1000));
@@ -583,7 +740,7 @@ fn map_line_result_success_with_total_cost_usd_carries_it_on_the_usage_event() {
     // nested inside it — the mapper must read it from the top level and
     // thread it into the emitted `Usage.costUsd`.
     let line = r#"{"type":"result","subtype":"success","result":"done","total_cost_usd":0.0086265,"usage":{"input_tokens":3,"output_tokens":4}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let usage_event = mapped
         .events
         .iter()
@@ -601,7 +758,7 @@ fn map_line_result_success_without_total_cost_usd_is_tolerated_as_null() {
     // Absent `total_cost_usd` must never be fatal — `costUsd` reads as `None`
     // (wire `null`), everything else about the mapping is unaffected.
     let line = r#"{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":3,"output_tokens":4}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let usage_event = mapped
         .events
         .iter()
@@ -617,14 +774,14 @@ fn map_line_result_success_zero_total_tokens_drops_usage_event_even_with_cost() 
     // the `kind:"usage"` event entirely (contract §5.1), regardless of
     // whether `total_cost_usd` is present.
     let line = r#"{"type":"result","subtype":"success","result":"done","total_cost_usd":0.01,"usage":{"input_tokens":0,"output_tokens":0}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.iter().all(|e| e.kind != AgentEventKind::Usage), "{:?}", mapped.events);
 }
 
 #[test]
 fn map_line_result_success_empty_text_skips_text_event() {
     let line = r#"{"type":"result","subtype":"success","result":""}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.turn_ended);
     assert_eq!(mapped.events, vec![status_event("as0", SessionStatus::Idle, 1000)]);
 }
@@ -634,7 +791,7 @@ fn map_line_result_success_empty_text_skips_text_event() {
 #[test]
 fn map_line_result_with_cowtext_ask_marker_emits_text_and_question() {
     let line = r#"{"type":"result","subtype":"success","result":"Here is my plan.\nCOWTEXT_ASK: Should I use Postgres or SQLite?"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let text = mapped.events.iter().find(|e| e.kind == AgentEventKind::Text).expect("text event must survive");
     assert_eq!(text.text.as_deref(), Some("Here is my plan.\nCOWTEXT_ASK: Should I use Postgres or SQLite?"));
     let question = mapped.events.iter().find(|e| e.kind == AgentEventKind::Question).expect("question event");
@@ -644,14 +801,14 @@ fn map_line_result_with_cowtext_ask_marker_emits_text_and_question() {
 #[test]
 fn map_line_result_without_cowtext_ask_marker_emits_no_question() {
     let line = r#"{"type":"result","subtype":"success","result":"All done, no questions."}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.iter().all(|e| e.kind != AgentEventKind::Question), "{:?}", mapped.events);
 }
 
 #[test]
 fn map_line_result_with_two_marker_lines_emits_only_the_first_question() {
     let line = r#"{"type":"result","subtype":"success","result":"COWTEXT_ASK: First question?\nCOWTEXT_ASK: Second question?"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let questions: Vec<&AgentEvent> = mapped.events.iter().filter(|e| e.kind == AgentEventKind::Question).collect();
     assert_eq!(questions.len(), 1, "{questions:?}");
     assert_eq!(questions[0].text.as_deref(), Some("First question?"));
@@ -660,7 +817,7 @@ fn map_line_result_with_two_marker_lines_emits_only_the_first_question() {
 #[test]
 fn map_line_result_cowtext_ask_marker_trims_surrounding_whitespace_but_keeps_trailing_period() {
     let line = r#"{"type":"result","subtype":"success","result":"   COWTEXT_ASK:   Should I proceed with the migration.   "}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     let question = mapped.events.iter().find(|e| e.kind == AgentEventKind::Question).expect("question event");
     assert_eq!(question.text.as_deref(), Some("Should I proceed with the migration."));
 }
@@ -673,7 +830,7 @@ fn agent_event_kind_question_serializes_to_question() {
 #[test]
 fn map_line_result_error_subtype_emits_error_then_waiting() {
     let line = r#"{"type":"result","subtype":"error_max_turns","result":"ran out of turns"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.turn_ended);
     assert_eq!(mapped.events.len(), 2);
     assert_eq!(mapped.events[0].kind, AgentEventKind::Error);
@@ -684,7 +841,7 @@ fn map_line_result_error_subtype_emits_error_then_waiting() {
 #[test]
 fn map_line_result_is_error_true_emits_error_then_waiting() {
     let line = r#"{"type":"result","subtype":"success","is_error":true,"error":"boom"}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.turn_ended);
     assert_eq!(mapped.events[0].kind, AgentEventKind::Error);
     assert_eq!(mapped.events[0].text.as_deref(), Some("success: boom"));
@@ -694,7 +851,7 @@ fn map_line_result_is_error_true_emits_error_then_waiting() {
 #[test]
 fn map_line_stream_event_ignored() {
     let line = r#"{"type":"stream_event","event":{"type":"content_block_delta"}}"#;
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert!(mapped.events.is_empty());
     assert!(!mapped.turn_ended);
 }
@@ -702,7 +859,7 @@ fn map_line_stream_event_ignored() {
 #[test]
 fn map_line_non_json_becomes_text_verbatim() {
     let line = "warning: something happened";
-    let mapped = map_line("as0", line, 1000);
+    let mapped = map_line("as0", line, 1000, None);
     assert_eq!(mapped.events, vec![text_event("as0", line.to_string(), 1000)]);
     assert_eq!(mapped.claude_session_id, None);
     assert!(!mapped.turn_ended);
@@ -1004,7 +1161,7 @@ fn budget_event_text_matches_the_contract_example() {
 
 #[test]
 fn budget_event_carries_the_triggering_lines_input_output_and_cost_but_spent_as_total() {
-    let line_usage = Usage { input_tokens: 40, output_tokens: 12, total_tokens: 52, context_window: None, cost_usd: Some(0.01) };
+    let line_usage = Usage { input_tokens: 40, output_tokens: 12, total_tokens: 52, cache_read_tokens: 0, context_window: None, cost_usd: Some(0.01) };
     let ev = budget_event("as1", Some(&line_usage), 9999, 5000, 1);
     let usage = ev.usage.unwrap();
     assert_eq!(usage.input_tokens, 40);

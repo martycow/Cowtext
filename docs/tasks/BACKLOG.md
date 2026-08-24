@@ -98,6 +98,19 @@ and present a report first. The decision itself is tracked as an open task in
 | P1.5 Documentation / context compression | new | high | p1, docs |  | A real README (five-minute quick start, trust model, what is generated, limitations, troubleshooting) plus the support matrix; and `docs/fleet/ACTIVITY_LOG.md` reduced to the three most recent sessions with older entries archived **only** via `git mv`. Blocked on Marty for the archive move: `docs/_archive/` is write-frozen by docs-guard. |
 | P1.6 Replace the no-op frontend test | new | medium | p1, testing, hygiene |  | Replace the placeholder test with a real behaviour test, or delete it until the feature it points at exists. A test that asserts nothing is worse than no test — it makes the suite count lie. |
 
+## WO16 research items (opened 2026-08-22)
+
+The three items filed under **For Research** in `docs/INPUT_PROMPT.md`. Scoped and
+costed during WO16, deliberately **not** implemented — the work order asked for
+research, and each one turns out to have a design fork worth deciding before code.
+Feasibility notes are the outcome of that research, not a plan.
+
+| Name | Status | Priority | Tags | Agent | Description |
+|---|---|---|---|---|---|
+| Image node — a picture with a description | new | medium | wo16, nodes, research |  | **Feasible without breaking the core invariant.** A node is a real `.md` file, and an image node is one holding `![alt](path)` plus prose, with images under `context/assets/`. Compile emits the description and the relative path — never base64 (hard rule). Open questions, all worth answering before code: (1) a *series* of images per node vs. one — a series is a body convention, not a schema change, so prefer it; (2) what the canvas card previews (thumbnail vs. count) and what that costs the render budget; (3) token cost, since a described image is prose an agent pays for on every read; (4) whether adopting an existing image file mints a node the way `adoptFile` does for `.md`. New node role ⇒ graph schema bump + migration. |
+| External Source node — URLs, folders, files | new | medium | wo16, nodes, research |  | **Split it; the two halves are not the same size.** v1 is pointer-only: a node whose body lists URLs and paths, compiled verbatim, and it costs almost nothing. v2 is *resolution* — fetching a URL, or globbing a folder into a file list — which is a network/trust boundary and needs the same never-write-without-diff-preview discipline Compile has, plus a cache with an explicit staleness story. Note the overlap to settle first: "point at a folder" is close to what the file rail's Adopt already does, and `import.rs` already ingests external context. Decide whether this is a new role or a tagged `tool`/`env` node before drawing anything. |
+| Product Version node — pinned, undeletable, format-aware | new | medium | wo16, nodes, versioning, research |  | **The friction is "cannot be deleted", which no node can claim today.** Cleanest shape that keeps every invariant: the version itself lives in `ProjectMeta` (`src-tauri/src/project_meta.rs` — a versioned envelope, so adding a field is a cheap `PROJECT_META_VERSION` bump), and `context/version.md` is a real node carrying a new `pinned` flag that every delete path refuses. That is a `graph.json` v5→v6 bump plus migration, plus guards in the canvas, the rail and Rust — meaningful, not huge. The format wizard (`major.minor.####`) and the bump control are the easy half. Decide first: does "always in hierarchy" mean auto-wired edges to every root, and what happens to the node when a user deletes `context/version.md` on disk behind Cowtext's back. |
+
 ## WO15 debts (opened 2026-08-22)
 
 Recorded at close-out; none blocks the release gate. Every row was read in the tree

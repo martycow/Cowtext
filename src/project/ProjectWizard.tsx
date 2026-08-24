@@ -46,9 +46,10 @@ import { gitInit, gitStatus } from "../git/api";
 import { BranchPicker, isValidBranchName } from "../git/BranchPicker";
 import type { GitInitResult, GitStatus } from "../git/types";
 import { presetApply } from "../preset/api";
-import { PRINCIPLES, PROVIDER_SUPPORT_SENTENCE, STACK_CATEGORIES } from "../resources";
+import { PRINCIPLES, PROVIDER_SUPPORT_SENTENCE } from "../resources";
 import { useHooksAddr } from "../store/project";
 import { useSettingsStore } from "../store/settings";
+import { knownStackIds, stackGroups } from "../settings/stackTable";
 import { buildProjectGraph } from "../wizard/projectGraph";
 
 const ICON_BTN =
@@ -344,12 +345,24 @@ export function ProjectWizard({
   const [installHooks, setInstallHooks] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
 
+  // WO16 Block C — the user's stack table and their defaults for it. Read
+  // above the state block because `stackIds` seeds itself from them.
+  const defaultStackItemIds = useSettingsStore((s) => s.defaultStackItemIds);
+  const customStackItems = useSettingsStore((s) => s.customStackItems);
+
   // ── Block 6 — principles, stack, git ─────────────────────────────────
   // Nothing here touches disk. Every selection feeds `buildProjectGraph`,
   // whose plan is what the Create step LISTS and what Create WRITES — one
   // computation, so the preview cannot drift from the result.
   const [principleIds, setPrincipleIds] = useState<readonly string[]>([]);
-  const [stackIds, setStackIds] = useState<readonly string[]>([]);
+  // WO16 Block C — the wizard starts on the user's saved defaults rather
+  // than blank. Filtered through the live table on the way in: a default
+  // naming a custom item that has since been deleted is dropped HERE, at
+  // the point of use, so `settings.json` is never quietly rewritten behind
+  // the user's back (the same rule `defaultCompileTargets` follows).
+  const [stackIds, setStackIds] = useState<readonly string[]>(() =>
+    defaultStackItemIds.filter((id) => knownStackIds(customStackItems).has(id)),
+  );
   const [fixedStack, setFixedStack] = useState(false);
   const [stackQuery, setStackQuery] = useState("");
   const [branch, setBranch] = useState("main");
@@ -443,8 +456,9 @@ export function ProjectWizard({
         stackItemIds: stackIds,
         fixedStackRule: fixedStack,
         compileTargets: defaultCompileTargets,
+        customStackItems,
       }),
-    [meta.name, principleIds, stackIds, fixedStack, defaultCompileTargets],
+    [meta.name, principleIds, stackIds, fixedStack, defaultCompileTargets, customStackItems],
   );
 
   // Git state, all derived from one probe. `gitOn` is the single truth the
@@ -744,12 +758,14 @@ export function ProjectWizard({
           };
 
   const stackQ = stackQuery.trim().toLowerCase();
-  const stackGroups = STACK_CATEGORIES.map((category) => ({
-    category,
-    items: category.items.filter(
-      (item) => stackQ === "" || item.label.toLowerCase().includes(stackQ),
-    ),
-  })).filter((g) => g.items.length > 0);
+  const stackRows = stackGroups(customStackItems)
+    .map((group) => ({
+      ...group,
+      rows: group.rows.filter(
+        (row) => stackQ === "" || row.label.toLowerCase().includes(stackQ),
+      ),
+    }))
+    .filter((g) => g.rows.length > 0);
 
   return (
     <div
@@ -986,16 +1002,16 @@ export function ProjectWizard({
                 aria-label="Search the stack"
                 className={INPUT}
               />
-              {stackGroups.length === 0 ? (
+              {stackRows.length === 0 ? (
                 <p className="text-xs text-content-muted">Nothing in the list matches that search.</p>
               ) : (
-                stackGroups.map(({ category, items }) => (
-                  <div key={category.id}>
+                stackRows.map((group) => (
+                  <div key={group.id}>
                     <p className="mb-1.5 font-mono text-2xs uppercase tracking-wider text-content-muted">
-                      {category.label}
+                      {group.label}
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {items.map((item) => {
+                      {group.rows.map((item) => {
                         const checked = stackIds.includes(item.id);
                         return (
                           <button

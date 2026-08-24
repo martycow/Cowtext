@@ -187,3 +187,160 @@ describe("selectNodeTypeHelpOpen", () => {
     );
   });
 });
+
+// ── WO16 Block B/C — the three additive fields ────────────────────────
+//
+// Same posture as every field above: a settings.json we do not understand
+// must cost the user the ONE value that is wrong, never the whole list and
+// never the app's ability to start. These three carry more risk than the
+// scalars do, because two of them name things — a preset id that shadows a
+// built-in, or an icon file name that is really a path — so the merge is
+// where those are refused, not the UI that renders them.
+
+describe("mergeSettings — custom agent presets", () => {
+  const good = {
+    id: "custom:my-reviewer",
+    name: "My reviewer",
+    group: "task",
+    description: "Reads a diff.",
+    whenToUse: "Use when I say so.",
+    tools: ["Read", "Grep"],
+    mode: "restrict",
+    priority: 2,
+  };
+
+  it("defaults to none when the field is absent or not an array", () => {
+    expect(mergeSettings({}).customAgentPresets).toEqual([]);
+    expect(mergeSettings({ customAgentPresets: "nope" }).customAgentPresets).toEqual([]);
+    expect(mergeSettings({ customAgentPresets: { id: "x" } }).customAgentPresets).toEqual([]);
+  });
+
+  it("keeps a well-formed preset verbatim", () => {
+    expect(mergeSettings({ customAgentPresets: [good] }).customAgentPresets).toEqual([good]);
+  });
+
+  it("drops only the bad entry, never the rest of the list", () => {
+    const out = mergeSettings({
+      customAgentPresets: [good, { id: "custom:broken" }, { ...good, id: "custom:second" }],
+    }).customAgentPresets;
+    expect(out.map((p) => p.id)).toEqual(["custom:my-reviewer", "custom:second"]);
+  });
+
+  it("refuses an id that does not declare itself custom", () => {
+    // Otherwise a hand-edited file could shadow a built-in and the picker
+    // would render two chips claiming the same identity.
+    expect(mergeSettings({ customAgentPresets: [{ ...good, id: "reviewer" }] }).customAgentPresets)
+      .toEqual([]);
+  });
+
+  it("refuses an unknown group rather than filing it under a default", () => {
+    expect(mergeSettings({ customAgentPresets: [{ ...good, group: "wat" }] }).customAgentPresets)
+      .toEqual([]);
+  });
+
+  it("refuses an unknown mode", () => {
+    expect(mergeSettings({ customAgentPresets: [{ ...good, mode: "yolo" }] }).customAgentPresets)
+      .toEqual([]);
+  });
+
+  it("keeps the first of two entries sharing an id", () => {
+    const out = mergeSettings({
+      customAgentPresets: [good, { ...good, name: "Impostor" }],
+    }).customAgentPresets;
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("My reviewer");
+  });
+
+  it("forces inherit to mean no tools at all, whatever the file claims", () => {
+    const out = mergeSettings({
+      customAgentPresets: [{ ...good, mode: "inherit", tools: ["Read"] }],
+    }).customAgentPresets;
+    expect(out[0].mode).toBe("inherit");
+    expect(out[0].tools).toEqual([]);
+  });
+
+  it("falls back to priority 1 for a missing or unusable priority", () => {
+    for (const priority of [undefined, "high", NaN, null]) {
+      const out = mergeSettings({ customAgentPresets: [{ ...good, priority }] }).customAgentPresets;
+      expect(out[0].priority).toBe(1);
+    }
+  });
+
+  it("keeps a pinned model but omits the key when it is empty", () => {
+    expect(
+      mergeSettings({ customAgentPresets: [{ ...good, model: "claude-fable-5" }] })
+        .customAgentPresets[0].model,
+    ).toBe("claude-fable-5");
+    expect(
+      mergeSettings({ customAgentPresets: [{ ...good, model: "" }] }).customAgentPresets[0].model,
+    ).toBeUndefined();
+  });
+});
+
+describe("mergeSettings — custom stack items", () => {
+  const item = { id: "custom:in-house", label: "In-house", categoryId: "tooling", iconFile: null };
+
+  it("defaults to none, keeps a good row verbatim", () => {
+    expect(mergeSettings({}).customStackItems).toEqual([]);
+    expect(mergeSettings({ customStackItems: [item] }).customStackItems).toEqual([item]);
+  });
+
+  it("refuses an id that does not declare itself custom", () => {
+    expect(mergeSettings({ customStackItems: [{ ...item, id: "typescript" }] }).customStackItems)
+      .toEqual([]);
+  });
+
+  it("trims and caps an over-long label instead of dropping the row", () => {
+    const out = mergeSettings({
+      customStackItems: [{ ...item, label: `  ${"x".repeat(200)}  ` }],
+    }).customStackItems;
+    expect(out).toHaveLength(1);
+    expect(out[0].label).toHaveLength(40);
+  });
+
+  it("drops a row with no usable label", () => {
+    expect(mergeSettings({ customStackItems: [{ ...item, label: "   " }] }).customStackItems)
+      .toEqual([]);
+  });
+
+  it("files a row with a missing category under Custom rather than losing it", () => {
+    expect(
+      mergeSettings({ customStackItems: [{ ...item, categoryId: undefined }] }).customStackItems[0]
+        .categoryId,
+    ).toBe("custom");
+  });
+
+  it("refuses an iconFile that is really a path", () => {
+    // The icon name is joined onto app_config_dir Rust-side. Rust refuses
+    // these too — this is the same rule stated on both sides of the wire on
+    // purpose, because either one alone is one edit away from being the
+    // only one (the WO15 standing lesson about mirrors).
+    for (const iconFile of ["../evil.png", "sub/evil.png", "sub\\evil.png"]) {
+      expect(mergeSettings({ customStackItems: [{ ...item, iconFile }] }).customStackItems[0]
+        .iconFile).toBeNull();
+    }
+    expect(
+      mergeSettings({ customStackItems: [{ ...item, iconFile: "abc123.png" }] }).customStackItems[0]
+        .iconFile,
+    ).toBe("abc123.png");
+  });
+});
+
+describe("mergeSettings — default stack ids", () => {
+  it("defaults to none and keeps only strings", () => {
+    expect(mergeSettings({}).defaultStackItemIds).toEqual([]);
+    expect(
+      mergeSettings({ defaultStackItemIds: ["typescript", 7, "", null, "custom:x"] })
+        .defaultStackItemIds,
+    ).toEqual(["typescript", "custom:x"]);
+  });
+
+  it("carries through an id this build does not know", () => {
+    // Deliberate: the wizard filters at the point of use, so a default
+    // naming an item added by a NEWER build survives a round-trip through
+    // an older one instead of being silently deleted.
+    expect(mergeSettings({ defaultStackItemIds: ["not-a-real-item"] }).defaultStackItemIds).toEqual([
+      "not-a-real-item",
+    ]);
+  });
+});
