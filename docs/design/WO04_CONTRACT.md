@@ -1,3 +1,22 @@
+> ## ⚠ SUPERSEDED BASELINE — do not dispatch this contract as written (2026-08-24)
+>
+> A code read on 2026-08-24 found the **preconditions dead**, four work orders on.
+> This contract assumes invoke 54, `GRAPH_VERSION` 3, 13 roles and 7 edge kinds; the
+> repo is at **81 / v5 / 14 / 5**. All eight commands §3 proposes are absent and
+> `.github/` does not exist, so none of its backend was ever built — but the ground
+> moved anyway. Three specs are now **invalid**, not merely unbuilt:
+>
+> - **§4.4 skill artifact target** — `compile.rs:869` states the reverse: `.claude/skills/`
+>   is CRUD-managed by `agents.rs` and compile must never write there. D16 retires with it.
+> - **§4.1's `command → Inline { "Commands" }`** — `command` nodes already compile to
+>   their own `.claude/commands/<stem>.md` (`compile.rs:1112-1146`).
+> - **D5 / §4.8 loadouts** — they write `pinned`, a field v5 deleted in favour of
+>   `rootLoad`.
+>
+> **The design is still good.** The rebase, what survives verbatim, and the staged plan
+> are in **`docs/design/L1_PLAN.md`**. Read that first; treat everything below as the
+> source it was rebased from.
+
 # WO04 Contract — L1 Completion (frozen)
 
 **Work order 04** · drafted 2026-08-19 · **amended 2026-08-19 (A1, pre-dispatch)** ·
