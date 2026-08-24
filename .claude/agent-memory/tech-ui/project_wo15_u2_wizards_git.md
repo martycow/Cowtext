@@ -9,7 +9,7 @@ WO15 lane U2 (2026-08-22): `ProjectWizard.tsx` (6-step `new` mode),
 `BranchPicker.tsx` (new, shared with `GitWizard.tsx`), `GitWizard.tsx`
 (identity row + "Make the first commit"), `gitignorePresets.ts`,
 `NodeWizard.tsx` "Node type", `PreviewPane.tsx` "What you get". Contract:
-`docs/design/WO15_CONTRACT.md` §6 U2.
+`docs/_archive/contracts/WO15_CONTRACT.md` §6 U2.
 
 **The scaffold-once guard is load-bearing.** The wizard's Create runs
 `projectInit → presetApply → gitInit(root, branch, true)`, and only the git

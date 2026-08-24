@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Landed 2026-08-20. Full spec: `docs/design/WO11_CONTRACT.md` §4.2/§4.3/§5.7/§5.11.
+Landed 2026-08-20. Full spec: `docs/_archive/contracts/WO11_CONTRACT.md` §4.2/§4.3/§5.7/§5.11.
 Zone was exactly `src-tauri/src/agents.rs` + `agents/tests.rs` +
 `src/agents/api.ts` + new `src/agents/avatarApi.ts`. `lib.rs` was explicitly
 NOT mine (lane R1) — the 4 new commands compile but sit unregistered until

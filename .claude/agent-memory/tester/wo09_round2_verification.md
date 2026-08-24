@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO09 round 2 (cartridge connectors, frozen contract `docs/design/WO09_CONNECTOR_CONTRACT.md`)
+WO09 round 2 (cartridge connectors, frozen contract `docs/_archive/contracts/WO09_CONNECTOR_CONTRACT.md`)
 verified 2026-08-19 against uncommitted working tree on top of `c9f7ec6`. All gates green:
 `npm run build` clean, `npm run lint` 0 errors, `cargo clippy --all-targets -- -D warnings`
 clean, `cargo test` 542/542 (524 lib + 18 CLI), invoke-name contract 63/63 exact bijection

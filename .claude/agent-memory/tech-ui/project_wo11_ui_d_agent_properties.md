@@ -9,7 +9,7 @@ WO11 lane UI-D shipped 2026-08-20: `src/agents/AgentEditor.tsx` (full rewrite),
 `src/agents/ToolPicker.tsx`, `src/agents/modelCatalog.ts`,
 `src/agents/AgentAvatar.tsx`, `src/store/agents.ts`,
 `src/orchestrator/OrchestratorView.tsx`. Full contract:
-`docs/design/WO11_CONTRACT.md`. R2 (agents backend: avatars, memory probe,
+`docs/_archive/contracts/WO11_CONTRACT.md`. R2 (agents backend: avatars, memory probe,
 `agent_save`→`AgentDoc`) and R1 (git + `lib.rs` registrations) had BOTH
 already landed by the time this lane started — zero unresolved-import gates,
 full green (`tsc`/`build`/`lint`) on the first pass. Don't assume "R2 hasn't

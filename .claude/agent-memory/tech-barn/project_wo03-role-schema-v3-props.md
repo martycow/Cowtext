@@ -45,7 +45,7 @@ still take no role param at all.
 
 **UPDATE (WO13 B1, role set 13→14, `rules`→`rule`/`snippet`→`example`/
 `task`→`workflow`/`reference` gone, `decision`/`env`/`tool` new — contract
-`docs/design/WO13_CONTRACT.md` §14.6 froze the mapping, no judgement call
+`docs/_archive/contracts/WO13_CONTRACT.md` §14.6 froze the mapping, no judgement call
 needed):**
 
 - **cabinet**: `rule`, `invariant`, `trap`, `agent` (unchanged from v3 modulo rename)

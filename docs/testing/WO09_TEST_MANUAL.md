@@ -1,7 +1,7 @@
 # WO09 Manual Test Script — Canvas connectors, round 2
 
 Hand-run test manual for the round-2 cartridge-connector rework (frozen contract
-`docs/design/WO09_CONNECTOR_CONTRACT.md`). Marty rejected round 1 on two counts —
+`docs/_archive/contracts/WO09_CONNECTOR_CONTRACT.md`). Marty rejected round 1 on two counts —
 "the wire is too far from the socket" and "connectors need to look like cartridge
 contacts and support more than one wire" — and this script exists to prove both are
 actually fixed, not just claimed fixed. Run it top to bottom in one sitting; sections

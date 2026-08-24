@@ -221,7 +221,7 @@ The whole treatment is one block in `styles/index.css`; `PIN_REACH` / `SOCKET_BI
 `canvas/edgePath.ts` land the wire 4px inside the pin and 3px inside the socket, so it
 plugs in with no daylight rather than floating short of the hardware. `SLOT_PITCH` (8px) is
 the one number CSS and TS must agree on. Change them together — the frozen geometry table
-and its WO10 amendment are `docs/design/WO09_CONNECTOR_CONTRACT.md` §3 / §3a.
+and its WO10 amendment are `docs/_archive/contracts/WO09_CONNECTOR_CONTRACT.md` §3 / §3a.
 
 ## Typography
 

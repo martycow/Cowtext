@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO06 split contract lane G2 (`docs/design/WO06_CONTRACT.md` §4, §10) into
+WO06 split contract lane G2 (`docs/_archive/contracts/WO06_CONTRACT.md` §4, §10) into
 finer-grained per-agent zones: T2 = `tasklinks.rs` (sidecar CRUD), T3 =
 `taskctx.rs` (subgraph closure + compile reuse), T4 = `sessions.rs` (budgets
 + boot-prompt injection). T3 landed `task_context_preview` and
@@ -105,7 +105,7 @@ lane lands, and should snapshot/report its own module's isolated result
 rather than block on a green whole-crate gate that isn't its to fix.
 
 See also [[wo06-stage0-seams]] for the Stage-0 wiring this lane's stub
-bodies replaced, and `docs/design/WO06_CONTRACT.md` §4 for the frozen
+bodies replaced, and `docs/_archive/contracts/WO06_CONTRACT.md` §4 for the frozen
 closure rule and §4.5 for the write-allowlist disjointness ruling.
 
 **Post-hoc discovery, flagged for tech-lead — a real cross-lane semantic
@@ -118,7 +118,7 @@ implement **different depth-cap semantics** for the same contract
 sentence (§4.1: "Depth cap 8; a cycle is a ParentCycle error, not a silent
 truncation"). Flagged, not privately reconciled, at build time.
 
-**RESOLVED in the WO06 audit fix round (O2 + O3, `docs/design/WO06_AUDIT.md`):**
+**RESOLVED in the WO06 audit fix round (O2 + O3, `docs/_archive/contracts/WO06_AUDIT.md`):**
 tech-lead ruled `tasklinks::ancestor_chain`'s semantics canonical (exceeding
 depth 8 ⇒ `Err`/`ParentCycle`, same as a genuine cycle) and ordered
 `taskctx.rs` to stop reimplementing both the ancestry walk and the sidecar

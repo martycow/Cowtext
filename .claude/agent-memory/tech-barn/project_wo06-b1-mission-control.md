@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO06 (`docs/design/WO06_CONTRACT.md`) lane B1 asked for per-session "stalls"
+WO06 (`docs/_archive/contracts/WO06_CONTRACT.md`) lane B1 asked for per-session "stalls"
 in the barn: a floor marker + always-visible nameplate + budget gauge on
 each live `AgentHerd` sprite, dark when the session's token spend hits its
 ceiling. Built entirely inside `src/scene/` (`props.ts`: `makeStallMarker`,

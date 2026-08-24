@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Lane U4b of WO15 (`docs/design/WO15_CONTRACT.md` §6 U4b), 2026-08-21/22.
+Lane U4b of WO15 (`docs/_archive/contracts/WO15_CONTRACT.md` §6 U4b), 2026-08-21/22.
 Three non-obvious things worth carrying forward.
 
 **1. Swapping a free-text field for a chip set leaves a live landmine.**

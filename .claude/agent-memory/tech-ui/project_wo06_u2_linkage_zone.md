@@ -7,7 +7,7 @@ metadata:
 
 On 2026-08-19, a tech-ui dispatch labeled "lane U2-linkage" for WO06 (task-node
 linkage, subgraph preview, budget UI) gave a FILE ZONE that does not match
-`docs/design/WO06_CONTRACT.md` §10's lane grid verbatim:
+`docs/_archive/contracts/WO06_CONTRACT.md` §10's lane grid verbatim:
 
 - Dispatch zone: `src/sessions/**` + new dirs I create (e.g. `src/tasklinks/`)
   + a new `src/store/tasklinks.ts`. Forbidden: `src/tasks/**`, `src/store/tasks.ts`,

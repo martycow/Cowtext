@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO01 Block F (docs/design/WO01_BLOCK_F_CONTRACT.md, frozen 2026-08-18) splits work
+WO01 Block F (docs/_archive/contracts/WO01_BLOCK_F_CONTRACT.md, frozen 2026-08-18) splits work
 across three lanes in one fleet run: lane R (tech-general) owns
 `src-tauri/src/sessions.rs`/`worktree.rs` + `src/store/sessions.ts` +
 `src/sessions/api.ts`; lane U (tech-ui) owns `RosterBar.tsx`/`AgentPanel.tsx`/

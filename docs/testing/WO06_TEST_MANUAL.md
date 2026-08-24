@@ -9,7 +9,7 @@ starting states that would corrupt the running DAG example).
 
 **RE-VERIFICATION NOTE (2026-08-19, post-fix-round, commit `6d81251`).** This manual replaces an
 earlier version written *before* a fix round landed on top of `tech-lead`'s adversarial audit
-(`docs/design/WO06_AUDIT.md`). The earlier version is now **stale and wrong** on the single most
+(`docs/_archive/contracts/WO06_AUDIT.md`). The earlier version is now **stale and wrong** on the single most
 important point: it said §4/§5 (the differentiator) had no reachable UI control. **That is no
 longer true.** `TaskContextModal` and `TaskLinksPanel` are now genuinely mounted and clickable —
 see Section G, rewritten below with real steps. `handoff_node_propose`'s Rust body is also no
@@ -594,7 +594,7 @@ Tester: ____________  Date: ____________  Build/commit: ____________
 
 ## Findings — re-verification pass, 2026-08-19, commit `6d81251`
 
-Everything below was **run**, not inferred from `docs/design/WO06_AUDIT.md`. Where a check could
+Everything below was **run**, not inferred from `docs/_archive/contracts/WO06_AUDIT.md`. Where a check could
 only be done by reading (a handful, noted explicitly), that is called out — everything else has a
 command and an observed result above it in this document or in this section.
 

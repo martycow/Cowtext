@@ -56,7 +56,7 @@ still doing real work by the time all WO03 lanes have merged.
 
 ## Contract count-vs-enumeration mismatch: node roles are 13, not 12
 
-`docs/design/WO03_CONTRACT.md` says "Node role enum 7 → 12" but its own
+`docs/_archive/contracts/WO03_CONTRACT.md` says "Node role enum 7 → 12" but its own
 explicit enumeration (7 existing + `command, invariant, trap, skill,
 snippet, style` = 6 new) lists **13** values. Lane A implemented the
 explicit list verbatim (didn't drop a named role to force the count to
@@ -103,7 +103,7 @@ check too or the Rust-side "auto-upgrade" work has no visible effect.
 
 ## Audit fix round (D5, D6, D10) — 2026-08-19
 
-`docs/design/WO03_AUDIT.md` (tech-lead, adversarial) found three defects in
+`docs/_archive/contracts/WO03_AUDIT.md` (tech-lead, adversarial) found three defects in
 this lane, all fixed in the same session:
 
 - **D5 (collation mismatch):** `project.rs`'s `serialize_graph` sorted ids

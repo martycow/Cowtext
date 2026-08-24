@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-On 2026-08-19, `docs/design/WO06_AUDIT.md` found the WO06 differentiator
+On 2026-08-19, `docs/_archive/contracts/WO06_AUDIT.md` found the WO06 differentiator
 (§4 per-task subgraph injection) fully built on the Rust side but with **zero
 UI entry point** — `TaskContextModal` (U2, `src/taskctx/`) and
 `TaskLinksPanel` (U2, `src/tasklinks/`) existed but were imported by nothing.

@@ -7,7 +7,7 @@ metadata:
 
 WO06 Lane T1-dag (2026-08-19) added task-to-task dependencies with cycle
 detection to `src-tauri/src/tasks.rs` and fixed O2/O3. Full spec:
-`docs/design/WO06_CONTRACT.md` §3.1/§3.3/§11. Zone was `tasks.rs` +
+`docs/_archive/contracts/WO06_CONTRACT.md` §3.1/§3.3/§11. Zone was `tasks.rs` +
 `tasks/tests.rs` only — did not touch `tasklinks.rs`/`taskctx.rs`/
 `sessions.rs` (other lanes, see [[wo06-lane-t2-tasklinks]] and
 [[wo06-lane-g3-budgets]]).

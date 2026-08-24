@@ -1,11 +1,11 @@
 ---
 name: manual-format
-description: The established Cowtext test-manual format — structure, step style, and sign-off table — distilled from docs/testing/PHASE2_TEST_MANUAL.md (the reference example). Load before writing or reviewing any manual in docs/testing/.
+description: The established Cowtext test-manual format — structure, step style, and sign-off table — distilled from docs/_archive/manuals/PHASE2_TEST_MANUAL.md (the reference example). Load before writing or reviewing any manual in docs/testing/.
 ---
 
 # Test manual format
 
-Reference example: `docs/testing/PHASE2_TEST_MANUAL.md`. Every manual in
+Reference example: `docs/_archive/manuals/PHASE2_TEST_MANUAL.md`. Every manual in
 `docs/testing/` follows this shape. Manuals are written against the code **as
 built**, not as specced — verify every named control exists before writing the step.
 

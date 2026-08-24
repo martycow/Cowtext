@@ -12,7 +12,7 @@ structural in `total_order`'s Kahn implementation.
 
 ## `overrides` ordering direction — undocumented in the contract, resolved by literal re-reading
 
-The WO03 contract (`docs/design/WO03_CONTRACT.md`) says `overrides` is
+The WO03 contract (`docs/_archive/contracts/WO03_CONTRACT.md`) says `overrides` is
 "STRUCTURAL — participates in Kahn/cycle validation and ordering" but never
 states which direction (does the overriding node come before or after the
 overridden one?). The Lane B dispatch prompt, however, contains the

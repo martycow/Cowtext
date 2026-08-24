@@ -74,7 +74,7 @@ trusting the report):**
    selection change, so a user habitually on the Markdown tab lands in this
    bypass with zero extra clicks just by clicking an agent node.
 
-Manual updated: `docs/testing/WO11_TEST_MANUAL.md`, now 109 steps, section G
+Manual updated: `docs/_archive/manuals/WO11_TEST_MANUAL.md`, now 109 steps, section G
 restructured into G.1-G.7 (G.3/G.6 are regression checks expected to pass
 deterministically now; G.7 is the new open defect, expected to still repro).
 Sign-off table has a dedicated "OPEN DEFECT" row for G.7 so it can't be

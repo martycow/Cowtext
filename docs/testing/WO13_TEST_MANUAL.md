@@ -1,6 +1,6 @@
 # WO13 Manual Test Script — Taxonomy Overhaul + 7 Acceptance Defects + Fix Round
 
-Hand-run test manual for WO13 (`docs/design/WO13_CONTRACT.md`, frozen +
+Hand-run test manual for WO13 (`docs/_archive/contracts/WO13_CONTRACT.md`, frozen +
 Amendment 1 §21, Amendment 3 §7.3) **after** the post-audit fix round: the
 node-role refactor (14 roles / 13 pickable), the edge model refactor (5
 kinds, guards, `resolveLoad`, lint), the agent-modal refactor, the

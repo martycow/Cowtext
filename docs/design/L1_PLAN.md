@@ -1,7 +1,7 @@
 # L1 development plan — finishing the context graph
 
 **Opened 2026-08-24.** A plan, not a frozen contract. It supersedes the baseline of
-`docs/design/WO04_CONTRACT.md` while keeping most of its design; §0 says exactly what
+`docs/_archive/contracts/WO04_CONTRACT.md` while keeping most of its design; §0 says exactly what
 of that contract survives.
 
 Grounded in a code read on 2026-08-24, not in the contract's own prose or the backlog.
@@ -267,5 +267,5 @@ three the backlog claimed).
 Code read 2026-08-24: `src-tauri/src/{lib,project,compile,resolve_load,import}.rs`,
 `src-tauri/src/compile/tests.rs`, `src/config/{nodeTypes,resolveLoad,edgeRules}.ts`,
 `src/canvas/`, `src/preset/starter.ts`, `package.json`, `.github/` (absent).
-Docs: `docs/design/WO04_CONTRACT.md`, `docs/design/WO17_PLAN.md`, `docs/tasks/*`,
+Docs: `docs/_archive/contracts/WO04_CONTRACT.md`, `docs/design/WO17_PLAN.md`, `docs/tasks/*`,
 `docs/TERMINOLOGY.md`.

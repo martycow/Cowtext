@@ -5,9 +5,9 @@ metadata:
   type: project
 ---
 
-WO06 (`docs/design/WO06_CONTRACT.md`) shipped 63 invoke commands / 524 tests
+WO06 (`docs/_archive/contracts/WO06_CONTRACT.md`) shipped 63 invoke commands / 524 tests
 at commit `6d81251`. `tech-lead`'s adversarial audit
-(`docs/design/WO06_AUDIT.md`) found 3 critical + 6 major + 8 minor findings
+(`docs/_archive/contracts/WO06_AUDIT.md`) found 3 critical + 6 major + 8 minor findings
 and ruled NOT SHIPPABLE, but had **no shell that session** — every gate claim
 in the audit was inference, explicitly hedged. A fix round landed on top of
 the audit. This memory records what I (tester) actually verified by running,

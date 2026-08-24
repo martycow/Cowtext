@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-`docs/design/WO13_CONTRACT.md` §16 (write-forbidden files) lists
+`docs/_archive/contracts/WO13_CONTRACT.md` §16 (write-forbidden files) lists
 `src/scene/sfx.ts` with the reason "role-set fallout does not reach them."
 That was wrong: `readCueForRole` (`sfx.ts:348-352`, pre-fix) compared
 `NodeRole` against `"rules"`/`"task"` literals that the 13→14 role rename

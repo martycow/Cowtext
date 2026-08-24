@@ -8,7 +8,7 @@ metadata:
 WO02 lane G1 (2026-08-19) made `task_append`/`task_move` target-form-aware
 (table row / checklist line / fresh canonical table) and added priority
 buckets (`low|medium|high|critical`) to `src-tauri/src/tasks.rs`. The
-frozen contract (`docs/design/WO02_CONTRACT.md` §2.3/§2.4/§7.8/§7.11) left
+frozen contract (`docs/_archive/contracts/WO02_CONTRACT.md` §2.3/§2.4/§7.8/§7.11) left
 a few things under-specified; these are the resolutions, so a later session
 extending this file stays consistent instead of re-litigating them.
 

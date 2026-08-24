@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO13 (`docs/design/WO13_CONTRACT.md`, FROZEN + Amendment 1) is a 9-parallel-lane
+WO13 (`docs/_archive/contracts/WO13_CONTRACT.md`, FROZEN + Amendment 1) is a 9-parallel-lane
 taxonomy overhaul. U4 owns `src/inspector/**` (sole owner of the 2300+-line
 `Inspector.tsx`), `App.tsx`, `src/rail/Hierarchy.tsx`, `src/handoff/*`,
 `src/store/project.ts`. Landed this session:

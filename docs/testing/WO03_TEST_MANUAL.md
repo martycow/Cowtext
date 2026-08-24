@@ -16,7 +16,7 @@ differs, that is a bug (or this manual is stale; either way, note it).
 **Time budget:** ~55 min full pass (B–G), plus the 2-minute WO02 regression
 at the end. Section F (`cowtext-cli`) is a terminal walk, not a UI walk.
 
-**Companion document:** `docs/design/WO03_AUDIT.md` (tech-lead, 2026-08-19)
+**Companion document:** `docs/_archive/contracts/WO03_AUDIT.md` (tech-lead, 2026-08-19)
 is an independent adversarial code-review audit that originally returned
 **"NO — WO03 does not ship as-is"** (1 CRITICAL, 3 MAJOR, 5 MINOR, 4 NIT
 defects). **Mid-way through this tester's session, the owning lanes fixed
@@ -412,7 +412,7 @@ Return to the `C:\_cowtest03` project from sections B–C (Open folder again).
     remove the `"nodes"` key entirely, then click the Problems refresh
     button. *Expected:* a real error row/state naming the parse failure —
     NOT the generic "Lint isn't available in this build yet." message. This
-    is `docs/design/WO03_AUDIT.md`'s **D7 (MINOR)** fix:
+    is `docs/_archive/contracts/WO03_AUDIT.md`'s **D7 (MINOR)** fix:
     `ProblemsPanel.tsx` now narrowly matches Tauri's own `Command {name} not
     found` wording for the genuine "unavailable" case (`isCommandNotFound`)
     and routes every other rejection — including a corrupt graph — to a

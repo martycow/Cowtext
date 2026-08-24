@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO02 (`docs/design/WO02_CONTRACT.md`) build lanes G1/G2/G3/U1/U2/U3/B1 all
+WO02 (`docs/_archive/contracts/WO02_CONTRACT.md`) build lanes G1/G2/G3/U1/U2/U3/B1 all
 landed and passed every automated gate as of 2026-08-19: `npm run build`
 clean, `npm run lint` 0 errors (1 pre-existing unrelated warning in
 `src/canvas/RoleGlyphs.tsx`, not a WO02 file), `cargo clippy -- -D warnings`

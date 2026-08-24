@@ -8,7 +8,7 @@ metadata:
 WO06 Lane G3 (landed 2026-08-19) built §5 (token ceilings, atomic hard-stop)
 and §4.3 (boot-prompt task-context injection) entirely inside
 `src-tauri/src/sessions.rs` + `sessions/tests.rs`. Full spec:
-`docs/design/WO06_CONTRACT.md` §5, §4.3, §7.1. See also
+`docs/_archive/contracts/WO06_CONTRACT.md` §5, §4.3, §7.1. See also
 [[wo06-stage0-seams]] for the seam this fills in.
 
 **Judgment calls an audit should specifically look at:**

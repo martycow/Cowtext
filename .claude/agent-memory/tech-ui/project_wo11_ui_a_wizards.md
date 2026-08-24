@@ -7,7 +7,7 @@ metadata:
 
 WO11 lane UI-A shipped 2026-08-20: `src/project/ProjectWizard.tsx`,
 `src/project/types.ts`, `src/wizard/NodeWizard.tsx`, `src/git/GitWizard.tsx`
-(new). Full contract: `docs/design/WO11_CONTRACT.md`.
+(new). Full contract: `docs/_archive/contracts/WO11_CONTRACT.md`.
 
 **A3 controlled-textarea trap** (generalizable pattern, watch for it
 elsewhere): a textarea whose `value` is re-derived from a *cleaned/parsed*
@@ -73,7 +73,7 @@ transformation show (a CRLF file gaining new lines will legitimately show
 every old line as changed too, because the write really does normalize the
 whole file to LF) and add a distinct explanatory note beside the diff rather
 than hiding that inside the line-by-line view. Verified against
-`docs/testing/WO11_TEST_MANUAL.md` §J.1's exact repro (hand-write a CRLF
+`docs/_archive/manuals/WO11_TEST_MANUAL.md` §J.1's exact repro (hand-write a CRLF
 `.gitignore`, reopen with nothing ticked → expect "no changes"/Write
 disabled) by tracing the code path, not by running the app (no dev server in
 this environment).

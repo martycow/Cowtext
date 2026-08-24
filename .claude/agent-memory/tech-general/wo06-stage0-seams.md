@@ -8,7 +8,7 @@ metadata:
 WO06 Stage-0 (landed 2026-08-19) wired every new invoke command's *shape*
 (54 → 63) with stub bodies returning `Err("<cmd>: not implemented (WO06
 Stage-0 stub)")`, so lanes G1/G2/G3 could build in parallel against a
-compiling `lib.rs` with zero contention. Full spec: `docs/design/WO06_CONTRACT.md`
+compiling `lib.rs` with zero contention. Full spec: `docs/_archive/contracts/WO06_CONTRACT.md`
 §9.
 
 **New modules created:** `src-tauri/src/tasklinks.rs` (+`tasklinks/tests.rs`)

@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Landed 2026-08-21. Spec: `docs/design/WO15_CONTRACT.md` §3.3–§3.7, §6 "R2".
+Landed 2026-08-21. Spec: `docs/_archive/contracts/WO15_CONTRACT.md` §3.3–§3.7, §6 "R2".
 Zone: `hooks.rs`, `hooks_server.rs`, `toolchain.rs`, `agents.rs`, `tasks.rs`
 (+ their `tests.rs`), `lib.rs` (handler list only).
 

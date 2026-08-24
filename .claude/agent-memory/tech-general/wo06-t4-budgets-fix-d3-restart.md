@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-WO06 tech-lead audit (`docs/design/WO06_AUDIT.md`) found D3 in lane
+WO06 tech-lead audit (`docs/_archive/contracts/WO06_AUDIT.md`) found D3 in lane
 T4-budgets (= G3, `src-tauri/src/sessions.rs`): `begin_restart` bumped
 `generation`/`alive`/`busy` but never cleared `tokens_used`/`turn_tokens`/
 `info.tokens_used`, contradicting contract §5.5.2 ("restart resets

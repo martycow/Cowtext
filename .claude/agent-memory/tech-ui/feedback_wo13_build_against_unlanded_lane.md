@@ -5,7 +5,7 @@ metadata:
   type: feedback
 ---
 
-During WO13 (large multi-lane work order, `docs/design/WO13_CONTRACT.md`),
+During WO13 (large multi-lane work order, `docs/_archive/contracts/WO13_CONTRACT.md`),
 dispatched as lane U4 while T1 (`src/config/`) and R2 (extended
 `src/lint/types.ts`) had not landed yet — `src/config/` didn't exist on disk
 at the start of the session. The contract explicitly says the tree is "RED

@@ -5,7 +5,7 @@ metadata:
   type: feedback
 ---
 
-In WO06, the frozen contract (`docs/design/WO06_CONTRACT.md` §10) lists lane U1's
+In WO06, the frozen contract (`docs/_archive/contracts/WO06_CONTRACT.md` §10) lists lane U1's
 zone as `src/tasks/**`, `src/store/tasks.ts`, **and** `src/inspector/Inspector.tsx`
 (the deps editor was specced to live in the Inspector's `TaskPanel`). The actual
 dispatch message I received for that lane ("U1-board") explicitly narrowed this:

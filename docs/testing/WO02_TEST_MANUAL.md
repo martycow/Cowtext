@@ -1,6 +1,6 @@
 # WO02 Manual Test Script — Agent Memory, Task Grids, Priorities, FPS Overlay
 
-Hand-run test manual for WO02 (`docs/design/WO02_CONTRACT.md`): per-agent memory
+Hand-run test manual for WO02 (`docs/_archive/contracts/WO02_CONTRACT.md`): per-agent memory
 folders, wizard-only node creation at viewport centre, the task grid rewrite
 (table-aware append/move, five convention files incl. `BUGS.md`, priority
 buckets), the tag dropdown, the model catalog, and the Barn FPS overlay. Run it

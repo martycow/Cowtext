@@ -454,7 +454,7 @@ from earlier sections are left alone.
 
 ## Block F — Agents MVP
 
-Extends WO01 Block F (`docs/design/WO01_BLOCK_F_CONTRACT.md`, T7–T10 + barn tie-in): "Add agent"
+Extends WO01 Block F (`docs/_archive/contracts/WO01_BLOCK_F_CONTRACT.md`, T7–T10 + barn tie-in): "Add agent"
 spawns a real headless `claude -p --output-format stream-json --verbose` child per turn in a
 chosen folder, the bottom **roster strip** shows one card per session, clicking a card opens the
 Inspector's **Agent panel** (transcript, real token usage, a Queue box), **Kill**/**Restart**

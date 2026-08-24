@@ -6,7 +6,7 @@ metadata:
 ---
 
 WO15 Stage 0 (2026-08-21, serial, blocking R1/R2/U1/U2/U3/U4a/U4b/B1/D1)
-landed every seam in `docs/design/WO15_CONTRACT.md` §4 in the §8 manifest
+landed every seam in `docs/_archive/contracts/WO15_CONTRACT.md` §4 in the §8 manifest
 order. Gates at exit: build ✓ · lint 0 errors / 16 warnings · Vitest 234
 tests / 16 files (was 163 / 12). See [[wo13-stage0-schema-seam]] for the
 prior Stage-0-shaped lane — its NUL-byte and eager-import lessons both
