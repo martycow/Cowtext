@@ -2,9 +2,12 @@
 
 Digest of the Claude Design project **"UI mockups for Cowtext"**
 (`claude.ai/design/p/98f3fa2a-b900-4599-9e18-ba7f71d92871`), file `Cowtext Spec.dc.html`.
-The paste-ready implementation files live next to this doc: [`tokens.css`](tokens.css) and
-[`tailwind.config.js`](tailwind.config.js) — those are the source of truth for values;
-this doc records the decisions, rules, and component specs around them.
+**Source of truth for values is `src/styles/tokens.css` and the repo-root
+`tailwind.config.js`.** This paragraph used to point at `tokens.css` and
+`tailwind.config.js` "next to this doc" — neither has ever existed in
+`docs/design/`; the stale copies sit in `docs/_archive/superseded/`. Corrected
+2026-08-24. The values themselves still agree with the live files. This doc
+records the decisions, rules, and component specs around them.
 
 The project also contains `Cowtext Prototype.dc.html` (screen prototype) — not yet
 digested here.

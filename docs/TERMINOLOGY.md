@@ -22,24 +22,24 @@
 | `src-tauri/src/handoff.rs` | `HANDOFF.md` generation via ClaudeRunner, GENERATED header |
 | `src-tauri/src/resolve_load.rs` | Load policy: `resolveLoad` decider unifying three prior implementations (effective_pinned, taskctx walk, tokens.ts logic) into one authoritative function |
 | `src-tauri/src/fsbatch.rs`, `toolchain.rs` | Batch FS apply with all-or-nothing rollback and inverse batch for Undo (`fs_apply_batch`) · AI-CLI detection: PATH probe + `--version` per compile target, on demand (`detect_ai_tools`) |
-| `src/store/` | Zustand stores: `useProjectStore`, `useGraphStore` (graph.ts), `useEventsStore` (events.ts), `useSettingsStore` (settings.ts), `useToastsStore` (toasts.ts), `useToolchainStore` (toolchain.ts — AI-CLI scan state, one probe at a time), `useUiStore` (ui.ts — cross-surface UI intents: agent-wizard prefill, hooks-modal open) |
+| `src/store/` | **13** Zustand stores (this row listed 7 until 2026-08-24): `useProjectStore`, `useProjectSelectionStore`, `useGraphStore`, `useEventsStore`, `useSettingsStore`, `useToastsStore`, `useToolchainStore` (AI-CLI scan, one probe at a time), `useUiStore` (cross-surface intents: agent-wizard prefill, hooks-modal open), `useAgentsStore`, `useSessionsStore`, `useTasksStore`, `useTaskLinksStore`, `useReviewStore`. `tokens.ts` sits here too but is a pure module, not a store |
 | `src/resources/`, `scripts/truth.mjs` | Bundled product data (models, agent presets, stacks, principles, built-in `skills/`) + `PROVIDER_SUPPORT_SENTENCE` · the release-truth generator: checks T1–T14, and with `--write` regenerates `AGENTS.md`, `.agents/skills/*` and the CLAUDE.md truth block |
 | `src/canvas/` | React Flow view: `MemoryNodeCard`, `MemoryEdge`, `KindPicker`, `RoleGlyphs`, plus five pure modules — `portSlots` (pins/slots), `edgePath` (router), `edgeEdit` (waypoints), `labelSlots` (label collisions), `edgeVerb`/`edgeColor` (label + palette) |
 | `src/inspector/` | Inspector panel, `InspectorSection` (collapsible components), `EventLog`, `HooksModal`, AssembleSection |
-| `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `src/project/` | Feature UI: CompileModal + LCS `diff.ts` · SettingsModal · preset & handoff modals with clipboard variants · `ProjectWizard` (new / convert / edit) + `TitleScreen` (brand, recents, toolchain panel) |
+| `src/compile/`, `src/settings/`, `src/preset/`, `src/handoff/`, `src/project/` | Feature UI: CompileModal (the LCS differ is **`src/ui/diff.ts`**, not `src/compile/diff.ts` — that path never existed and is still wrong in `vite.config.ts:47,58`, whose `utils-diff` chunk therefore never fires) · SettingsModal · preset & handoff modals with clipboard variants · `ProjectWizard` (new / convert / edit) + `TitleScreen` (brand, recents, toolchain panel) |
 | `src-tauri/src/frontmatter.rs` | Frontmatter parser/emitter: read-patch-write round-trip with byte-identity invariant, line-level EOL tracking, no regex/YAML crate |
 | `src-tauri/src/agents.rs` | Agent/skill CRUD, file creation, rename, delete, metadata write; validation (component/path guards), sidecar schema, `AGENT_FS` mutex for .claude/agents/ + .claude/skills/ write safety |
 | `src-tauri/src/git.rs` | Git probe/init/`.gitignore` write, shells out to system `git`, `gitAvailable` fallback when git not on PATH |
 | `src/git/` | GitWizard modal, `.gitignore` composer with presets, line-ending preservation, diff-preview gate |
 | `src/identity/` | Identity hash (fnv1a32), avatar grid + accent/patch derivation, calf appearance generation |
-| `src/agents/` | Agent/Skill manager UI: AgentAvatar, AgentList, AgentEditor, SkillEditor, AgentsModal (phase machine, lazy draft logic, orphan cleanup) |
+| `src/agents/` | Agent/Skill manager UI: `AgentAvatar`, `AgentEditor`, `SkillEditor`, `ModelPicker`, `ToolPicker`, `RailSections`, plus `api`/`avatarApi`/`builtinSkills`/`modelCatalog`/`toolCatalog`/`types`. (Corrected 2026-08-24: this row named `AgentList` and `AgentsModal`, neither of which exists — the modal was dissolved into the rail in WO13.) |
 | `src/scene/` | Pixi barn: `BarnScene.tsx`, `cow.ts`, `calf.ts`, `mapper.ts`, `demo.ts`, `palette.ts`, `iso.ts`, `sfx.ts` (howler confined here) |
 
 ## Invoke commands (81)
 
 Adding one takes three coordinated edits: the `#[tauri::command]` fn, its
 `generate_handler![...]` entry, the byte-exact `invoke` name in TS. camelCase in JS ⇄ snake_case in Rust.
-`npm run truth` (T3/T4) fails when this table, the handler list and the TS call sites disagree.
+**This table is not gated.** T3/T4 (`scripts/truth.mjs:416-447`) compare `generate_handler!` against the TS `invoke(...)` call sites and never read a markdown list — so this table and the copy in `.claude/skills/cowtext-terminology/SKILL.md` can drift silently, and the skill's copy was found 3 commands short on 2026-08-24 with the gate fully green. Re-derive the list; do not trust it.
 
 | Group | Commands |
 |---|---|
@@ -102,7 +102,7 @@ React Flow and PixiJS never import each other.
 | Truth block | The generated lines in `CLAUDE.md` between `<!-- truth:begin -->` and `<!-- truth:end -->` — invoke count, Rust and Vitest test counts, schema version, compile targets, release-gate pointer. Written only by `npm run truth:write`; **the only place release numbers live**, so Status prose carries none |
 | Assemble / Refine / Summarize | Brief → full via `claude -p` (stdin, `--output-format json`) |
 | Brief | One-line node description Assemble expands; presets preserve briefs not content |
-| Hooks | `PostToolUse`/`UserPromptSubmit`/`Stop` curl entries; always behind confirmation diff |
+| Hooks | **Four** events, not the three this row listed until 2026-08-24: `PostToolUse` (matched), `UserPromptSubmit`, `Stop`, `SubagentStop` — `src-tauri/src/hooks.rs:41-46`. curl entries; always behind a confirmation diff |
 | BarnEvent | Normalized live event driving event log, canvas pulse, barn |
 | The Barn | Pixi 8 iso scene (2:1 tiles, Barnlight-29); cow = agent, calves = subagents |
 | Calm mode | One toggle: no sound + reduced motion |

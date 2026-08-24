@@ -16,7 +16,9 @@ the user). Amber is hay, paper, and dusk light — the material the agent works 
 ## Palette — "Barnlight-29"
 
 29 colours. Every value either **is** a token from
-[`tokens.css`](tokens.css) or is derived from one (dusked = darkened toward
+`src/styles/tokens.css` (this line linked to a `tokens.css` "next to this doc"
+until 2026-08-24; no such file exists — the copy in `docs/_archive/superseded/`
+is frozen history) or is derived from one (dusked = darkened toward
 `--surface-0`, keeping the hue). The `char` column is the key used in the ASCII
 grids in [`scripts/gen_sprites.py`](../../scripts/gen_sprites.py) — that script is
 the palette's executable form; keep the two in sync.
@@ -37,7 +39,7 @@ the palette's executable form; keep the two in sync.
 | `c` | cream | `#E4D9C8` | milk shaded one step | cow underside, leg shading |
 | `p` | patch | `#4A3728` | `--border-strong` warmed | cow patches, hooves, dev trousers |
 | `d` | patch-dark | `#33251A` | patch darkened | eyes, darkest patch, dev hair |
-| `z` | muzzle | `#E0A891` | `--role-persona` desaturated | cow muzzle, skin |
+| `z` | muzzle | `#E0A891` | `--role-agent` desaturated (this column said `--role-persona` until 2026-08-24; the token was renamed at schema v2 and no longer exists) | cow muzzle, skin |
 | `S` | scarf | `#4C9BE8` | = `--accent` | the scarf; dev shirt. **Blue is you** |
 | `s` | scarf-shade | `#3B85CE` | = `--accent-active` | scarf shading |
 | `t` | scarf-light | `#82BAF0` | = `--accent-text` | scarf highlight, monitor glint |
@@ -48,7 +50,7 @@ the palette's executable form; keep the two in sync.
 | `E` | screen | `#56B4E9` | = `--role-architecture` | monitor screens |
 | `e` | screen-dark | `#2B5A75` | screen dusked | screen lower glow |
 | `G` | leaf | `#4FB477` | = `--success` | book spines, later plants |
-| `O` | clay | `#E4784F` | = `--role-persona` | book spines |
+| `O` | clay | `#E4784F` | = `--role-agent` | book spines |
 | `U` | straw | `#E3C25F` | = `--role-rules` | book spines |
 | `V` | iris | `#8A8BEE` | = `--role-task` | book spines |
 | `Q` | orchid | `#C58BC9` | = `--role-reference` | book spines |

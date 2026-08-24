@@ -41,7 +41,7 @@ overruled). Lane load for the record:
 - **Idle by scope** means the task had no work in that agent's lane — it is not
   laziness and is not flagged. The dispatcher lists idle agents in one line.
 - Roster and `ACTIVITY_LOG.md` are updated by project-manager at the end of every
-  fleet session; the log keeps only the three most recent sessions.
+  fleet session; the log **targets** the three most recent sessions but actually carries 17 — the roll-out into `docs/_archive/` has never run, and needs Marty because that directory is write-frozen (BACKLOG P1.5). Corrected 2026-08-24.
 
 ## Mapping from the old 13-callsign roster
 

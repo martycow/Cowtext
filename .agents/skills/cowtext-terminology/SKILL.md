@@ -37,15 +37,20 @@ skills and hooks are Claude Code only. Capability detail: `docs/design/PROVIDER_
 | `src-tauri/src/taskctx.rs` | Per-task subgraph injection: closure rule, compile-on-launch, deterministic preview |
 | `src/store/` | Zustand: `useProjectStore`, `useGraphStore`, `useEventsStore`, `useSettingsStore`, `useToastsStore`, `useToolchainStore` (AI-CLI scan), `useUiStore` (cross-surface intents) |
 | `src/resources/`, `scripts/truth.mjs` | Bundled product data (models, agent presets, stacks, principles, built-in skills) + `PROVIDER_SUPPORT_SENTENCE` · release-truth generator (T1–T14; `--write` regenerates `AGENTS.md`, `.agents/skills/*`, the truth block) |
-| `src/canvas/`, `src/inspector/`, `src/compile/` | React Flow view, inspector + EventLog + HooksModal, CompileModal + LCS diff |
+| `src/canvas/`, `src/inspector/`, `src/compile/` | React Flow view, inspector + EventLog + HooksModal, CompileModal. The LCS differ is **`src/ui/diff.ts`** — `src/compile/diff.ts` has never existed |
 | `src/scene/` | Pixi barn + `sfx.ts` (howler confined here) |
 | `src/settings/`, `src/preset/`, `src/handoff/` | SettingsModal, preset & handoff UI |
 
 ## Invoke commands — byte-exact names
 
 The full grouped table is `docs/TERMINOLOGY.md` §Invoke commands; the live count is in
-the truth block in `CLAUDE.md`. `npm run truth` T3/T4 fails when this list, the Rust
-handler list and the TS call sites disagree.
+the truth block in `CLAUDE.md`.
+
+**This list is NOT gated — re-derive it, do not trust it.** T3/T4
+(`scripts/truth.mjs:416-447`) compare `generate_handler!` against the TS `invoke(...)`
+call sites; neither check ever reads a markdown list. On 2026-08-24 this list was found
+to be 3 commands short (the WO16 `stack_icon_*` trio) with `npm run truth` fully green.
+The authority is `src-tauri/src/lib.rs`'s `generate_handler!` block.
 
 project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_file`, `rename_node_file`, `reveal_path`, `probe_project_dirs`
 · fs: `fs_apply_batch`
@@ -55,7 +60,7 @@ project: `scan_project`, `read_graph`, `write_graph`, `read_md_file`, `write_md_
 · lint: `lint_run`
 · assemble: `assemble_node`, `assemble_preview`, `refine_node`, `summarize_node`, `assemble_status`, `assemble_cancel`
 · hooks: `hooks_preview`, `hooks_write`, `hooks_status`, `hooks_addr`
-· settings: `read_app_settings`, `write_app_settings`
+· settings: `read_app_settings`, `write_app_settings`, `stack_icon_import`, `stack_icon_read`, `stack_icon_delete`
 · project-meta: `project_meta_read`, `project_meta_write`, `project_init`
 · toolchain: `detect_ai_tools`
 · preset: `preset_save`, `preset_list`, `preset_read`, `preset_export`, `preset_apply`

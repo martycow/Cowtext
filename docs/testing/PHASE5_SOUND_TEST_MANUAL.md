@@ -2,7 +2,7 @@
 
 Walk with the app running (`npm run tauri dev`), a project open, and Settings at
 defaults (master 60%, Barn + Tool sounds on, Mute/Calm off). Spec authority:
-`docs/design/SOUND_DESIGN.md` §2b/§3, `docs/design/PHASE56_CONTRACT.md` §5.
+`docs/design/SOUND_DESIGN.md` §2b/§3, `docs/_archive/contracts/PHASE56_CONTRACT.md` §5.
 
 ## Barn cues (Barn view, run the Demo)
 

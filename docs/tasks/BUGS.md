@@ -2,9 +2,11 @@
 
 Known defects and issues under watch. Schema: Name | Status | Priority | Tags | Agent | Created | Description.
 
-Fixed bugs stay listed until their phase closes, then roll off (history in git and TASKS.md).
+Fixed bugs stay listed until their round closes, then roll off (history in git and TASKS.md). The rule used to say "until their *phase* closes", but phases 0–6 all closed 2026-08-18 and the section below has since collected WO-round fixes — the unit is a work order now, not a phase.
 
-## Fixed (current phase)
+The SessionStart hook reports the open count from this file. It counts table rows whose **Status cell is not `done`** — corrected 2026-08-24, having previously matched `- [ ]` checklist lines, of which this file has never had one, so it reported `0` at every session start while 13 rows sat open.
+
+## Fixed (current round)
 
 | Name | Status | Priority | Tags | Agent | Created | Description |
 |---|---|---|---|---|---|---|
