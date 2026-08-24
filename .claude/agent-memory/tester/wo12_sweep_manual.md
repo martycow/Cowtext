@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Wrote `docs/testing/INPUT_PROMPT_SWEEP_TEST_MANUAL.md` (90 steps, 17 lettered sections
+Wrote `docs/_archive/manuals/INPUT_PROMPT_SWEEP_TEST_MANUAL.md` (90 steps, 17 lettered sections
 B–R covering D1–D8 then F1–F8 in that literal order, plus regression/cleanup/sign-off).
 Source: a parent-agent dispatch summary + full audit text for all 16 items, but I
 independently re-verified every control against the current source tree before writing

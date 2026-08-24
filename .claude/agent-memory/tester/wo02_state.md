@@ -37,4 +37,4 @@ docs/tasks/` or just open the files and check whether Status cells are
 already the canonical bucket strings. See the WO02 manual's section G for
 the step that documents this as PENDING rather than FAIL.
 
-Manual test script for this work order: `docs/testing/WO02_TEST_MANUAL.md`.
+Manual test script for this work order: `docs/_archive/manuals/WO02_TEST_MANUAL.md`.

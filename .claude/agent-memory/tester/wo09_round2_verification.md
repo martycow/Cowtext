@@ -33,4 +33,4 @@ the actual `STROKE` const (comment says 2px/4px + one set of dash numbers, code 
 3px/5px + numbers all +1) — the freshly-added comment directly above `STROKE` states the
 correct numbers, only the older table drifted.
 
-Manual: `docs/testing/WO09_TEST_MANUAL.md`.
+Manual: `docs/_archive/manuals/WO09_TEST_MANUAL.md`.

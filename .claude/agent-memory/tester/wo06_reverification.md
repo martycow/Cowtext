@@ -12,7 +12,7 @@ and ruled NOT SHIPPABLE, but had **no shell that session** — every gate claim
 in the audit was inference, explicitly hedged. A fix round landed on top of
 the audit. This memory records what I (tester) actually verified by running,
 at commit `6d81251`, after that fix round — see
-`docs/testing/WO06_TEST_MANUAL.md`'s Findings section for the full table.
+`docs/_archive/manuals/WO06_TEST_MANUAL.md`'s Findings section for the full table.
 
 **Outcome:** of the 4 blocking criticals (D1/D2/D3/D9), 3 fixed (D1, D2's
 literal stub, D3), 1 still open (D9 — no global default session-token
